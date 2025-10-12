@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using Unity.Collections;
 using UnityEditor;
@@ -96,11 +97,11 @@ namespace Gsplat.Editor
                 gsplatAsset.Rotations = new Vector4[vertexCount];
 
 
-                var buffer = new NativeArray<byte>(propertyCount * 4, Allocator.Temp);
+                var buffer = new byte[propertyCount * sizeof(float)];
                 for (uint i = 0; i < vertexCount; i++)
                 {
                     var readBytes = fs.Read(buffer);
-                    if (readBytes != propertyCount * 4)
+                    if (readBytes != buffer.Length)
                     {
                         if (GsplatSettings.Instance.ShowImportErrors)
                             Debug.LogError(
@@ -108,7 +109,7 @@ namespace Gsplat.Editor
                         return;
                     }
 
-                    var properties = buffer.Reinterpret<float>(1);
+                    var properties = MemoryMarshal.Cast<byte, float>(buffer);
                     gsplatAsset.Positions[i] = new Vector3(properties[0], properties[1], properties[2]);
                     gsplatAsset.Colors[i] = new Vector4(properties[6], properties[7], properties[8],
                         GsplatUtils.Sigmoid(properties[propertyCount - 8]));
@@ -126,8 +127,6 @@ namespace Gsplat.Editor
                     EditorUtility.DisplayProgressBar("Importing Gsplat Asset", "Reading vertices",
                         i / (float)vertexCount);
                 }
-
-                buffer.Dispose();
             }
 
             gsplatAsset.Bounds = bounds;

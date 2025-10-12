@@ -5,11 +5,13 @@
 // Copyright (c) 2025 Yize Wu
 // SPDX-License-Identifier: MIT
 
-#if GSPLAT_ENABLE_URP && UNITY_6000_0_OR_NEWER
+#if GSPLAT_ENABLE_URP
 
 using UnityEngine.Rendering;
-using UnityEngine.Rendering.RenderGraphModule;
 using UnityEngine.Rendering.Universal;
+#if UNITY_6000_0_OR_NEWER
+using UnityEngine.Rendering.RenderGraphModule;
+#endif
 
 namespace Gsplat
 {
@@ -17,6 +19,7 @@ namespace Gsplat
     {
         class GsplatRenderPass : ScriptableRenderPass
         {
+#if UNITY_6000_0_OR_NEWER
             class PassData
             {
                 public UniversalCameraData CameraData;
@@ -33,6 +36,14 @@ namespace Gsplat
                     GsplatSorter.Instance.DispatchSort(commandBuffer, data.CameraData.camera);
                 });
             }
+#else
+            public CommandBuffer CommandBuffer;
+            public override void Execute(ScriptableRenderContext context, ref RenderingData renderingData)
+            {
+                GsplatSorter.Instance.DispatchSort(CommandBuffer, renderingData.cameraData.camera);
+                context.ExecuteCommandBuffer(CommandBuffer);
+            }
+#endif
         }
 
         GsplatRenderPass m_pass;
@@ -46,16 +57,24 @@ namespace Gsplat
         public override void OnCameraPreCull(ScriptableRenderer renderer, in CameraData cameraData)
         {
             m_hasGsplats = GsplatSorter.Instance.GatherGsplatsForCamera(cameraData.camera);
+#if !UNITY_6000_0_OR_NEWER
+            m_pass.CommandBuffer ??= new CommandBuffer { name = "SortGsplats" };
+            m_pass.CommandBuffer.Clear();
+#endif
         }
 
         public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
         {
-            if (m_hasGsplats)
+            if (GsplatSorter.Instance.Valid && GsplatSettings.Instance.Valid && m_hasGsplats)
                 renderer.EnqueuePass(m_pass);
         }
 
         protected override void Dispose(bool disposing)
         {
+#if !UNITY_6000_0_OR_NEWER
+            m_pass.CommandBuffer?.Dispose();
+            m_pass.CommandBuffer = null;
+#endif
             m_pass = null;
         }
     }
