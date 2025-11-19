@@ -19,7 +19,12 @@ namespace Gsplat
 
         public static byte CalcSHBandsFromPropertyCount(int propertyCount)
         {
-            return (byte)(Math.Sqrt((propertyCount - k_PlyPropertyCountNoSH + 3) / 3) - 1);
+            return CalcSHBandsFromSHPropertyCount(propertyCount - k_PlyPropertyCountNoSH);
+        }
+
+        public static byte CalcSHBandsFromSHPropertyCount(int shPropertyCount)
+        {
+            return (byte)(Math.Sqrt((shPropertyCount + 3) / 3) - 1);
         }
 
         public static int SHBandsToCoefficientCount(byte shBands)
