@@ -29,7 +29,12 @@
 #include "DeviceRadixSort.hlsl"
 
 StructuredBuffer<float3> _PositionBuffer;
+StructuredBuffer<float3> _VelocityBuffer;
+StructuredBuffer<float> _TimeBuffer;
+StructuredBuffer<float> _DurationBuffer;
 float4x4 _MatrixMV;
+float _TimeNormalized;
+int _Has4D;
 
 [numthreads(GROUP_SIZE,1,1)]
 void InitPayload(uint3 id : SV_DispatchThreadID)
@@ -48,7 +53,23 @@ void CalcDistance(uint3 id : SV_DispatchThreadID)
     if (idx >= e_numKeys)
         return;
 
-    float3 pos = _PositionBuffer[b_sortPayload[idx]];
+    uint splatId = b_sortPayload[idx];
+    float3 pos = _PositionBuffer[splatId];
+    if (_Has4D != 0)
+    {
+        float t0 = _TimeBuffer[splatId];
+        float dt = _DurationBuffer[splatId];
+        float t = _TimeNormalized;
+        // 时间窗外: 写入一个极端 key,把它们推到排序尾部(渲染仍以 shader 裁剪为准).
+        if (t < t0 || t > t0 + dt)
+        {
+            b_sort[idx] = 1e30;
+            return;
+        }
+
+        float3 vel = _VelocityBuffer[splatId];
+        pos = pos + vel * (t - t0);
+    }
     pos = mul(_MatrixMV, float4(pos.xyz, 1)).xyz;
     b_sort[idx] = pos.z;
 }

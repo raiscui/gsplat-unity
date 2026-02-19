@@ -30,9 +30,14 @@ Shader "Gsplat/Standard"
             int _SplatCount;
             int _SplatInstanceSize;
             int _SHDegree;
+            int _Has4D;
+            float _TimeNormalized;
             float4x4 _MATRIX_M;
             StructuredBuffer<uint> _OrderBuffer;
             StructuredBuffer<float3> _PositionBuffer;
+            StructuredBuffer<float3> _VelocityBuffer;
+            StructuredBuffer<float> _TimeBuffer;
+            StructuredBuffer<float> _DurationBuffer;
             StructuredBuffer<float3> _ScaleBuffer;
             StructuredBuffer<float4> _RotationBuffer;
             StructuredBuffer<float4> _ColorBuffer;
@@ -114,6 +119,21 @@ Shader "Gsplat/Standard"
                 }
 
                 float3 modelCenter = _PositionBuffer[source.id];
+                if (_Has4D != 0)
+                {
+                    float t0 = _TimeBuffer[source.id];
+                    float dt = _DurationBuffer[source.id];
+                    float t = _TimeNormalized;
+                    // 时间窗外: 直接硬裁剪,不产生任何颜色贡献.
+                    if (t < t0 || t > t0 + dt)
+                    {
+                        o.vertex = discardVec;
+                        return o;
+                    }
+
+                    float3 vel = _VelocityBuffer[source.id];
+                    modelCenter = modelCenter + vel * (t - t0);
+                }
                 SplatCenter center;
                 if (!InitCenter(modelCenter, center))
                 {

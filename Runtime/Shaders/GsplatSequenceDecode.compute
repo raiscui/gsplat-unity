@@ -1,0 +1,353 @@
+// Copyright (c) 2026 Yize Wu
+// SPDX-License-Identifier: MIT
+//
+// 用途:
+// - `.sog4d` 的 per-frame 量化纹理 streams 解码 + 两帧插值.
+// - 输出写入 float structured buffers,复用现有 GsplatSorter + Gsplat.shader 渲染管线.
+//
+// 关键约束(对齐 OpenSpec):
+// - timeMapping 的 (i0,i1,a) 在 CPU 侧计算,同一帧内 decode/sort/render 共享同一个 TimeNormalized.
+// - position: u16 quantization + per-frame rangeMin/rangeMax.
+// - scale: codebook + per-frame indices,线性模式下使用 log-domain 插值.
+// - rotation: 8-bit quantized quaternion,线性模式下使用 hemisphere-stable nlerp.
+// - sh0: RGB=codebook index -> f_dc, A=opacity(0..1),线性模式下逐分量 lerp.
+// - sh rest: palette(centroids) + u16 labels,线性模式下逐系数 lerp.
+
+#pragma kernel DecodeKeyframesSH0
+#pragma kernel DecodeKeyframesSH
+
+#define THREADS 256
+
+// --------------------------------------------------------------------
+// 输入: per-frame 量化纹理(都是“数据图”,RGBA8,linear,无 mipmap).
+//
+// 重要: importer 侧生成的是 `TextureFormat.RGBA32`(UNorm) 的 Texture2DArray.
+// 因此在 shader 里用 `float4` 读取最稳,再把 0..1 还原成 0..255 的 byte 值进行解码.
+// 这样可以避免部分 Graphics API(尤其 Metal)下的 "用 uint 读 UNorm 纹理" 的兼容性问题.
+// --------------------------------------------------------------------
+Texture2DArray<float4> _PositionHi;
+Texture2DArray<float4> _PositionLo;
+Texture2DArray<float4> _ScaleIndices;
+Texture2DArray<float4> _Rotation;
+Texture2DArray<float4> _Sh0;
+Texture2DArray<float4> _ShNLabels; // 仅在 DecodeKeyframesSH 中使用
+
+StructuredBuffer<float3> _ScaleCodebook;
+StructuredBuffer<float> _Sh0Codebook;
+StructuredBuffer<float3> _ShNCentroids; // entry-major: (label * restCoeffCount + k)
+
+// Metal 兼容性:
+// - MSL 不支持在 shader 内查询 buffer size(例如 StructuredBuffer.GetDimensions).
+// - 因此这些 count 由 C# 侧传入,并在 shader 内做越界防御与 clamp.
+int _ScaleCodebookCount;
+int _Sh0CodebookCount;
+int _ShNCentroidsCount;
+
+// --------------------------------------------------------------------
+// 输出: 写入 GsplatRendererImpl 的 float buffers.
+// --------------------------------------------------------------------
+RWStructuredBuffer<float3> _OutPosition;
+RWStructuredBuffer<float3> _OutScale;
+RWStructuredBuffer<float4> _OutRotation; // quat: (w, x, y, z)
+RWStructuredBuffer<float4> _OutColor;    // (f_dc rgb, opacity)
+RWStructuredBuffer<float3> _OutSH;       // rest coefficients, count = splatCount * restCoeffCount
+
+int _SplatCount;
+int _LayoutWidth;
+
+int _Frame0;
+int _Frame1;
+float _InterpA;
+int _UseLinear; // 0: Nearest, 1: Linear
+
+float3 _PosRangeMin0;
+float3 _PosRangeMax0;
+float3 _PosRangeMin1;
+float3 _PosRangeMax1;
+
+int _RestCoeffCount; // (bands+1)^2-1,仅在 DecodeKeyframesSH 中使用
+
+static const float k_u16Max = 65535.0;
+static const float k_scaleEps = 1e-8;
+
+uint4 Float4ToU8(float4 v)
+{
+    // 把 UNorm 的 float4(0..1) 还原成 byte(0..255).
+    // 加 0.5 做四舍五入,避免浮点误差造成的 off-by-1.
+    return (uint4)(saturate(v) * 255.0 + 0.5);
+}
+
+uint2 SplatIdToPixel(uint splatId)
+{
+    // row-major: x = id % width, y = id / width
+    uint x = splatId % (uint)_LayoutWidth;
+    uint y = splatId / (uint)_LayoutWidth;
+    return uint2(x, y);
+}
+
+uint DecodeU16FromRG(uint4 px)
+{
+    // little-endian: label = r + (g << 8)
+    return px.x + (px.y << 8);
+}
+
+float3 DecodePositionAtFrame(uint2 xy, int frame, float3 rangeMin, float3 rangeMax)
+{
+    uint4 hi = Float4ToU8(_PositionHi.Load(int4(xy, frame, 0)));
+    uint4 lo = Float4ToU8(_PositionLo.Load(int4(xy, frame, 0)));
+
+    float3 q = float3(
+        (hi.x << 8) + lo.x,
+        (hi.y << 8) + lo.y,
+        (hi.z << 8) + lo.z
+    );
+
+    float3 t = q / k_u16Max;
+    return rangeMin + t * (rangeMax - rangeMin);
+}
+
+float3 DecodeScaleAtFrame(uint2 xy, int frame)
+{
+    uint4 px = Float4ToU8(_ScaleIndices.Load(int4(xy, frame, 0)));
+    uint idx = DecodeU16FromRG(px);
+
+    uint count = (uint)max(_ScaleCodebookCount, 0);
+    if (count == 0)
+        return float3(1.0, 1.0, 1.0);
+
+    idx = min(idx, count - 1);
+    return _ScaleCodebook[idx];
+}
+
+float4 DecodeQuatAtFrame(uint2 xy, int frame)
+{
+    uint4 px = Float4ToU8(_Rotation.Load(int4(xy, frame, 0)));
+
+    // RGBA -> (w,x,y,z)
+    float4 q = (float4(px) - 128.0) / 128.0;
+
+    float len = length(q);
+    // 这里的 q 来自 RGBA8(UNorm) 数据图的 byte 还原,理论上不会出现 NaN/Inf.
+    // 因此只做 epsilon 防御即可,避免 Metal 下 isnan/isinf 的多余 warning 与潜在开销.
+    if (len < 1e-8)
+        q = float4(1.0, 0.0, 0.0, 0.0);
+    else
+        q /= len;
+
+    // hemisphere normalize: w >= 0
+    if (q.x < 0.0)
+        q = -q;
+
+    return q;
+}
+
+float4 NlerpQuat(float4 q0, float4 q1, float a)
+{
+    // hemisphere-stable nlerp
+    if (dot(q0, q1) < 0.0)
+        q1 = -q1;
+
+    float4 q = lerp(q0, q1, a);
+    float len = length(q);
+    // 同上: q 来自 byte 解码与线性插值,不会出现 NaN/Inf,只做 epsilon 防御.
+    if (len < 1e-8)
+        return float4(1.0, 0.0, 0.0, 0.0);
+    return q / len;
+}
+
+float3 DecodeFdcFromSh0(uint4 sh0Px)
+{
+    uint count = (uint)max(_Sh0CodebookCount, 0);
+    if (count == 0)
+        return float3(0.0, 0.0, 0.0);
+
+    uint r = min(sh0Px.x, count - 1);
+    uint g = min(sh0Px.y, count - 1);
+    uint b = min(sh0Px.z, count - 1);
+
+    return float3(_Sh0Codebook[r], _Sh0Codebook[g], _Sh0Codebook[b]);
+}
+
+float DecodeOpacityFromSh0(uint4 sh0Px)
+{
+    return saturate(sh0Px.w / 255.0);
+}
+
+// --------------------------------------------------------------------
+// DecodeKeyframesSH0:
+// - 仅解码 position/scale/rotation/sh0(opacity).
+// - SH rest 不写入.
+// --------------------------------------------------------------------
+[numthreads(THREADS, 1, 1)]
+void DecodeKeyframesSH0(uint3 id : SV_DispatchThreadID)
+{
+    uint splatId = id.x;
+    if (splatId >= (uint)_SplatCount)
+        return;
+
+    uint2 xy = SplatIdToPixel(splatId);
+
+    // Nearest: 只读 frame0
+    if (_UseLinear == 0 || _Frame0 == _Frame1)
+    {
+        float3 pos = DecodePositionAtFrame(xy, _Frame0, _PosRangeMin0, _PosRangeMax0);
+        float3 scale = DecodeScaleAtFrame(xy, _Frame0);
+        float4 rot = DecodeQuatAtFrame(xy, _Frame0);
+
+        uint4 sh0Px = Float4ToU8(_Sh0.Load(int4(xy, _Frame0, 0)));
+        float3 fdc = DecodeFdcFromSh0(sh0Px);
+        float opacity = DecodeOpacityFromSh0(sh0Px);
+        if (opacity < (1.0 / 255.0))
+            opacity = 0.0;
+
+        _OutPosition[splatId] = pos;
+        _OutScale[splatId] = scale;
+        _OutRotation[splatId] = rot;
+        _OutColor[splatId] = float4(fdc, opacity);
+        return;
+    }
+
+    // Linear: 读两帧并插值
+    float3 pos0 = DecodePositionAtFrame(xy, _Frame0, _PosRangeMin0, _PosRangeMax0);
+    float3 pos1 = DecodePositionAtFrame(xy, _Frame1, _PosRangeMin1, _PosRangeMax1);
+    float3 pos = lerp(pos0, pos1, _InterpA);
+
+    float3 s0 = DecodeScaleAtFrame(xy, _Frame0);
+    float3 s1 = DecodeScaleAtFrame(xy, _Frame1);
+    float3 logS0 = log(max(s0, k_scaleEps));
+    float3 logS1 = log(max(s1, k_scaleEps));
+    float3 scale = exp(lerp(logS0, logS1, _InterpA));
+
+    float4 q0 = DecodeQuatAtFrame(xy, _Frame0);
+    float4 q1 = DecodeQuatAtFrame(xy, _Frame1);
+    float4 rot = NlerpQuat(q0, q1, _InterpA);
+
+    uint4 sh0_0 = Float4ToU8(_Sh0.Load(int4(xy, _Frame0, 0)));
+    uint4 sh0_1 = Float4ToU8(_Sh0.Load(int4(xy, _Frame1, 0)));
+    float3 fdc0 = DecodeFdcFromSh0(sh0_0);
+    float3 fdc1 = DecodeFdcFromSh0(sh0_1);
+    float opacity0 = DecodeOpacityFromSh0(sh0_0);
+    float opacity1 = DecodeOpacityFromSh0(sh0_1);
+
+    float3 fdc = lerp(fdc0, fdc1, _InterpA);
+    float opacity = lerp(opacity0, opacity1, _InterpA);
+    if (opacity < (1.0 / 255.0))
+        opacity = 0.0;
+
+    _OutPosition[splatId] = pos;
+    _OutScale[splatId] = scale;
+    _OutRotation[splatId] = rot;
+    _OutColor[splatId] = float4(fdc, opacity);
+}
+
+// --------------------------------------------------------------------
+// DecodeKeyframesSH:
+// - 在 DecodeKeyframesSH0 的基础上,额外写入 SH rest coefficients 到 _OutSH.
+// --------------------------------------------------------------------
+[numthreads(THREADS, 1, 1)]
+void DecodeKeyframesSH(uint3 id : SV_DispatchThreadID)
+{
+    uint splatId = id.x;
+    if (splatId >= (uint)_SplatCount)
+        return;
+
+    uint2 xy = SplatIdToPixel(splatId);
+
+    // 先走 SH0 的解码逻辑(复制一遍,避免跨 kernel 调用的复杂度).
+    // Nearest: 只读 frame0
+    if (_UseLinear == 0 || _Frame0 == _Frame1)
+    {
+        float3 pos = DecodePositionAtFrame(xy, _Frame0, _PosRangeMin0, _PosRangeMax0);
+        float3 scale = DecodeScaleAtFrame(xy, _Frame0);
+        float4 rot = DecodeQuatAtFrame(xy, _Frame0);
+
+        uint4 sh0Px = Float4ToU8(_Sh0.Load(int4(xy, _Frame0, 0)));
+        float3 fdc = DecodeFdcFromSh0(sh0Px);
+        float opacity = DecodeOpacityFromSh0(sh0Px);
+        if (opacity < (1.0 / 255.0))
+            opacity = 0.0;
+
+        _OutPosition[splatId] = pos;
+        _OutScale[splatId] = scale;
+        _OutRotation[splatId] = rot;
+        _OutColor[splatId] = float4(fdc, opacity);
+
+        // SH rest: 只读 frame0 label
+        uint4 labPx = Float4ToU8(_ShNLabels.Load(int4(xy, _Frame0, 0)));
+        uint label = DecodeU16FromRG(labPx);
+
+        uint centroidCount = (uint)max(_ShNCentroidsCount, 0);
+        uint entryBase = label * (uint)_RestCoeffCount;
+        uint entryEnd = entryBase + (uint)_RestCoeffCount;
+        if (entryEnd > centroidCount)
+        {
+            // 防御: label 越界时,写 0.
+            for (int k = 0; k < _RestCoeffCount; k++)
+                _OutSH[splatId * (uint)_RestCoeffCount + (uint)k] = float3(0.0, 0.0, 0.0);
+            return;
+        }
+
+        for (int k = 0; k < _RestCoeffCount; k++)
+            _OutSH[splatId * (uint)_RestCoeffCount + (uint)k] = _ShNCentroids[entryBase + (uint)k];
+
+        return;
+    }
+
+    // Linear: 读两帧并插值
+    float3 pos0 = DecodePositionAtFrame(xy, _Frame0, _PosRangeMin0, _PosRangeMax0);
+    float3 pos1 = DecodePositionAtFrame(xy, _Frame1, _PosRangeMin1, _PosRangeMax1);
+    float3 pos = lerp(pos0, pos1, _InterpA);
+
+    float3 s0 = DecodeScaleAtFrame(xy, _Frame0);
+    float3 s1 = DecodeScaleAtFrame(xy, _Frame1);
+    float3 logS0 = log(max(s0, k_scaleEps));
+    float3 logS1 = log(max(s1, k_scaleEps));
+    float3 scale = exp(lerp(logS0, logS1, _InterpA));
+
+    float4 q0 = DecodeQuatAtFrame(xy, _Frame0);
+    float4 q1 = DecodeQuatAtFrame(xy, _Frame1);
+    float4 rot = NlerpQuat(q0, q1, _InterpA);
+
+    uint4 sh0_0 = Float4ToU8(_Sh0.Load(int4(xy, _Frame0, 0)));
+    uint4 sh0_1 = Float4ToU8(_Sh0.Load(int4(xy, _Frame1, 0)));
+    float3 fdc0 = DecodeFdcFromSh0(sh0_0);
+    float3 fdc1 = DecodeFdcFromSh0(sh0_1);
+    float opacity0 = DecodeOpacityFromSh0(sh0_0);
+    float opacity1 = DecodeOpacityFromSh0(sh0_1);
+
+    float3 fdc = lerp(fdc0, fdc1, _InterpA);
+    float opacity = lerp(opacity0, opacity1, _InterpA);
+    if (opacity < (1.0 / 255.0))
+        opacity = 0.0;
+
+    _OutPosition[splatId] = pos;
+    _OutScale[splatId] = scale;
+    _OutRotation[splatId] = rot;
+    _OutColor[splatId] = float4(fdc, opacity);
+
+    // SH rest: labels -> centroids -> lerp
+    uint label0 = DecodeU16FromRG(Float4ToU8(_ShNLabels.Load(int4(xy, _Frame0, 0))));
+    uint label1 = DecodeU16FromRG(Float4ToU8(_ShNLabels.Load(int4(xy, _Frame1, 0))));
+
+    uint centroidCount = (uint)max(_ShNCentroidsCount, 0);
+
+    uint base0 = label0 * (uint)_RestCoeffCount;
+    uint base1 = label1 * (uint)_RestCoeffCount;
+    uint end0 = base0 + (uint)_RestCoeffCount;
+    uint end1 = base1 + (uint)_RestCoeffCount;
+
+    // 防御: label 越界时,写 0.
+    if (end0 > centroidCount || end1 > centroidCount)
+    {
+        for (int k = 0; k < _RestCoeffCount; k++)
+            _OutSH[splatId * (uint)_RestCoeffCount + (uint)k] = float3(0.0, 0.0, 0.0);
+        return;
+    }
+
+    for (int k = 0; k < _RestCoeffCount; k++)
+    {
+        float3 c0 = _ShNCentroids[base0 + (uint)k];
+        float3 c1 = _ShNCentroids[base1 + (uint)k];
+        _OutSH[splatId * (uint)_RestCoeffCount + (uint)k] = lerp(c0, c1, _InterpA);
+    }
+}

@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Supports streaming data from RAM to VRAM ([#6](https://github.com/wuyize25/gsplat-unity/issues/6)). An option `Async Upload` is added to `GsplatRenderer` to enable this feature.
 
+### Fixed
+
+- `.sog4d` importer now has a macOS Editor WebP decode fallback (embedded `libwebp`) when `ImageConversion.LoadImage` does not support WebP.
+- Avoids sorter init errors in `-batchmode -nographics` (no graphics device) so EditMode tests can run without unrelated compute shader kernel log errors.
+
 ## [1.1.2] - 2025-11-20
 
 ### Fixed

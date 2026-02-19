@@ -6,6 +6,7 @@ using UnityEngine.Rendering.HighDefinition;
 
 namespace Gsplat
 {
+    [System.Serializable]
     public class GsplatHDRPPass : CustomPass
     {
         protected override void Execute(CustomPassContext ctx)

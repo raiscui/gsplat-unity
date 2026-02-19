@@ -1,0 +1,125 @@
+// Copyright (c) 2026 Yize Wu
+// SPDX-License-Identifier: MIT
+//
+// 用途:
+// - 为可选的 VFX Graph 后端准备辅助 buffers(轴向/动态位置/动态透明度).
+// - 这样 VFX Graph 可以复用类似 SplatVFX 的渲染图(Position/Axis/Color),同时仍满足 4DGS 运动与可见性语义.
+
+#pragma kernel BuildAxes
+#pragma kernel BuildDynamic
+
+#define THREADS 256
+
+// 与 `Gsplat.hlsl` 中的 SH_C0 保持一致:
+// - GsplatAsset.ColorBuffer 存储的是 f_dc(DC SH 系数),不是 [0,1] 的 baseRgb.
+// - 主后端在 shader 里会做: baseRgb = f_dc * SH_C0 + 0.5.
+// - VFX Graph sample 侧为了简化 ShaderGraph,这里提前把颜色解码成 baseRgb.
+static const float k_shC0 = 0.28209479177387814f;
+
+// --------------------------------------------------------------------
+// 输入: 来自 GsplatRenderer 的原始 buffers.
+// --------------------------------------------------------------------
+StructuredBuffer<float3> _PositionBuffer;
+StructuredBuffer<float3> _ScaleBuffer;
+StructuredBuffer<float4> _RotationBuffer; // quat: (w, x, y, z)
+StructuredBuffer<float4> _ColorBuffer;    // (f_dc rgb, opacity)
+
+StructuredBuffer<float3> _VelocityBuffer;
+StructuredBuffer<float> _TimeBuffer;
+StructuredBuffer<float> _DurationBuffer;
+
+int _SplatCount;
+float _TimeNormalized;
+int _Has4D;
+
+// --------------------------------------------------------------------
+// 输出: 提供给 VFX Graph 的 buffers.
+// --------------------------------------------------------------------
+RWStructuredBuffer<float3> _AxisBuffer;        // count = splatCount * 3
+RWStructuredBuffer<float3> _VfxPositionBuffer; // count = splatCount
+RWStructuredBuffer<float4> _VfxColorBuffer;    // count = splatCount
+
+float3 DecodeFdcToBaseRgb(float3 fdcRgb)
+{
+    // 对齐主后端: baseRgb = f_dc * SH_C0 + 0.5
+    // 注意: 由于数值误差或数据异常,baseRgb 可能略小于 0,这里做一次下限截断.
+    return max(fdcRgb * k_shC0 + 0.5, 0.0);
+}
+
+// quat(wxyz) 旋转向量.
+float3 RotateByQuatWxyz(float4 qWxyz, float3 v)
+{
+    float qw = qWxyz.x;
+    float3 qv = qWxyz.yzw;
+    float3 t = 2.0 * cross(qv, v);
+    return v + qw * t + cross(qv, t);
+}
+
+// --------------------------------------------------------------------
+// BuildAxes:
+// - 将 (rotation, scale) 转成三个轴向向量(带尺度),布局与 SplatVFX 的 AxisBuffer 一致.
+// - 轴向向量在 VFX Graph 侧用于协方差投影与 gaussian footprint.
+// --------------------------------------------------------------------
+[numthreads(THREADS, 1, 1)]
+void BuildAxes(uint3 id : SV_DispatchThreadID)
+{
+    uint idx = id.x;
+    if (idx >= (uint)_SplatCount)
+        return;
+
+    float3 s = _ScaleBuffer[idx];
+    float4 q = _RotationBuffer[idx];
+
+    float3 a0 = RotateByQuatWxyz(q, float3(s.x, 0.0, 0.0));
+    float3 a1 = RotateByQuatWxyz(q, float3(0.0, s.y, 0.0));
+    float3 a2 = RotateByQuatWxyz(q, float3(0.0, 0.0, s.z));
+
+    uint baseIndex = idx * 3;
+    _AxisBuffer[baseIndex + 0] = a0;
+    _AxisBuffer[baseIndex + 1] = a1;
+    _AxisBuffer[baseIndex + 2] = a2;
+}
+
+// --------------------------------------------------------------------
+// BuildDynamic:
+// - 基于 4DGS 语义生成 VFX 侧可直接用的动态 position/color:
+//   - pos(t) = pos0 + vel * (t - time0)
+//   - t 不在 [time0, time0 + duration] 时,alpha=0(完全不可见)
+// - 这样 VFX Graph 不需要自己实现 4D 运动与可见性 gating,更不容易写错.
+// --------------------------------------------------------------------
+[numthreads(THREADS, 1, 1)]
+void BuildDynamic(uint3 id : SV_DispatchThreadID)
+{
+    uint idx = id.x;
+    if (idx >= (uint)_SplatCount)
+        return;
+
+    float3 pos0 = _PositionBuffer[idx];
+    float4 col0 = _ColorBuffer[idx];
+    float3 baseRgb = DecodeFdcToBaseRgb(col0.xyz);
+
+    // 3D-only: 直接透传.
+    if (_Has4D == 0)
+    {
+        _VfxPositionBuffer[idx] = pos0;
+        _VfxColorBuffer[idx] = float4(baseRgb, col0.w);
+        return;
+    }
+
+    float t0 = _TimeBuffer[idx];
+    float dt = _DurationBuffer[idx];
+    float t = _TimeNormalized;
+
+    // 时间窗外: 透明度清零(不贡献任何颜色).
+    // 注意: position 写回 pos0 是为了避免出现 NaN/Inf 扩散到后续计算.
+    if (t < t0 || t > t0 + dt)
+    {
+        _VfxPositionBuffer[idx] = pos0;
+        _VfxColorBuffer[idx] = float4(baseRgb, 0.0);
+        return;
+    }
+
+    float3 vel = _VelocityBuffer[idx];
+    _VfxPositionBuffer[idx] = pos0 + vel * (t - t0);
+    _VfxColorBuffer[idx] = float4(baseRgb, col0.w);
+}

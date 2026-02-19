@@ -28,6 +28,15 @@ namespace Gsplat.Editor
             EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.ComputeShader)));
             EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.SplatInstanceSize)));
             EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.ShowImportErrors)));
+
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Resource Budgeting", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.VramWarnRatio)));
+            EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.AutoDegrade)));
+            EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.AutoDegradeDisableInterpolation)));
+            EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.AutoDegradeMaxSplatCount)));
+            EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.MaxSplatsForVfx)));
+
             m_gsplatSettings.ApplyModifiedProperties();
         }
 

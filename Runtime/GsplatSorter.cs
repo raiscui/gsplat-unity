@@ -15,6 +15,18 @@ namespace Gsplat
         public ISorterResource SorterResource { get; }
         public bool isActiveAndEnabled { get; }
         public bool Valid { get; }
+
+        // --------------------------------------------------------------------
+        // 4DGS 可选字段: 排序阶段需要知道当前时间与对应 buffers.
+        // - 对于 3D-only 资产:
+        //   - Has4D=false
+        //   - buffers 允许返回 dummy(非 null)以避免 compute 绑定报错
+        // --------------------------------------------------------------------
+        public bool Has4D { get; }
+        public float TimeNormalized { get; }
+        public GraphicsBuffer VelocityBuffer { get; }
+        public GraphicsBuffer TimeBuffer { get; }
+        public GraphicsBuffer DurationBuffer { get; }
     }
 
     public interface ISorterResource
@@ -151,6 +163,11 @@ namespace Gsplat
                     Count = gs.SplatCount,
                     MatrixMv = camera.worldToCameraMatrix * gs.transform.localToWorldMatrix,
                     PositionBuffer = res.PositionBuffer,
+                    VelocityBuffer = gs.VelocityBuffer,
+                    TimeBuffer = gs.TimeBuffer,
+                    DurationBuffer = gs.DurationBuffer,
+                    Has4D = gs.Has4D,
+                    TimeNormalized = gs.TimeNormalized,
                     InputKeys = res.InputKeys,
                     InputValues = res.OrderBuffer,
                     Resources = res.Resources

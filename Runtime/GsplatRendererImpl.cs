@@ -9,6 +9,7 @@ namespace Gsplat
     {
         public uint SplatCount { get; private set; }
         public byte SHBands { get; private set; }
+        public bool Has4D { get; private set; }
 
         MaterialPropertyBlock m_propertyBlock;
         public GraphicsBuffer PositionBuffer { get; private set; }
@@ -17,6 +18,9 @@ namespace Gsplat
         public GraphicsBuffer ColorBuffer { get; private set; }
         public GraphicsBuffer SHBuffer { get; private set; }
         public GraphicsBuffer OrderBuffer { get; private set; }
+        public GraphicsBuffer VelocityBuffer { get; private set; }
+        public GraphicsBuffer TimeBuffer { get; private set; }
+        public GraphicsBuffer DurationBuffer { get; private set; }
         public ISorterResource SorterResource { get; private set; }
 
         public bool Valid =>
@@ -24,7 +28,8 @@ namespace Gsplat
             ScaleBuffer != null &&
             RotationBuffer != null &&
             ColorBuffer != null &&
-            (SHBands == 0 || SHBuffer != null);
+            (SHBands == 0 || SHBuffer != null) &&
+            (!Has4D || (VelocityBuffer != null && TimeBuffer != null && DurationBuffer != null));
 
         static readonly int k_orderBuffer = Shader.PropertyToID("_OrderBuffer");
         static readonly int k_positionBuffer = Shader.PropertyToID("_PositionBuffer");
@@ -32,27 +37,34 @@ namespace Gsplat
         static readonly int k_rotationBuffer = Shader.PropertyToID("_RotationBuffer");
         static readonly int k_colorBuffer = Shader.PropertyToID("_ColorBuffer");
         static readonly int k_shBuffer = Shader.PropertyToID("_SHBuffer");
+        static readonly int k_velocityBuffer = Shader.PropertyToID("_VelocityBuffer");
+        static readonly int k_timeBuffer = Shader.PropertyToID("_TimeBuffer");
+        static readonly int k_durationBuffer = Shader.PropertyToID("_DurationBuffer");
         static readonly int k_matrixM = Shader.PropertyToID("_MATRIX_M");
         static readonly int k_splatInstanceSize = Shader.PropertyToID("_SplatInstanceSize");
         static readonly int k_splatCount = Shader.PropertyToID("_SplatCount");
         static readonly int k_gammaToLinear = Shader.PropertyToID("_GammaToLinear");
         static readonly int k_shDegree = Shader.PropertyToID("_SHDegree");
+        static readonly int k_has4D = Shader.PropertyToID("_Has4D");
+        static readonly int k_timeNormalized = Shader.PropertyToID("_TimeNormalized");
 
-        public GsplatRendererImpl(uint splatCount, byte shBands)
+        public GsplatRendererImpl(uint splatCount, byte shBands, bool has4D)
         {
             SplatCount = splatCount;
             SHBands = shBands;
+            Has4D = has4D;
             CreateResources(splatCount);
             CreatePropertyBlock();
         }
 
-        public void RecreateResources(uint splatCount, byte shBands)
+        public void RecreateResources(uint splatCount, byte shBands, bool has4D)
         {
-            if (SplatCount == splatCount && SHBands == shBands)
+            if (SplatCount == splatCount && SHBands == shBands && Has4D == has4D)
                 return;
             Dispose();
             SplatCount = splatCount;
             SHBands = shBands;
+            Has4D = has4D;
             CreateResources(splatCount);
             CreatePropertyBlock();
         }
@@ -73,6 +85,14 @@ namespace Gsplat
                     System.Runtime.InteropServices.Marshal.SizeOf(typeof(Vector3)));
             OrderBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, (int)splatCount, sizeof(uint));
 
+            // 注意: 即使 Has4D=false,我们也会创建一个最小的 dummy buffer,
+            // 这样 shader/compute 在绑定阶段不会因为缺失 buffer 而报错.
+            var fourDCount = Has4D ? (int)splatCount : 1;
+            VelocityBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, fourDCount,
+                System.Runtime.InteropServices.Marshal.SizeOf(typeof(Vector3)));
+            TimeBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, fourDCount, sizeof(float));
+            DurationBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, fourDCount, sizeof(float));
+
             SorterResource = GsplatSorter.Instance.CreateSorterResource(splatCount, PositionBuffer, OrderBuffer);
         }
 
@@ -86,6 +106,10 @@ namespace Gsplat
             m_propertyBlock.SetBuffer(k_colorBuffer, ColorBuffer);
             if (SHBands > 0)
                 m_propertyBlock.SetBuffer(k_shBuffer, SHBuffer);
+
+            m_propertyBlock.SetBuffer(k_velocityBuffer, VelocityBuffer);
+            m_propertyBlock.SetBuffer(k_timeBuffer, TimeBuffer);
+            m_propertyBlock.SetBuffer(k_durationBuffer, DurationBuffer);
         }
 
         public void Dispose()
@@ -96,6 +120,9 @@ namespace Gsplat
             ColorBuffer?.Dispose();
             SHBuffer?.Dispose();
             OrderBuffer?.Dispose();
+            VelocityBuffer?.Dispose();
+            TimeBuffer?.Dispose();
+            DurationBuffer?.Dispose();
             SorterResource?.Dispose();
 
             PositionBuffer = null;
@@ -104,6 +131,9 @@ namespace Gsplat
             ColorBuffer = null;
             SHBuffer = null;
             OrderBuffer = null;
+            VelocityBuffer = null;
+            TimeBuffer = null;
+            DurationBuffer = null;
         }
 
         /// <summary>
@@ -115,8 +145,10 @@ namespace Gsplat
         /// <param name="layer">Layer used for rendering.</param>
         /// <param name="gammaToLinear">Covert color space from Gamma to Linear.</param>
         /// <param name="shDegree">Order of SH coefficients used for rendering. The final value is capped by the SHBands property.</param>
+        /// <param name="timeNormalized">归一化时间 [0,1],仅在 Has4D=true 时生效.</param>
+        /// <param name="motionPadding">4D 运动的保守 padding(对象空间),用于避免剔除错误.</param>
         public void Render(uint splatCount, Transform transform, Bounds localBounds, int layer,
-            bool gammaToLinear = false, int shDegree = 3)
+            bool gammaToLinear = false, int shDegree = 3, float timeNormalized = 0.0f, float motionPadding = 0.0f)
         {
             if (!Valid || !GsplatSettings.Instance.Valid || !GsplatSorter.Instance.Valid)
                 return;
@@ -126,6 +158,12 @@ namespace Gsplat
             m_propertyBlock.SetInteger(k_splatInstanceSize, (int)GsplatSettings.Instance.SplatInstanceSize);
             m_propertyBlock.SetInteger(k_shDegree, shDegree);
             m_propertyBlock.SetMatrix(k_matrixM, transform.localToWorldMatrix);
+            m_propertyBlock.SetInteger(k_has4D, Has4D ? 1 : 0);
+            m_propertyBlock.SetFloat(k_timeNormalized, Mathf.Clamp01(timeNormalized));
+
+            // 对 4D 运动做保守 bounds 扩展,避免相机剔除错误.
+            if (motionPadding > 0.0f && !float.IsNaN(motionPadding) && !float.IsInfinity(motionPadding))
+                localBounds.Expand(motionPadding * 2.0f);
             var rp = new RenderParams(GsplatSettings.Instance.Materials[SHBands])
             {
                 worldBounds = GsplatUtils.CalcWorldBounds(localBounds, transform),

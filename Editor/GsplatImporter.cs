@@ -68,6 +68,17 @@ namespace Gsplat.Editor
             public int OpacityOffset = -1;
             public int ScaleOffset = -1;
             public int RotationOffset = -1;
+
+            // ----------------------------------------------------------------
+            // 4DGS 可选字段 offsets
+            // - 只要出现任意一个 4D 字段,导入器就会生成 Velocities/Times/Durations 三个数组,
+            //   对缺失字段填默认值,以保证 Runtime 侧逻辑简单且一致.
+            // ----------------------------------------------------------------
+            public int VelocityXOffset = -1;
+            public int VelocityYOffset = -1;
+            public int VelocityZOffset = -1;
+            public int TimeOffset = -1;
+            public int DurationOffset = -1;
         }
 
         public static PlyHeaderInfo ReadPlyHeader(FileStream fs)
@@ -99,6 +110,40 @@ namespace Gsplat.Editor
                         break;
                     case "rot_0":
                         info.RotationOffset = info.PropertyCount;
+                        break;
+
+                    // 4DGS 标准字段
+                    case "vx":
+                        info.VelocityXOffset = info.PropertyCount;
+                        break;
+                    case "vy":
+                        info.VelocityYOffset = info.PropertyCount;
+                        break;
+                    case "vz":
+                        info.VelocityZOffset = info.PropertyCount;
+                        break;
+                    case "time":
+                        info.TimeOffset = info.PropertyCount;
+                        break;
+                    case "duration":
+                        info.DurationOffset = info.PropertyCount;
+                        break;
+
+                    // 4DGS 常见别名字段(用于兼容不同导出器)
+                    case "velocity_x":
+                        info.VelocityXOffset = info.PropertyCount;
+                        break;
+                    case "velocity_y":
+                        info.VelocityYOffset = info.PropertyCount;
+                        break;
+                    case "velocity_z":
+                        info.VelocityZOffset = info.PropertyCount;
+                        break;
+                    case "t":
+                        info.TimeOffset = info.PropertyCount;
+                        break;
+                    case "dt":
+                        info.DurationOffset = info.PropertyCount;
                         break;
                 }
 
@@ -156,7 +201,30 @@ namespace Gsplat.Editor
                 gsplatAsset.Scales = new Vector3[plyInfo.VertexCount];
                 gsplatAsset.Rotations = new Vector4[plyInfo.VertexCount];
 
+                // 只要出现任意一个 4D 字段,就启用 4D 数组,缺失字段用默认值填充.
+                var hasVelocityX = plyInfo.VelocityXOffset != -1;
+                var hasVelocityY = plyInfo.VelocityYOffset != -1;
+                var hasVelocityZ = plyInfo.VelocityZOffset != -1;
+                var hasAnyVelocity = hasVelocityX || hasVelocityY || hasVelocityZ;
+                var hasTime = plyInfo.TimeOffset != -1;
+                var hasDuration = plyInfo.DurationOffset != -1;
+                var hasAny4D = hasAnyVelocity || hasTime || hasDuration;
+                if (hasAny4D)
+                {
+                    gsplatAsset.Velocities = new Vector3[plyInfo.VertexCount];
+                    gsplatAsset.Times = new float[plyInfo.VertexCount];
+                    gsplatAsset.Durations = new float[plyInfo.VertexCount];
+                }
+
                 var buffer = new byte[plyInfo.PropertyCount * sizeof(float)];
+                // clamp 统计: 只要发生过 clamp,就输出一次 warning,并包含统计信息.
+                var clamped = false;
+                var minTime = float.PositiveInfinity;
+                var maxTime = float.NegativeInfinity;
+                var minDuration = float.PositiveInfinity;
+                var maxDuration = float.NegativeInfinity;
+                var maxSpeed = 0.0f;
+                var maxDurationClamped = 0.0f;
                 for (uint i = 0; i < plyInfo.VertexCount; i++)
                 {
                     var readBytes = fs.Read(buffer);
@@ -193,10 +261,85 @@ namespace Gsplat.Editor
                         properties[plyInfo.RotationOffset + 2],
                         properties[plyInfo.RotationOffset + 3]).normalized;
 
+                    if (hasAny4D)
+                    {
+                        // velocity 默认 0
+                        var vel = Vector3.zero;
+                        if (hasVelocityX) vel.x = properties[plyInfo.VelocityXOffset];
+                        if (hasVelocityY) vel.y = properties[plyInfo.VelocityYOffset];
+                        if (hasVelocityZ) vel.z = properties[plyInfo.VelocityZOffset];
+                        // velocity 中的 NaN/Inf 会导致后续 maxSpeed 统计失真,这里直接净化为 0.
+                        if (float.IsNaN(vel.x) || float.IsInfinity(vel.x))
+                        {
+                            clamped = true;
+                            vel.x = 0.0f;
+                        }
+
+                        if (float.IsNaN(vel.y) || float.IsInfinity(vel.y))
+                        {
+                            clamped = true;
+                            vel.y = 0.0f;
+                        }
+
+                        if (float.IsNaN(vel.z) || float.IsInfinity(vel.z))
+                        {
+                            clamped = true;
+                            vel.z = 0.0f;
+                        }
+
+                        // time 默认 0, duration 默认 1
+                        var t0 = hasTime ? properties[plyInfo.TimeOffset] : 0.0f;
+                        var dt = hasDuration ? properties[plyInfo.DurationOffset] : 1.0f;
+
+                        // clamp 到 [0,1],并统计 min/max(统计使用 clamp 前的值更利于排查数据源问题)
+                        // 注意: 如果数据包含 NaN/Inf,会污染统计与运行时结果,因此这里先做一次净化.
+                        if (float.IsNaN(t0) || float.IsInfinity(t0))
+                        {
+                            clamped = true;
+                            t0 = 0.0f;
+                        }
+
+                        if (float.IsNaN(dt) || float.IsInfinity(dt))
+                        {
+                            clamped = true;
+                            dt = 0.0f;
+                        }
+
+                        minTime = Mathf.Min(minTime, t0);
+                        maxTime = Mathf.Max(maxTime, t0);
+                        minDuration = Mathf.Min(minDuration, dt);
+                        maxDuration = Mathf.Max(maxDuration, dt);
+
+                        var t0Clamped = Mathf.Clamp01(t0);
+                        var dtClamped = Mathf.Clamp01(dt);
+                        if (t0Clamped != t0 || dtClamped != dt)
+                            clamped = true;
+
+                        gsplatAsset.Velocities[i] = vel;
+                        gsplatAsset.Times[i] = t0Clamped;
+                        gsplatAsset.Durations[i] = dtClamped;
+
+                        // motion 统计(基于 clamp 后的 duration,更贴近运行时可见时间窗)
+                        maxSpeed = Mathf.Max(maxSpeed, vel.magnitude);
+                        maxDurationClamped = Mathf.Max(maxDurationClamped, dtClamped);
+                    }
+
                     if (i == 0) bounds = new Bounds(gsplatAsset.Positions[i], Vector3.zero);
                     else bounds.Encapsulate(gsplatAsset.Positions[i]);
                     EditorUtility.DisplayProgressBar("Importing Gsplat Asset", "Reading vertices",
                         i / (float)plyInfo.VertexCount);
+                }
+
+                if (hasAny4D)
+                {
+                    gsplatAsset.MaxSpeed = maxSpeed;
+                    gsplatAsset.MaxDuration = maxDurationClamped;
+                    if (clamped && GsplatSettings.Instance.ShowImportErrors)
+                    {
+                        Debug.LogWarning(
+                            $"{ctx.assetPath} import warning: clamped time/duration to [0,1]. " +
+                            $"time(min={minTime}, max={maxTime}), duration(min={minDuration}, max={maxDuration})");
+                    }
                 }
             }
 

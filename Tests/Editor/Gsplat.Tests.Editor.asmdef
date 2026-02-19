@@ -1,0 +1,27 @@
+{
+    "name": "Gsplat.Tests.Editor",
+    "rootNamespace": "",
+    "references": [
+        "GUID:5ef91cffd1997ee4e97e2145f69f5845"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.visualeffectgraph",
+            "expression": "",
+            "define": "GSPLAT_ENABLE_VFX_GRAPH"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

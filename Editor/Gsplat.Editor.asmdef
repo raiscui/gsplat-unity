@@ -2,7 +2,8 @@
     "name": "Gsplat.Editor",
     "rootNamespace": "",
     "references": [
-        "GUID:5ef91cffd1997ee4e97e2145f69f5845"
+        "GUID:5ef91cffd1997ee4e97e2145f69f5845",
+        "GUID:d04eb9c554ad44ceab303cecf0c0cf82"
     ],
     "includePlatforms": [
         "Editor"
@@ -13,6 +14,12 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.visualeffectgraph",
+            "expression": "",
+            "define": "GSPLAT_ENABLE_VFX_GRAPH"
+        }
+    ],
     "noEngineReferences": false
 }

@@ -5,9 +5,19 @@ using System;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace Gsplat
 {
+    // 资源预算与自动降级策略(用于避免超大规模数据直接 OOM 或不可解释的失败).
+    public enum GsplatAutoDegradePolicy
+    {
+        None = 0,
+        ReduceSH = 1,
+        CapSplatCount = 2,
+        ReduceSHThenCapSplatCount = 3
+    }
+
     public class GsplatSettings : ScriptableObject
     {
         const string k_gsplatSettingsResourcesPath = "GsplatSettings";
@@ -54,6 +64,16 @@ namespace Gsplat
         public ComputeShader ComputeShader;
         public uint SplatInstanceSize = 128;
         public bool ShowImportErrors = true;
+
+        // --------------------------------------------------------------------
+        // 4DGS/大数据资源预算
+        // --------------------------------------------------------------------
+        [Range(0.0f, 1.0f)] public float VramWarnRatio = 0.6f;
+        public GsplatAutoDegradePolicy AutoDegrade = GsplatAutoDegradePolicy.None;
+        public bool AutoDegradeDisableInterpolation = false;
+        public uint AutoDegradeMaxSplatCount = 2000000;
+        public uint MaxSplatsForVfx = 500000;
+
         public Material[] Materials { get; private set; }
         public Mesh Mesh { get; private set; }
 
@@ -62,6 +82,28 @@ namespace Gsplat
         Shader m_prevShader;
         ComputeShader m_prevComputeShader;
         uint m_prevSplatInstanceSize;
+
+        static void InitSorterSafely(ComputeShader computeShader)
+        {
+            // ----------------------------------------------------------------
+            // 为什么需要这个 guard:
+            // - CI/命令行测试常用 `-batchmode -nographics`.
+            // - 在这种“无图形设备”的模式下,ComputeShader 可能无法正确编译/反射 kernels,
+            //   Unity 会输出 error log(例如 "Kernel 'InitPayload' not found").
+            // - Unity Test Framework 默认会把未处理的 error log 视为测试失败.
+            //
+            // 设计取舍:
+            // - importer/tests 并不依赖排序器,因此这里在无图形设备时跳过排序器初始化,
+            //   避免 batch 测试被无关的渲染初始化噪声击穿.
+            // ----------------------------------------------------------------
+            if (!computeShader || SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+            {
+                GsplatSorter.Instance.InitSorter(null);
+                return;
+            }
+
+            GsplatSorter.Instance.InitSorter(computeShader);
+        }
 
         void CreateMeshInstance()
         {
@@ -120,7 +162,7 @@ namespace Gsplat
 
             if (ComputeShader != m_prevComputeShader)
             {
-                GsplatSorter.Instance.InitSorter(ComputeShader);
+                InitSorterSafely(ComputeShader);
                 m_prevComputeShader = ComputeShader;
             }
 
@@ -136,7 +178,7 @@ namespace Gsplat
         {
             CreateMaterials();
             m_prevShader = Shader;
-            GsplatSorter.Instance.InitSorter(ComputeShader);
+            InitSorterSafely(ComputeShader);
             m_prevComputeShader = ComputeShader;
 
             CreateMeshInstance();
