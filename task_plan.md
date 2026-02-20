@@ -518,9 +518,9 @@ Unity Console 不再出现:
 
 ## 阶段
 - [x] 阶段1: 选定输出矩阵与命名
-- [ ] 阶段2: 执行 `pack` 生成多份 `.sog4d`
-- [ ] 阶段3: 对每份输出执行 `validate` + 记录文件尺寸
-- [ ] 阶段4: 汇总到四文件 + 给出 Unity 导入验证建议
+- [x] 阶段2: 执行 `pack` 生成多份 `.sog4d`
+- [x] 阶段3: 对每份输出执行 `validate` + 记录文件尺寸
+- [x] 阶段4: 汇总到四文件 + 给出 Unity 导入验证建议
 
 ## 输出矩阵(计划)
 输入:
@@ -537,10 +537,30 @@ Unity Console 不再出现:
    - `gaussian_pertimestamp_quality_sh3.sog4d`
 
 ## 状态
-**目前在阶段2**
-时间: 2026-02-19 20:21:40 +0800.
-我已确定输出矩阵与命名.
-接下来我会依次执行 3 次 `pack --self-check`,生成并自检:
-- `gaussian_pertimestamp_fast_sh0.sog4d`
-- `gaussian_pertimestamp_balanced_sh3_delta_f16.sog4d`
-- `gaussian_pertimestamp_small_sh3_delta_f16_4096.sog4d`
+**已完成**
+时间: 2026-02-19 21:14:10 +0800.
+我已完成多配置输出与逐一 validate 自检,并已把结果汇总回四文件.
+接下来只需要在 Unity 里按建议导入其中任意一个 `.sog4d` 做端到端播放验证即可.
+
+## 进展记录
+### 2026-02-19 21:12:30 +0800
+- 输出目录(避免把输出混在 input-dir 里):
+  - `/Users/cuiluming/local_doc/l_dev/my/unity/gaussian_pertimestamp_out`
+- 已生成并自检通过(`--self-check`):
+  1. SH0-only(最小路径,最快):
+     - `gaussian_pertimestamp_out/gaussian_pertimestamp_fast_sh0.sog4d`
+     - `validate ok (bands=0)`, size=7.3MiB
+  2. SH3 + delta-v1(多 segment,覆盖边界逻辑):
+     - `gaussian_pertimestamp_out/gaussian_pertimestamp_balanced_sh3_delta_seg5_shN4096_f16.sog4d`
+     - `validate ok (delta-v1)`, size=7.8MiB
+     - meta: `shNCount=4096`, `shNCentroidsType=f16`,并且 `shNDeltaSegments` 存在多段(由 `--delta-segment-length 5` 产生)
+  3. SH3 + full labels(覆盖 full 路径):
+     - `gaussian_pertimestamp_out/gaussian_pertimestamp_balanced_sh3_full_shN8192_f16.sog4d`
+     - `validate ok (full labels)`, size=8.7MiB
+     - meta: `shNCount=8192`, `shNCentroidsType=f16`, `shNLabelsEncoding=full`
+
+- 已有的质量优先(参考对照,更大采样量 + f32 centroids + ZIP deflated):
+  - `/Users/cuiluming/local_doc/l_dev/my/unity/gaussian_pertimestamp_quality_sh3.sog4d`
+  - 同时已复制到输出目录:
+    - `gaussian_pertimestamp_out/gaussian_pertimestamp_quality_sh3.sog4d`
+  - `validate ok (delta-v1)`, size=8.3MiB

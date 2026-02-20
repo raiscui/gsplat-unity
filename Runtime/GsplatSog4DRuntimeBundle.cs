@@ -31,6 +31,11 @@ namespace Gsplat
         // --------------------------------------------------------------------
         // Json DTO(与 Editor importer 保持一致,字段名需与 meta.json 完全一致)
         // --------------------------------------------------------------------
+        // 说明:
+        // - 这些 DTO 字段会由 `JsonUtility.FromJson` 通过反射赋值.
+        // - 因此在“纯静态分析”的视角里,它们看起来像是“从未被赋值”(CS0649),
+        //   但运行时是正常工作的.
+#pragma warning disable CS0649
         [Serializable]
         sealed class Sog4DMetaJson
         {
@@ -113,6 +118,7 @@ namespace Gsplat
             public string baseLabelsPath;
             public string deltaPath;
         }
+#pragma warning restore CS0649
 
         // --------------------------------------------------------------------
         // Bundle state

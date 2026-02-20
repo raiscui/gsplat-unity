@@ -666,3 +666,14 @@
 - 触发原因:
   - `ValueError: Fewer non-zero entries in p than size` 这条报错很常见,但根因与修复点不够直观.
   - 本次我们已经在真实代码路径中修复并验证(生成并 validate `.sog4d` 成功),适合固化为可复用经验.
+
+---
+
+## 2026-02-19 21:13:30 +0800: 多配置输出与落盘目录约定
+
+- 经验:
+  - `--input-dir` 的目录经常会被上游导出脚本重新生成/清理(例如重新导出 `time_*.ply` 时).
+  - 如果把 `.sog4d` 输出也写在同一个目录里,容易在下次导出时被误删.
+- 约定(本次输出采用):
+  - 把 `.sog4d` 输出集中放到一个独立目录:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/gaussian_pertimestamp_out/`

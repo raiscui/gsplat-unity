@@ -393,3 +393,25 @@
     - 新增 `_weighted_choice_no_replace`,修复 `numpy.random.Generator.choice(replace=False,p=...)` 在非零权重不足时抛 ValueError 的问题.
     - `importance=opacity*volume` 改为在 float64 下计算(避免 float32 下溢导致大量 0 权重).
     - sh0/scale/shN 的采样逻辑统一走同一套稳态函数,减少边界分叉.
+
+## 2026-02-19 21:12:30 +0800
+- 为了确认 `ply_sequence_to_sog4d.py pack` 在多配置下都能稳定工作,我额外输出了多档 `.sog4d` 并逐个 `--self-check`:
+  - 输出目录: `/Users/cuiluming/local_doc/l_dev/my/unity/gaussian_pertimestamp_out/`
+  - SH0-only(最快,最小路径):
+    - `gaussian_pertimestamp_fast_sh0.sog4d`
+    - `validate ok (bands=0)`, size=7.3MiB
+  - SH3 + delta-v1(多 segment,覆盖 segment 边界逻辑):
+    - `gaussian_pertimestamp_balanced_sh3_delta_seg5_shN4096_f16.sog4d`
+    - `validate ok (delta-v1)`, size=7.8MiB
+  - SH3 + full labels(覆盖 full labels 路径):
+    - `gaussian_pertimestamp_balanced_sh3_full_shN8192_f16.sog4d`
+    - `validate ok (full labels)`, size=8.7MiB
+- 同步改良文档,避免“命令看起来不同但其实是同一套配置”的困惑:
+  - `Tools~/Sog4D/README.md` 的 "2.5 质量优先" 现在显式写出:
+    - `--opacity-mode/--scale-mode` 的默认值与何时需要强制指定.
+    - `--zip-compression` 默认值与 `deflated` 的实际收益点.
+- 补充:
+  - 为了避免上游脚本清理 input 目录导致输出丢失,我把 `.sog4d` 输出集中放到:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/gaussian_pertimestamp_out/`
+  - 质量优先版本也已复制到该目录:
+    - `gaussian_pertimestamp_out/gaussian_pertimestamp_quality_sh3.sog4d`

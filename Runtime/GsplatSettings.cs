@@ -62,6 +62,13 @@ namespace Gsplat
 
         public Shader Shader;
         public ComputeShader ComputeShader;
+
+        [Tooltip(
+            "每个 GPU instance 里包含的 splat quad 数量(也可以理解为 instance 的 batch size).\n" +
+            "渲染时实例数约为: instanceCount = ceil(SplatCount / SplatInstanceSize).\n" +
+            "它不会改变 splat 总数与排序逻辑,主要影响 mesh 大小与 instanceCount.\n" +
+            "通常保持 128 即可. 数据量很大时可尝试 256/512.\n" +
+            "注意: 设得过大可能触发 Mesh 顶点/索引上限问题.")]
         public uint SplatInstanceSize = 128;
         public bool ShowImportErrors = true;
 
@@ -73,6 +80,21 @@ namespace Gsplat
         public bool AutoDegradeDisableInterpolation = false;
         public uint AutoDegradeMaxSplatCount = 2000000;
         public uint MaxSplatsForVfx = 500000;
+
+        // --------------------------------------------------------------------
+        // Unity Editor Play Mode 性能开关
+        // --------------------------------------------------------------------
+        [Tooltip(
+            "在 Unity Editor 的 Play 模式下,如果 Scene 视图也在渲染,会导致对 GameView 与 SceneView 各排序一次,性能可能显著下降.\n" +
+            "开启后会在 Play 模式跳过 SceneView 相机的排序,优先保证 GameView 的流畅度.\n" +
+            "注意: 这只影响 Editor 的 SceneView,不影响 Player build.")]
+        public bool SkipSceneViewSortingInPlayMode = true;
+
+        [Tooltip(
+            "在 Unity Editor 的 Play 模式下,SceneView 额外渲染会带来额外 draw cost.\n" +
+            "开启后会在 Play 模式仅对 Game/VR 相机提交 Gsplat draw call,从而让 SceneView 不再渲染 Gsplat.\n" +
+            "注意: 这只影响 Editor 的 SceneView,不影响 Player build.")]
+        public bool SkipSceneViewRenderingInPlayMode = true;
 
         public Material[] Materials { get; private set; }
         public Mesh Mesh { get; private set; }

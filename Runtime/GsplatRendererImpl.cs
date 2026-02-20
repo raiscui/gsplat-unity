@@ -48,6 +48,27 @@ namespace Gsplat
         static readonly int k_has4D = Shader.PropertyToID("_Has4D");
         static readonly int k_timeNormalized = Shader.PropertyToID("_TimeNormalized");
 
+#if UNITY_EDITOR
+        // --------------------------------------------------------------------
+        // Editor Play Mode 相机缓存:
+        // - 我们在“只渲染 GameView,不渲染 SceneView”的模式下需要枚举相机.
+        // - 避免使用 `Camera.allCameras` 带来的 GC 分配,这里用 `Camera.GetAllCameras` + 缓存数组.
+        // --------------------------------------------------------------------
+        static Camera[] s_editorPlayRenderCameras;
+
+        static int GetAllCamerasNonAllocEditor(ref Camera[] cameras)
+        {
+            var count = Camera.allCamerasCount;
+            if (count <= 0)
+                return 0;
+
+            if (cameras == null || cameras.Length < count)
+                cameras = new Camera[Mathf.NextPowerOfTwo(count)];
+
+            return Camera.GetAllCameras(cameras);
+        }
+#endif
+
         public GsplatRendererImpl(uint splatCount, byte shBands, bool has4D)
         {
             SplatCount = splatCount;
@@ -171,8 +192,40 @@ namespace Gsplat
                 layer = layer
             };
 
-            Graphics.RenderMeshPrimitives(rp, GsplatSettings.Instance.Mesh, 0,
-                Mathf.CeilToInt(splatCount / (float)GsplatSettings.Instance.SplatInstanceSize));
+            var instanceCount = Mathf.CeilToInt(splatCount / (float)GsplatSettings.Instance.SplatInstanceSize);
+
+#if UNITY_EDITOR
+            var settings = GsplatSettings.Instance;
+            if (Application.isPlaying && settings && settings.SkipSceneViewRenderingInPlayMode)
+            {
+                var cameraCount = GetAllCamerasNonAllocEditor(ref s_editorPlayRenderCameras);
+                if (cameraCount > 0)
+                {
+                    for (var i = 0; i < cameraCount; i++)
+                    {
+                        var cam = s_editorPlayRenderCameras[i];
+                        if (!cam)
+                            continue;
+
+                        // 只保证 GameView 流畅:
+                        // - 这里仅对 Game/VR 相机提交 draw call.
+                        // - SceneView 相机将不会渲染 Gsplat,从而避免额外 draw cost.
+                        if (cam.cameraType != CameraType.Game && cam.cameraType != CameraType.VR)
+                            continue;
+
+                        if ((cam.cullingMask & (1 << layer)) == 0)
+                            continue;
+
+                        rp.camera = cam;
+                        Graphics.RenderMeshPrimitives(rp, GsplatSettings.Instance.Mesh, 0, instanceCount);
+                    }
+
+                    return;
+                }
+            }
+#endif
+
+            Graphics.RenderMeshPrimitives(rp, GsplatSettings.Instance.Mesh, 0, instanceCount);
         }
     }
 }

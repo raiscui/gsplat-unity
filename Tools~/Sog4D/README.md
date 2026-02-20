@@ -60,6 +60,11 @@ python3 -m pip install numpy pillow scipy scikit-learn
 - `time_00001.ply`
 - ...
 
+建议:
+- `--output` 尽量放到一个独立的输出目录里,不要和 `--input-dir` 混在同一个目录.
+- 原因是很多上游导出脚本会"重新生成/清理"输入目录(例如重新导出 `time_*.ply` 时).
+  如果你把 `.sog4d` 也写在输入目录,下次导出时可能会被误删.
+
 ### 1.2 每帧必须一致的约束
 
 - 每一帧的 `element vertex N` 必须一致.

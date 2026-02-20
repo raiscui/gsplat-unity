@@ -116,12 +116,40 @@ namespace Gsplat
 
         public bool GatherGsplatsForCamera(Camera cam)
         {
+            if (!cam)
+                return false;
+
             if (cam.cameraType == CameraType.Preview)
                 return false;
 
+            // ----------------------------------------------------------------
+            // Editor Play Mode 的一个常见性能坑:
+            // - Play 模式时,GameView 与 SceneView 往往会同时渲染.
+            // - HDRP 下 CustomPass 以及 Builtin 的 Camera.onPreCull 都是“按相机触发”.
+            // - 这会导致同一帧内对两个相机各做一次 GPU 排序,看起来就像“Play 模式 AutoPlay 不流畅”.
+            // 因此这里提供一个 settings 开关,在 Play 模式下可选择跳过 SceneView 相机的排序.
+            // ----------------------------------------------------------------
+            var settings = GsplatSettings.Instance;
+            if (Application.isPlaying && settings && settings.SkipSceneViewSortingInPlayMode &&
+                cam.cameraType == CameraType.SceneView)
+            {
+                return false;
+            }
+
             m_activeGsplats.Clear();
-            foreach (var gs in m_gsplats.Where(gs => gs is { isActiveAndEnabled: true, Valid: true }))
+            var cullingMask = cam.cullingMask;
+            foreach (var gs in m_gsplats)
+            {
+                if (gs is not { isActiveAndEnabled: true, Valid: true })
+                    continue;
+
+                // 如果相机的 culling mask 不包含对象 layer,则该相机不会渲染该对象.
+                // 此时排序属于纯浪费,会放大 Play 模式下多相机的性能问题.
+                if (gs.transform && (cullingMask & (1 << gs.transform.gameObject.layer)) == 0)
+                    continue;
+
                 m_activeGsplats.Add(gs);
+            }
             return m_activeGsplats.Count != 0;
         }
 

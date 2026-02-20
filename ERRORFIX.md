@@ -372,3 +372,8 @@
 - 已对输出文件执行 validate,确认 bundle 完整性与越界检查通过:
   - `python3 Tools~/Sog4D/ply_sequence_to_sog4d.py validate --input /Users/cuiluming/local_doc/l_dev/my/unity/gaussian_pertimestamp/gaussian_pertimestamp_quality_sh3.sog4d`
   - 输出: `[sog4d] validate ok (delta-v1).`
+
+### 补充说明
+- 为了避免把输出写在 `time_*.ply` 的输入目录里导致后续被上游导出脚本清理,
+  当前推荐把 `.sog4d` 输出放在独立目录,例如:
+  - `/Users/cuiluming/local_doc/l_dev/my/unity/gaussian_pertimestamp_out/`

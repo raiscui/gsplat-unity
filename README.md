@@ -179,6 +179,14 @@ Notes:
 
 Sorting (compute) and rendering (shader) use the same cached `TimeNormalized` value per frame.
 
+Editor note:
+
+- In the Unity Editor, Play Mode often renders both the GameView and the SceneView.
+  Since sorting is dispatched per camera, this can run the GPU sort twice per frame and reduce FPS.
+- If you only care about GameView smoothness while playing:
+  - Keep `GsplatSettings.SkipSceneViewSortingInPlayMode` enabled (default: `true`).
+  - Optionally enable `GsplatSettings.SkipSceneViewRenderingInPlayMode` (default: `true`) to avoid SceneView draw cost.
+
 ### VFX Graph backend (optional)
 
 If your project includes the Visual Effect Graph package (`com.unity.visualeffectgraph`), this package provides:
