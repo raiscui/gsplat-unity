@@ -24,13 +24,19 @@ namespace Gsplat.Editor
     [ScriptedImporter(1, "sog4d")]
     public sealed class GsplatSog4DImporter : ScriptedImporter
     {
-        const int k_supportedVersion = 1;
+        const int k_supportedVersionV1 = 1;
+        const int k_supportedVersionV2 = 2;
 
         // --------------------------------------------------------------------
         // Json DTO(只用于 meta.json 解析)
         // - 字段名必须与 JSON 完全一致,因此这里使用 lowerCamelCase.
         // - 使用 JsonUtility 的好处是: 未知字段会被忽略,符合 spec 的 forward compatibility 要求.
         // --------------------------------------------------------------------
+        // 说明:
+        // - 这些 DTO 字段会由 `JsonUtility.FromJson` 通过反射赋值.
+        // - 因此在“纯静态分析”的视角里,它们看起来像是“从未被赋值”(CS0649),
+        //   但运行时是正常工作的.
+#pragma warning disable CS0649
         [Serializable]
         sealed class Sog4DMetaJson
         {
@@ -109,6 +115,11 @@ namespace Gsplat.Editor
 
             // delta-v1 模式
             public ShNDeltaSegmentJson[] shNDeltaSegments;
+
+            // v2: SH rest 按 band 拆分
+            public ShBandStreamJson sh1;
+            public ShBandStreamJson sh2;
+            public ShBandStreamJson sh3;
         }
 
         [Serializable]
@@ -119,6 +130,24 @@ namespace Gsplat.Editor
             public string baseLabelsPath;
             public string deltaPath;
         }
+
+        [Serializable]
+        sealed class ShBandStreamJson
+        {
+            public int count;
+            public string centroidsType; // "f16" | "f32"
+            public string centroidsPath; // e.g. "sh1_centroids.bin"
+
+            // 可选,缺失时视为 "full"
+            public string labelsEncoding; // "full" | "delta-v1"
+
+            // full 模式
+            public string labelsPath; // e.g. "frames/{frame}/sh1_labels.webp"
+
+            // delta-v1 模式
+            public ShNDeltaSegmentJson[] deltaSegments;
+        }
+#pragma warning restore CS0649
 
         public override void OnImportAsset(AssetImportContext ctx)
         {
@@ -136,6 +165,9 @@ namespace Gsplat.Editor
             AddTexture2DArrayIfNotNull(ctx, "rotation", sequenceAsset.Rotation);
             AddTexture2DArrayIfNotNull(ctx, "sh0", sequenceAsset.Sh0);
             AddTexture2DArrayIfNotNull(ctx, "shNLabels", sequenceAsset.ShNLabels);
+            AddTexture2DArrayIfNotNull(ctx, "sh1Labels", sequenceAsset.Sh1Labels);
+            AddTexture2DArrayIfNotNull(ctx, "sh2Labels", sequenceAsset.Sh2Labels);
+            AddTexture2DArrayIfNotNull(ctx, "sh3Labels", sequenceAsset.Sh3Labels);
 
             // ----------------------------------------------------------------
             // task 3.7: 一键可用
@@ -195,10 +227,10 @@ namespace Gsplat.Editor
                 if (!string.Equals(meta.format, "sog4d", StringComparison.Ordinal))
                     return Fail(ctx, $"meta.json invalid format: expected \"sog4d\", got \"{meta.format}\"");
 
-                if (meta.version != k_supportedVersion)
+                if (meta.version != k_supportedVersionV1 && meta.version != k_supportedVersionV2)
                 {
                     return Fail(ctx,
-                        $"meta.json unsupported version: expected {k_supportedVersion}, got {meta.version}");
+                        $"meta.json unsupported version: expected {k_supportedVersionV1} or {k_supportedVersionV2}, got {meta.version}");
                 }
 
                 if (meta.splatCount <= 0)
@@ -232,43 +264,77 @@ namespace Gsplat.Editor
                 asset.PositionRangeMax = meta.streams.position.rangeMax;
                 asset.ScaleCodebook = meta.streams.scale.codebook;
 
+                asset.Sog4DVersion = meta.version;
                 asset.SHBands = (byte)Mathf.Clamp(meta.streams.sh.bands, 0, 3);
                 asset.Sh0Codebook = meta.streams.sh.sh0Codebook;
 
                 if (asset.SHBands > 0)
                 {
-                    asset.ShNCount = meta.streams.sh.shNCount;
-                    asset.ShNCentroidsType = meta.streams.sh.shNCentroidsType;
-
-                    // `shN_centroids.bin`:
-                    // - 这是 SH rest 的 palette,运行时解码必须依赖它.
-                    // - 这里直接把原始 bytes 存入 ScriptableObject,避免在工程里额外落地一个文件.
-                    var centroidsPath = NormalizeZipPath(meta.streams.sh.shNCentroidsPath);
-                    if (!entriesByName.TryGetValue(centroidsPath, out var centroidsEntry))
+                    if (meta.version == k_supportedVersionV1)
                     {
-                        DestroySequenceAssetAndSubObjects(asset);
-                        return Fail(ctx, $"bundle missing referenced file: {centroidsPath}");
-                    }
+                        asset.ShNCount = meta.streams.sh.shNCount;
+                        asset.ShNCentroidsType = meta.streams.sh.shNCentroidsType;
 
-                    if (!TryReadZipEntryBytes(centroidsEntry, out var centroidsBytes, out var centroidsReadErr))
+                        // `shN_centroids.bin`:
+                        // - 这是 SH rest 的 palette,运行时解码必须依赖它.
+                        // - 这里直接把原始 bytes 存入 ScriptableObject,避免在工程里额外落地一个文件.
+                        var centroidsPath = NormalizeZipPath(meta.streams.sh.shNCentroidsPath);
+                        if (!entriesByName.TryGetValue(centroidsPath, out var centroidsEntry))
+                        {
+                            DestroySequenceAssetAndSubObjects(asset);
+                            return Fail(ctx, $"bundle missing referenced file: {centroidsPath}");
+                        }
+
+                        if (!TryReadZipEntryBytes(centroidsEntry, out var centroidsBytes, out var centroidsReadErr))
+                        {
+                            DestroySequenceAssetAndSubObjects(asset);
+                            return Fail(ctx, $"failed to read shN_centroids.bin: {centroidsPath}: {centroidsReadErr}");
+                        }
+
+                        // 基本尺寸校验,避免运行时才发现 palette 数据被截断或格式不一致.
+                        var restCoeffCount = (asset.SHBands + 1) * (asset.SHBands + 1) - 1;
+                        var scalarBytes = asset.ShNCentroidsType == "f16" ? 2 : 4;
+                        var expectedBytes = (long)asset.ShNCount * restCoeffCount * 3L * scalarBytes;
+                        if (centroidsBytes.LongLength != expectedBytes)
+                        {
+                            DestroySequenceAssetAndSubObjects(asset);
+                            return Fail(ctx,
+                                $"shN_centroids.bin size mismatch: expected {expectedBytes} bytes, got {centroidsBytes.LongLength} bytes. " +
+                                $"(shNCount={asset.ShNCount}, restCoeffCount={restCoeffCount}, type={asset.ShNCentroidsType})");
+                        }
+
+                        asset.ShNCentroidsBytes = centroidsBytes;
+                    }
+                    else
                     {
-                        DestroySequenceAssetAndSubObjects(asset);
-                        return Fail(ctx, $"failed to read shN_centroids.bin: {centroidsPath}: {centroidsReadErr}");
-                    }
+                        // v2: SH rest 按 band 拆分为 sh1/sh2/sh3 三套 palette.
+                        if (!TryReadShBandCentroids(ctx, entriesByName, "sh1", meta.streams.sh.sh1, coeffCount: 3,
+                                out asset.Sh1Count, out asset.Sh1CentroidsType, out asset.Sh1CentroidsBytes))
+                        {
+                            DestroySequenceAssetAndSubObjects(asset);
+                            return false;
+                        }
 
-                    // 基本尺寸校验,避免运行时才发现 palette 数据被截断或格式不一致.
-                    var restCoeffCount = (asset.SHBands + 1) * (asset.SHBands + 1) - 1;
-                    var scalarBytes = asset.ShNCentroidsType == "f16" ? 2 : 4;
-                    var expectedBytes = (long)asset.ShNCount * restCoeffCount * 3L * scalarBytes;
-                    if (centroidsBytes.LongLength != expectedBytes)
-                    {
-                        DestroySequenceAssetAndSubObjects(asset);
-                        return Fail(ctx,
-                            $"shN_centroids.bin size mismatch: expected {expectedBytes} bytes, got {centroidsBytes.LongLength} bytes. " +
-                            $"(shNCount={asset.ShNCount}, restCoeffCount={restCoeffCount}, type={asset.ShNCentroidsType})");
-                    }
+                        if (asset.SHBands >= 2)
+                        {
+                            if (!TryReadShBandCentroids(ctx, entriesByName, "sh2", meta.streams.sh.sh2, coeffCount: 5,
+                                    out asset.Sh2Count, out asset.Sh2CentroidsType, out asset.Sh2CentroidsBytes))
+                            {
+                                DestroySequenceAssetAndSubObjects(asset);
+                                return false;
+                            }
+                        }
 
-                    asset.ShNCentroidsBytes = centroidsBytes;
+                        if (asset.SHBands >= 3)
+                        {
+                            if (!TryReadShBandCentroids(ctx, entriesByName, "sh3", meta.streams.sh.sh3, coeffCount: 7,
+                                    out asset.Sh3Count, out asset.Sh3CentroidsType, out asset.Sh3CentroidsBytes))
+                            {
+                                DestroySequenceAssetAndSubObjects(asset);
+                                return false;
+                            }
+                        }
+                    }
                 }
 
                 // --------------------------------------------------------------------
@@ -329,32 +395,65 @@ namespace Gsplat.Editor
                 // bands>0 时,SH rest labels 是必需输入.
                 if (asset.SHBands > 0)
                 {
-                    var labelsEncoding = meta.streams.sh.shNLabelsEncoding;
-                    if (string.IsNullOrEmpty(labelsEncoding))
-                        labelsEncoding = "full";
+                    if (meta.version == k_supportedVersionV1)
+                    {
+                        var labelsEncoding = meta.streams.sh.shNLabelsEncoding;
+                        if (string.IsNullOrEmpty(labelsEncoding))
+                            labelsEncoding = "full";
 
-                    if (labelsEncoding == "full")
-                    {
-                        if (!TryBuildTexture2DArrayFromPerFrameWebp(ctx, entriesByName, meta.streams.sh.shNLabelsPath,
-                                width, height, frameCount, "ShNLabels", out asset.ShNLabels,
-                                u16MaxExclusive: meta.streams.sh.shNCount, splatCount: meta.splatCount))
+                        if (labelsEncoding == "full")
                         {
-                            DestroySequenceAssetAndSubObjects(asset);
-                            return false;
+                            if (!TryBuildTexture2DArrayFromPerFrameWebp(ctx, entriesByName, meta.streams.sh.shNLabelsPath,
+                                    width, height, frameCount, "ShNLabels", out asset.ShNLabels,
+                                    u16MaxExclusive: meta.streams.sh.shNCount, splatCount: meta.splatCount))
+                            {
+                                DestroySequenceAssetAndSubObjects(asset);
+                                return false;
+                            }
                         }
-                    }
-                    else if (labelsEncoding == "delta-v1")
-                    {
-                        if (!TryBuildShNLabelsFromDeltaV1(ctx, meta, entriesByName, width, height, out asset.ShNLabels))
+                        else if (labelsEncoding == "delta-v1")
+                        {
+                            if (!TryBuildShNLabelsFromDeltaV1(ctx, meta, entriesByName, width, height, out asset.ShNLabels))
+                            {
+                                DestroySequenceAssetAndSubObjects(asset);
+                                return false;
+                            }
+                        }
+                        else
                         {
                             DestroySequenceAssetAndSubObjects(asset);
-                            return false;
+                            return Fail(ctx, $"meta.json invalid streams.sh.shNLabelsEncoding: {labelsEncoding}");
                         }
                     }
                     else
                     {
-                        DestroySequenceAssetAndSubObjects(asset);
-                        return Fail(ctx, $"meta.json invalid streams.sh.shNLabelsEncoding: {labelsEncoding}");
+                        // v2: sh1/sh2/sh3 各自一套 labels.
+                        if (!TryBuildShBandLabels(ctx, meta, entriesByName, meta.streams.sh.sh1, width, height, frameCount,
+                                bandName: "sh1", out asset.Sh1Labels))
+                        {
+                            DestroySequenceAssetAndSubObjects(asset);
+                            return false;
+                        }
+
+                        if (asset.SHBands >= 2)
+                        {
+                            if (!TryBuildShBandLabels(ctx, meta, entriesByName, meta.streams.sh.sh2, width, height, frameCount,
+                                    bandName: "sh2", out asset.Sh2Labels))
+                            {
+                                DestroySequenceAssetAndSubObjects(asset);
+                                return false;
+                            }
+                        }
+
+                        if (asset.SHBands >= 3)
+                        {
+                            if (!TryBuildShBandLabels(ctx, meta, entriesByName, meta.streams.sh.sh3, width, height, frameCount,
+                                    bandName: "sh3", out asset.Sh3Labels))
+                            {
+                                DestroySequenceAssetAndSubObjects(asset);
+                                return false;
+                            }
+                        }
                     }
                 }
 
@@ -383,6 +482,58 @@ namespace Gsplat.Editor
 
             texture.name = name;
             ctx.AddObjectToAsset(name, texture);
+        }
+
+        static bool TryReadShBandCentroids(
+            AssetImportContext ctx,
+            Dictionary<string, ZipArchiveEntry> entriesByName,
+            string bandName,
+            ShBandStreamJson band,
+            int coeffCount,
+            out int count,
+            out string centroidsType,
+            out byte[] centroidsBytes)
+        {
+            count = 0;
+            centroidsType = null;
+            centroidsBytes = null;
+
+            if (band == null)
+                return Fail(ctx, $"meta.json missing required field: streams.sh.{bandName}");
+
+            count = band.count;
+            if (count <= 0 || count > 65535)
+                return Fail(ctx, $"meta.json invalid streams.sh.{bandName}.count: {count} (must be 1..65535)");
+
+            centroidsType = band.centroidsType;
+            if (centroidsType != "f16" && centroidsType != "f32")
+            {
+                return Fail(ctx,
+                    $"meta.json invalid streams.sh.{bandName}.centroidsType: {centroidsType} (must be \"f16\" or \"f32\")");
+            }
+
+            if (string.IsNullOrEmpty(band.centroidsPath))
+                return Fail(ctx, $"meta.json missing required field: streams.sh.{bandName}.centroidsPath");
+
+            var centroidsPathNormalized = NormalizeZipPath(band.centroidsPath);
+            if (!entriesByName.TryGetValue(centroidsPathNormalized, out var centroidsEntry))
+                return Fail(ctx, $"bundle missing referenced file: {centroidsPathNormalized} (from streams.sh.{bandName}.centroidsPath)");
+
+            if (!TryReadZipEntryBytes(centroidsEntry, out centroidsBytes, out var readErr))
+                return Fail(ctx, $"failed to read {bandName} centroids: {centroidsPathNormalized}: {readErr}");
+
+            var scalarBytes = centroidsType == "f16" ? 2 : 4;
+            var expectedBytes = (long)count * coeffCount * 3L * scalarBytes;
+            var gotBytes = centroidsBytes.LongLength;
+            if (gotBytes != expectedBytes)
+            {
+                centroidsBytes = null;
+                return Fail(ctx,
+                    $"{bandName} centroids size mismatch: expected {expectedBytes} bytes, got {gotBytes} bytes. " +
+                    $"({bandName}Count={count}, coeffCount={coeffCount}, type={centroidsType})");
+            }
+
+            return true;
         }
 
         static bool TryBuildBoundsFromPositionRanges(AssetImportContext ctx, Sog4DMetaJson meta, out Bounds unionBounds,
@@ -746,6 +897,245 @@ namespace Gsplat.Editor
             }
         }
 
+        static bool TryBuildShBandLabels(
+            AssetImportContext ctx,
+            Sog4DMetaJson meta,
+            Dictionary<string, ZipArchiveEntry> entriesByName,
+            ShBandStreamJson band,
+            int width,
+            int height,
+            int frameCount,
+            string bandName,
+            out Texture2DArray labelsArray)
+        {
+            labelsArray = null;
+
+            if (band == null)
+                return Fail(ctx, $"meta.json missing required field: streams.sh.{bandName}");
+
+            var labelCount = band.count;
+            if (labelCount <= 0 || labelCount > 65535)
+                return Fail(ctx, $"meta.json invalid streams.sh.{bandName}.count: {labelCount} (must be 1..65535)");
+
+            var labelsEncoding = band.labelsEncoding;
+            if (string.IsNullOrEmpty(labelsEncoding))
+                labelsEncoding = "full";
+
+            if (labelsEncoding == "full")
+            {
+                if (!TryBuildTexture2DArrayFromPerFrameWebp(ctx, entriesByName, band.labelsPath, width, height, frameCount,
+                        $"{bandName}Labels", out labelsArray, u16MaxExclusive: labelCount, splatCount: meta.splatCount))
+                {
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (labelsEncoding != "delta-v1")
+                return Fail(ctx, $"meta.json invalid streams.sh.{bandName}.labelsEncoding: {labelsEncoding}");
+
+            if (!TryBuildShBandLabelsFromDeltaV1(ctx, meta, entriesByName, width, height, bandName, labelCount, band.deltaSegments,
+                    out labelsArray))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        static bool TryBuildShBandLabelsFromDeltaV1(
+            AssetImportContext ctx,
+            Sog4DMetaJson meta,
+            Dictionary<string, ZipArchiveEntry> entriesByName,
+            int width,
+            int height,
+            string bandName,
+            int labelCount,
+            ShNDeltaSegmentJson[] segments,
+            out Texture2DArray labelsArray)
+        {
+            labelsArray = null;
+
+            if (segments == null || segments.Length == 0)
+                return Fail(ctx, $"meta.json missing required field: streams.sh.{bandName}.deltaSegments");
+
+            try
+            {
+                labelsArray = new Texture2DArray(width, height, meta.frameCount, TextureFormat.RGBA32, mipChain: false,
+                    linear: true)
+                {
+                    filterMode = FilterMode.Point,
+                    wrapMode = TextureWrapMode.Clamp,
+                    anisoLevel = 0
+                };
+
+                for (var segIndex = 0; segIndex < segments.Length; segIndex++)
+                {
+                    var seg = segments[segIndex];
+
+                    // 1) base labels
+                    var basePath = NormalizeZipPath(seg.baseLabelsPath);
+                    if (!entriesByName.TryGetValue(basePath, out var baseEntry))
+                        return FailAndDestroyTexture2DArray(ctx, ref labelsArray, $"bundle missing referenced file: {basePath}");
+
+                    if (!TryDecodeWebpToRgba32Texture(baseEntry, $"{bandName}BaseLabels", out var baseTex, out var baseErr))
+                        return FailAndDestroyTexture2DArray(ctx, ref labelsArray, $"failed to decode WebP: {basePath}: {baseErr}");
+
+                    Color32[] current;
+                    try
+                    {
+                        if (baseTex.width != width || baseTex.height != height)
+                        {
+                            return FailAndDestroyTexture2DArray(ctx, ref labelsArray,
+                                $"WebP size mismatch: {basePath}: expected {width}x{height}, got {baseTex.width}x{baseTex.height}");
+                        }
+
+                        current = baseTex.GetPixels32();
+                    }
+                    finally
+                    {
+                        Object.DestroyImmediate(baseTex);
+                    }
+
+                    if (current.Length != width * height)
+                        return FailAndDestroyTexture2DArray(ctx, ref labelsArray, $"base labels pixel count mismatch: {basePath}");
+
+                    // spec 要求 base labels 中出现任意越界值时必须失败.
+                    if (!TryValidateU16RgIndexMap(current, meta.splatCount, labelCount, out var badSplatId,
+                            out var badValue))
+                    {
+                        return FailAndDestroyTexture2DArray(ctx, ref labelsArray,
+                            $"{bandName} base labels out of range: segment={segIndex}, frame={seg.startFrame}, splatId={badSplatId}, label={badValue} >= count={labelCount}. path={basePath}");
+                    }
+
+                    labelsArray.SetPixels32(current, seg.startFrame, 0);
+
+                    // 2) delta blocks
+                    var deltaPath = NormalizeZipPath(seg.deltaPath);
+                    if (!entriesByName.TryGetValue(deltaPath, out var deltaEntry))
+                        return FailAndDestroyTexture2DArray(ctx, ref labelsArray, $"bundle missing referenced file: {deltaPath}");
+
+                    if (!TryReadZipEntryBytes(deltaEntry, out var deltaBytes, out var deltaReadErr))
+                    {
+                        return FailAndDestroyTexture2DArray(ctx, ref labelsArray,
+                            $"failed to read delta-v1 file: {deltaPath}: {deltaReadErr}");
+                    }
+
+                    using (var ms = new MemoryStream(deltaBytes, writable: false))
+                    using (var br = new BinaryReader(ms, Encoding.UTF8, leaveOpen: false))
+                    {
+                        if (!TryValidateDeltaV1Header(ctx, br, segIndex, seg, meta, labelCount, deltaPath, out var headerErr))
+                            return FailAndDestroyTexture2DArray(ctx, ref labelsArray, headerErr);
+
+                        // segment 内的第 0 帧已经由 base labels 覆盖.
+                        // 从 localFrame=1 开始读取 update block,并逐帧回放到 current.
+                        for (var localFrame = 1; localFrame < seg.frameCount; localFrame++)
+                        {
+                            var globalFrame = seg.startFrame + localFrame;
+                            if (globalFrame >= meta.frameCount)
+                                break;
+
+                            try
+                            {
+                                EditorUtility.DisplayProgressBar(
+                                    "Importing .sog4d",
+                                    $"Expanding {bandName} delta-v1 (frame {globalFrame}/{meta.frameCount})",
+                                    globalFrame / (float)Mathf.Max(1, meta.frameCount - 1));
+                            }
+                            catch
+                            {
+                                // ignore: progress bar 失败不应阻塞导入.
+                            }
+
+                            uint updateCount;
+                            try
+                            {
+                                updateCount = br.ReadUInt32();
+                            }
+                            catch (EndOfStreamException)
+                            {
+                                return FailAndDestroyTexture2DArray(ctx, ref labelsArray,
+                                    $"delta-v1 truncated: {deltaPath}: missing updateCount for frame {globalFrame}");
+                            }
+
+                            if (updateCount > (uint)meta.splatCount)
+                            {
+                                return FailAndDestroyTexture2DArray(ctx, ref labelsArray,
+                                    $"delta-v1 invalid updateCount: {deltaPath}: updateCount={updateCount} > splatCount={meta.splatCount} at frame {globalFrame}");
+                            }
+
+                            var hasPrev = false;
+                            uint prevSplatId = 0;
+                            for (uint u = 0; u < updateCount; u++)
+                            {
+                                uint splatId;
+                                ushort label;
+                                ushort reserved;
+                                try
+                                {
+                                    splatId = br.ReadUInt32();
+                                    label = br.ReadUInt16();
+                                    reserved = br.ReadUInt16();
+                                }
+                                catch (EndOfStreamException)
+                                {
+                                    return FailAndDestroyTexture2DArray(ctx, ref labelsArray,
+                                        $"delta-v1 truncated: {deltaPath}: unexpected end while reading updates (frame {globalFrame}, update {u}/{updateCount})");
+                                }
+
+                                if (reserved != 0)
+                                {
+                                    return FailAndDestroyTexture2DArray(ctx, ref labelsArray,
+                                        $"delta-v1 invalid reserved field: {deltaPath}: reserved={reserved} (frame {globalFrame}, update {u})");
+                                }
+
+                                if (splatId >= (uint)meta.splatCount)
+                                {
+                                    return FailAndDestroyTexture2DArray(ctx, ref labelsArray,
+                                        $"delta-v1 invalid splatId: {deltaPath}: splatId={splatId} >= splatCount={meta.splatCount} (frame {globalFrame}, update {u})");
+                                }
+
+                                if (label >= (ushort)labelCount)
+                                {
+                                    return FailAndDestroyTexture2DArray(ctx, ref labelsArray,
+                                        $"delta-v1 invalid label: {deltaPath}: label={label} >= count={labelCount} (frame {globalFrame}, update {u})");
+                                }
+
+                                if (hasPrev && splatId <= prevSplatId)
+                                {
+                                    return FailAndDestroyTexture2DArray(ctx, ref labelsArray,
+                                        $"delta-v1 invalid splatId order: {deltaPath}: splatId must be strictly increasing within a block (frame {globalFrame}, update {u})");
+                                }
+
+                                prevSplatId = splatId;
+                                hasPrev = true;
+
+                                // row-major: pixelIndex == splatId,与 specs 的映射一致.
+                                var pixelIndex = (int)splatId;
+                                var c = current[pixelIndex];
+                                c.r = (byte)(label & 0xff);
+                                c.g = (byte)((label >> 8) & 0xff);
+                                current[pixelIndex] = c;
+                            }
+
+                            labelsArray.SetPixels32(current, globalFrame, 0);
+                        }
+                    }
+                }
+
+                labelsArray.Apply(updateMipmaps: false, makeNoLongerReadable: true);
+                return true;
+            }
+            catch (Exception e)
+            {
+                if (labelsArray != null)
+                    Object.DestroyImmediate(labelsArray);
+                labelsArray = null;
+                return Fail(ctx, $"failed to expand {bandName} delta-v1: {e.Message}");
+            }
+        }
+
         static bool FailAndDestroyTexture2DArray(AssetImportContext ctx, ref Texture2DArray array, string message)
         {
             if (array != null)
@@ -765,6 +1155,9 @@ namespace Gsplat.Editor
             DestroyTexture2DArray(ref asset.Rotation);
             DestroyTexture2DArray(ref asset.Sh0);
             DestroyTexture2DArray(ref asset.ShNLabels);
+            DestroyTexture2DArray(ref asset.Sh1Labels);
+            DestroyTexture2DArray(ref asset.Sh2Labels);
+            DestroyTexture2DArray(ref asset.Sh3Labels);
 
             Object.DestroyImmediate(asset);
         }
@@ -875,6 +1268,93 @@ namespace Gsplat.Editor
             catch (EndOfStreamException)
             {
                 return Fail(ctx, $"delta-v1 truncated header in segment {segIndex}");
+            }
+        }
+
+        static bool TryValidateDeltaV1Header(
+            AssetImportContext ctx,
+            BinaryReader br,
+            int segIndex,
+            ShNDeltaSegmentJson seg,
+            Sog4DMetaJson meta,
+            int labelCount,
+            string deltaPath,
+            out string error)
+        {
+            error = null;
+
+            byte[] magic;
+            try
+            {
+                magic = br.ReadBytes(8);
+            }
+            catch (EndOfStreamException)
+            {
+                error = $"delta-v1 truncated: {deltaPath}: missing magic in segment {segIndex}";
+                return false;
+            }
+
+            if (magic.Length != 8 ||
+                magic[0] != (byte)'S' || magic[1] != (byte)'O' || magic[2] != (byte)'G' || magic[3] != (byte)'4' ||
+                magic[4] != (byte)'D' || magic[5] != (byte)'L' || magic[6] != (byte)'B' || magic[7] != (byte)'1')
+            {
+                error = $"delta-v1 invalid magic: {deltaPath} (segment {segIndex})";
+                return false;
+            }
+
+            try
+            {
+                var version = br.ReadUInt32();
+                if (version != 1)
+                {
+                    error = $"delta-v1 invalid version: expected 1, got {version} (segment {segIndex}). path={deltaPath}";
+                    return false;
+                }
+
+                var segmentStartFrame = br.ReadUInt32();
+                var segmentFrameCount = br.ReadUInt32();
+                var splatCount = br.ReadUInt32();
+                var shCount = br.ReadUInt32();
+
+                if (segmentStartFrame != (uint)seg.startFrame)
+                {
+                    error =
+                        $"delta-v1 header mismatch: segmentStartFrame expected {seg.startFrame}, got {segmentStartFrame} (segment {segIndex}). path={deltaPath}";
+                    return false;
+                }
+
+                if (segmentFrameCount != (uint)seg.frameCount)
+                {
+                    error =
+                        $"delta-v1 header mismatch: segmentFrameCount expected {seg.frameCount}, got {segmentFrameCount} (segment {segIndex}). path={deltaPath}";
+                    return false;
+                }
+
+                if (splatCount != (uint)meta.splatCount)
+                {
+                    error =
+                        $"delta-v1 header mismatch: splatCount expected {meta.splatCount}, got {splatCount} (segment {segIndex}). path={deltaPath}";
+                    return false;
+                }
+
+                if (shCount != (uint)labelCount)
+                {
+                    error =
+                        $"delta-v1 header mismatch: labelCount expected {labelCount}, got {shCount} (segment {segIndex}). path={deltaPath}";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (EndOfStreamException)
+            {
+                error = $"delta-v1 truncated header: {deltaPath} (segment {segIndex})";
+                return false;
+            }
+            catch (Exception e)
+            {
+                error = $"delta-v1 header parse error: {deltaPath}: {e.Message} (segment {segIndex})";
+                return false;
             }
         }
 
@@ -1135,6 +1615,27 @@ namespace Gsplat.Editor
             if (meta.streams.sh.bands == 0)
                 return true;
 
+            // v2: SH rest 按 band 拆分为 sh1/sh2/sh3.
+            if (meta.version == k_supportedVersionV2)
+            {
+                if (!TryValidateShBandStream(ctx, meta, entriesByName, meta.streams.sh.sh1, "sh1", coeffCount: 3))
+                    return false;
+
+                if (meta.streams.sh.bands >= 2)
+                {
+                    if (!TryValidateShBandStream(ctx, meta, entriesByName, meta.streams.sh.sh2, "sh2", coeffCount: 5))
+                        return false;
+                }
+
+                if (meta.streams.sh.bands >= 3)
+                {
+                    if (!TryValidateShBandStream(ctx, meta, entriesByName, meta.streams.sh.sh3, "sh3", coeffCount: 7))
+                        return false;
+                }
+
+                return true;
+            }
+
             // bands>0: validate shN*
             if (meta.streams.sh.shNCount <= 0 || meta.streams.sh.shNCount > 65535)
             {
@@ -1242,6 +1743,139 @@ namespace Gsplat.Editor
                 return Fail(ctx,
                     $"meta.json invalid shNDeltaSegments: total frameCount sum must be {meta.frameCount}, got {totalFrames}");
             }
+
+            return true;
+        }
+
+        static bool TryValidateShBandStream(
+            AssetImportContext ctx,
+            Sog4DMetaJson meta,
+            Dictionary<string, ZipArchiveEntry> entriesByName,
+            ShBandStreamJson band,
+            string bandName,
+            int coeffCount)
+        {
+            if (band == null)
+                return Fail(ctx, $"meta.json missing required field: streams.sh.{bandName}");
+
+            if (band.count <= 0 || band.count > 65535)
+            {
+                return Fail(ctx,
+                    $"meta.json invalid streams.sh.{bandName}.count: {band.count} (must be 1..65535)");
+            }
+
+            if (band.centroidsType != "f16" && band.centroidsType != "f32")
+            {
+                return Fail(ctx,
+                    $"meta.json invalid streams.sh.{bandName}.centroidsType: {band.centroidsType} (must be \"f16\" or \"f32\")");
+            }
+
+            if (!TryValidateRelativePath(band.centroidsPath, $"streams.sh.{bandName}.centroidsPath", out var centroidsPathErr))
+                return Fail(ctx, centroidsPathErr);
+
+            var centroidsPathNormalized = NormalizeZipPath(band.centroidsPath);
+            if (!entriesByName.ContainsKey(centroidsPathNormalized))
+            {
+                return Fail(ctx,
+                    $"bundle missing referenced file: {centroidsPathNormalized} (from streams.sh.{bandName}.centroidsPath)");
+            }
+
+            var labelsEncoding = band.labelsEncoding;
+            if (string.IsNullOrEmpty(labelsEncoding))
+                labelsEncoding = "full";
+
+            if (labelsEncoding == "full")
+            {
+                if (!TryValidatePerFrameTemplate(band.labelsPath, $"streams.sh.{bandName}.labelsPath", out var labelsPathErr))
+                    return Fail(ctx, labelsPathErr);
+
+                if (!TryValidatePerFrameFilesExist(entriesByName, band.labelsPath, meta.frameCount, out var missingLabels))
+                {
+                    return Fail(ctx,
+                        $"bundle missing referenced file: {missingLabels} (from streams.sh.{bandName}.labelsPath)");
+                }
+
+                return true;
+            }
+
+            if (labelsEncoding != "delta-v1")
+                return Fail(ctx, $"meta.json invalid streams.sh.{bandName}.labelsEncoding: {labelsEncoding}");
+
+            // delta-v1
+            if (!string.IsNullOrEmpty(band.labelsPath))
+            {
+                return Fail(ctx,
+                    $"meta.json invalid streams.sh.{bandName}: labelsPath MUST NOT be present when labelsEncoding is \"delta-v1\"");
+            }
+
+            var segments = band.deltaSegments;
+            if (segments == null || segments.Length == 0)
+                return Fail(ctx, $"meta.json missing required field: streams.sh.{bandName}.deltaSegments");
+
+            var expectedStart = 0;
+            var totalFrames = 0;
+            for (var i = 0; i < segments.Length; i++)
+            {
+                var seg = segments[i];
+                if (seg == null)
+                    return Fail(ctx, $"meta.json invalid {bandName}.deltaSegments[{i}]: null");
+
+                if (seg.startFrame != expectedStart)
+                {
+                    return Fail(ctx,
+                        $"meta.json invalid {bandName}.deltaSegments[{i}].startFrame: expected {expectedStart}, got {seg.startFrame}");
+                }
+
+                if (seg.frameCount <= 0)
+                    return Fail(ctx, $"meta.json invalid {bandName}.deltaSegments[{i}].frameCount: {seg.frameCount}");
+
+                if (seg.startFrame < 0 || seg.startFrame >= meta.frameCount)
+                {
+                    return Fail(ctx,
+                        $"meta.json invalid {bandName}.deltaSegments[{i}].startFrame: {seg.startFrame} (out of range)");
+                }
+
+                if (seg.startFrame + seg.frameCount > meta.frameCount)
+                {
+                    return Fail(ctx,
+                        $"meta.json invalid {bandName}.deltaSegments[{i}]: startFrame+frameCount exceeds frameCount ({seg.startFrame}+{seg.frameCount} > {meta.frameCount})");
+                }
+
+                if (!TryValidateRelativePath(seg.baseLabelsPath, $"streams.sh.{bandName}.deltaSegments[{i}].baseLabelsPath", out var baseErr))
+                    return Fail(ctx, baseErr);
+                if (!TryValidateRelativePath(seg.deltaPath, $"streams.sh.{bandName}.deltaSegments[{i}].deltaPath", out var deltaErr))
+                    return Fail(ctx, deltaErr);
+
+                var basePath = NormalizeZipPath(seg.baseLabelsPath);
+                var deltaPath = NormalizeZipPath(seg.deltaPath);
+                if (!entriesByName.ContainsKey(basePath))
+                {
+                    return Fail(ctx,
+                        $"bundle missing referenced file: {basePath} (from {bandName}.deltaSegments[{i}].baseLabelsPath)");
+                }
+
+                if (!entriesByName.ContainsKey(deltaPath))
+                {
+                    return Fail(ctx,
+                        $"bundle missing referenced file: {deltaPath} (from {bandName}.deltaSegments[{i}].deltaPath)");
+                }
+
+                expectedStart = seg.startFrame + seg.frameCount;
+                totalFrames += seg.frameCount;
+            }
+
+            if (segments[0].startFrame != 0)
+                return Fail(ctx, $"meta.json invalid {bandName}.deltaSegments: first segment startFrame must be 0");
+
+            if (totalFrames != meta.frameCount)
+            {
+                return Fail(ctx,
+                    $"meta.json invalid {bandName}.deltaSegments: total frameCount sum must be {meta.frameCount}, got {totalFrames}");
+            }
+
+            // coeffCount 在 v2 里用于 Runtime decode,这里暂时只做 guard(避免未来扩展时传错常量).
+            if (coeffCount <= 0)
+                return Fail(ctx, $"internal error: invalid coeffCount for {bandName}: {coeffCount}");
 
             return true;
         }

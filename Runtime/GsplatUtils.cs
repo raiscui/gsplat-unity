@@ -108,14 +108,16 @@ namespace Gsplat
         // - 注意: 这是估算值,不包含纹理/驱动/对齐的内部开销,但足够做风险分级.
         // --------------------------------------------------------------------
         public static long EstimateSog4dGpuBytes(uint splatCount, int frameCount, int width, int height,
-            byte effectiveShBands, bool hasShNStreams, int scaleCodebookCount, int shNCount)
+            byte effectiveShBands, int scaleCodebookCount, int shRestLabelStreamCount, int shRestCentroidsVecCount)
         {
             // 1) 复用现有后端的 float buffers + radix sort buffers 估算.
             long bytes = EstimateGpuBytes(splatCount, effectiveShBands, has4D: false);
 
             // 2) 量化 streams: Texture2DArray(RGBA32,无压缩).
-            // - position_hi/lo + scale_indices + rotation + sh0(+ shN_labels)
-            var streams = 5 + (hasShNStreams ? 1 : 0);
+            // - position_hi/lo + scale_indices + rotation + sh0 + shRestLabels
+            // - v1: shRestLabels 为 1 张 labels(Texture2DArray)
+            // - v2: shRestLabels 为 sh1/sh2/sh3 三张 labels(Texture2DArray)
+            var streams = 5 + Mathf.Max(0, shRestLabelStreamCount);
             var layerBytes = (long)width * height * 4;
             bytes += (long)frameCount * layerBytes * streams;
 
@@ -123,11 +125,10 @@ namespace Gsplat
             bytes += (long)scaleCodebookCount * 12; // float3
             bytes += 256L * 4; // sh0Codebook: float
 
-            if (effectiveShBands > 0)
-            {
-                var restCoeffCount = SHBandsToCoefficientCount(effectiveShBands);
-                bytes += (long)shNCount * restCoeffCount * 12; // float3
-            }
+            // SH rest palette:
+            // - 运行时为了简化与稳定,会把 centroids(f16/f32)统一解码成 float3 GraphicsBuffer.
+            // - 因此预算按 “float3 entry 数量 * 12 bytes” 估算.
+            bytes += (long)Mathf.Max(0, shRestCentroidsVecCount) * 12;
 
             return bytes;
         }

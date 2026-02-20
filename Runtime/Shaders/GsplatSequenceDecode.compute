@@ -15,6 +15,7 @@
 
 #pragma kernel DecodeKeyframesSH0
 #pragma kernel DecodeKeyframesSH
+#pragma kernel DecodeKeyframesSH_V2
 
 #define THREADS 256
 
@@ -31,10 +32,16 @@ Texture2DArray<float4> _ScaleIndices;
 Texture2DArray<float4> _Rotation;
 Texture2DArray<float4> _Sh0;
 Texture2DArray<float4> _ShNLabels; // 仅在 DecodeKeyframesSH 中使用
+Texture2DArray<float4> _Sh1Labels; // 仅在 DecodeKeyframesSH_V2 中使用
+Texture2DArray<float4> _Sh2Labels; // 仅在 DecodeKeyframesSH_V2 中使用
+Texture2DArray<float4> _Sh3Labels; // 仅在 DecodeKeyframesSH_V2 中使用
 
 StructuredBuffer<float3> _ScaleCodebook;
 StructuredBuffer<float> _Sh0Codebook;
 StructuredBuffer<float3> _ShNCentroids; // entry-major: (label * restCoeffCount + k)
+StructuredBuffer<float3> _Sh1Centroids; // entry-major: (label * 3 + k)
+StructuredBuffer<float3> _Sh2Centroids; // entry-major: (label * 5 + k)
+StructuredBuffer<float3> _Sh3Centroids; // entry-major: (label * 7 + k)
 
 // Metal 兼容性:
 // - MSL 不支持在 shader 内查询 buffer size(例如 StructuredBuffer.GetDimensions).
@@ -42,6 +49,9 @@ StructuredBuffer<float3> _ShNCentroids; // entry-major: (label * restCoeffCount 
 int _ScaleCodebookCount;
 int _Sh0CodebookCount;
 int _ShNCentroidsCount;
+int _Sh1CentroidsCount;
+int _Sh2CentroidsCount;
+int _Sh3CentroidsCount;
 
 // --------------------------------------------------------------------
 // 输出: 写入 GsplatRendererImpl 的 float buffers.
@@ -349,5 +359,234 @@ void DecodeKeyframesSH(uint3 id : SV_DispatchThreadID)
         float3 c0 = _ShNCentroids[base0 + (uint)k];
         float3 c1 = _ShNCentroids[base1 + (uint)k];
         _OutSH[splatId * (uint)_RestCoeffCount + (uint)k] = lerp(c0, c1, _InterpA);
+    }
+}
+
+// --------------------------------------------------------------------
+// DecodeKeyframesSH_V2:
+// - v2: SH rest 按 band 拆分为 sh1/sh2/sh3 三套 labels + centroids.
+// - 输出 `_OutSH` 的系数顺序必须与 v1 的 f_rest_* 展平顺序一致:
+//   - sh1: rest[0:3]   (3 coeff)
+//   - sh2: rest[3:8]   (5 coeff)
+//   - sh3: rest[8:15]  (7 coeff)
+// --------------------------------------------------------------------
+[numthreads(THREADS, 1, 1)]
+void DecodeKeyframesSH_V2(uint3 id : SV_DispatchThreadID)
+{
+    uint splatId = id.x;
+    if (splatId >= (uint)_SplatCount)
+        return;
+
+    // 防御: 预期只会是 3/8/15,但这里仍做最小 guard.
+    if (_RestCoeffCount <= 0)
+        return;
+
+    uint2 xy = SplatIdToPixel(splatId);
+
+    // ------------------------------------------------------------
+    // 先走 SH0 的解码逻辑(复制一遍,避免跨 kernel 调用的复杂度).
+    // ------------------------------------------------------------
+    // Nearest: 只读 frame0
+    if (_UseLinear == 0 || _Frame0 == _Frame1)
+    {
+        float3 pos = DecodePositionAtFrame(xy, _Frame0, _PosRangeMin0, _PosRangeMax0);
+        float3 scale = DecodeScaleAtFrame(xy, _Frame0);
+        float4 rot = DecodeQuatAtFrame(xy, _Frame0);
+
+        uint4 sh0Px = Float4ToU8(_Sh0.Load(int4(xy, _Frame0, 0)));
+        float3 fdc = DecodeFdcFromSh0(sh0Px);
+        float opacity = DecodeOpacityFromSh0(sh0Px);
+        if (opacity < (1.0 / 255.0))
+            opacity = 0.0;
+
+        _OutPosition[splatId] = pos;
+        _OutScale[splatId] = scale;
+        _OutRotation[splatId] = rot;
+        _OutColor[splatId] = float4(fdc, opacity);
+
+        // --------------------------------------------------------
+        // SH rest: 按 band 分别解码(只读 frame0 label).
+        // --------------------------------------------------------
+        uint outBase = splatId * (uint)_RestCoeffCount;
+
+        // sh1: 3 coeff -> out[0..2]
+        {
+            uint label = DecodeU16FromRG(Float4ToU8(_Sh1Labels.Load(int4(xy, _Frame0, 0))));
+            uint centroidCount = (uint)max(_Sh1CentroidsCount, 0);
+            uint entryBase = label * 3;
+            uint entryEnd = entryBase + 3;
+            if (entryEnd > centroidCount)
+            {
+                _OutSH[outBase + 0] = float3(0.0, 0.0, 0.0);
+                _OutSH[outBase + 1] = float3(0.0, 0.0, 0.0);
+                _OutSH[outBase + 2] = float3(0.0, 0.0, 0.0);
+            }
+            else
+            {
+                _OutSH[outBase + 0] = _Sh1Centroids[entryBase + 0];
+                _OutSH[outBase + 1] = _Sh1Centroids[entryBase + 1];
+                _OutSH[outBase + 2] = _Sh1Centroids[entryBase + 2];
+            }
+        }
+
+        // sh2: 5 coeff -> out[3..7]
+        if (_RestCoeffCount >= 8)
+        {
+            uint label = DecodeU16FromRG(Float4ToU8(_Sh2Labels.Load(int4(xy, _Frame0, 0))));
+            uint centroidCount = (uint)max(_Sh2CentroidsCount, 0);
+            uint entryBase = label * 5;
+            uint entryEnd = entryBase + 5;
+            if (entryEnd > centroidCount)
+            {
+                for (uint k = 0; k < 5; k++)
+                    _OutSH[outBase + 3 + k] = float3(0.0, 0.0, 0.0);
+            }
+            else
+            {
+                for (uint k = 0; k < 5; k++)
+                    _OutSH[outBase + 3 + k] = _Sh2Centroids[entryBase + k];
+            }
+        }
+
+        // sh3: 7 coeff -> out[8..14]
+        if (_RestCoeffCount >= 15)
+        {
+            uint label = DecodeU16FromRG(Float4ToU8(_Sh3Labels.Load(int4(xy, _Frame0, 0))));
+            uint centroidCount = (uint)max(_Sh3CentroidsCount, 0);
+            uint entryBase = label * 7;
+            uint entryEnd = entryBase + 7;
+            if (entryEnd > centroidCount)
+            {
+                for (uint k = 0; k < 7; k++)
+                    _OutSH[outBase + 8 + k] = float3(0.0, 0.0, 0.0);
+            }
+            else
+            {
+                for (uint k = 0; k < 7; k++)
+                    _OutSH[outBase + 8 + k] = _Sh3Centroids[entryBase + k];
+            }
+        }
+
+        return;
+    }
+
+    // ------------------------------------------------------------
+    // Linear: 读两帧并插值
+    // ------------------------------------------------------------
+    float3 pos0 = DecodePositionAtFrame(xy, _Frame0, _PosRangeMin0, _PosRangeMax0);
+    float3 pos1 = DecodePositionAtFrame(xy, _Frame1, _PosRangeMin1, _PosRangeMax1);
+    float3 pos = lerp(pos0, pos1, _InterpA);
+
+    float3 s0 = DecodeScaleAtFrame(xy, _Frame0);
+    float3 s1 = DecodeScaleAtFrame(xy, _Frame1);
+    float3 logS0 = log(max(s0, k_scaleEps));
+    float3 logS1 = log(max(s1, k_scaleEps));
+    float3 scale = exp(lerp(logS0, logS1, _InterpA));
+
+    float4 q0 = DecodeQuatAtFrame(xy, _Frame0);
+    float4 q1 = DecodeQuatAtFrame(xy, _Frame1);
+    float4 rot = NlerpQuat(q0, q1, _InterpA);
+
+    uint4 sh0_0 = Float4ToU8(_Sh0.Load(int4(xy, _Frame0, 0)));
+    uint4 sh0_1 = Float4ToU8(_Sh0.Load(int4(xy, _Frame1, 0)));
+    float3 fdc0 = DecodeFdcFromSh0(sh0_0);
+    float3 fdc1 = DecodeFdcFromSh0(sh0_1);
+    float opacity0 = DecodeOpacityFromSh0(sh0_0);
+    float opacity1 = DecodeOpacityFromSh0(sh0_1);
+
+    float3 fdc = lerp(fdc0, fdc1, _InterpA);
+    float opacity = lerp(opacity0, opacity1, _InterpA);
+    if (opacity < (1.0 / 255.0))
+        opacity = 0.0;
+
+    _OutPosition[splatId] = pos;
+    _OutScale[splatId] = scale;
+    _OutRotation[splatId] = rot;
+    _OutColor[splatId] = float4(fdc, opacity);
+
+    // ------------------------------------------------------------
+    // SH rest: labels -> centroids -> lerp(逐 band).
+    // ------------------------------------------------------------
+    uint outBase = splatId * (uint)_RestCoeffCount;
+
+    // sh1: out[0..2]
+    {
+        uint label0 = DecodeU16FromRG(Float4ToU8(_Sh1Labels.Load(int4(xy, _Frame0, 0))));
+        uint label1 = DecodeU16FromRG(Float4ToU8(_Sh1Labels.Load(int4(xy, _Frame1, 0))));
+
+        uint centroidCount = (uint)max(_Sh1CentroidsCount, 0);
+        uint base0 = label0 * 3;
+        uint base1 = label1 * 3;
+        uint end0 = base0 + 3;
+        uint end1 = base1 + 3;
+
+        if (end0 > centroidCount || end1 > centroidCount)
+        {
+            _OutSH[outBase + 0] = float3(0.0, 0.0, 0.0);
+            _OutSH[outBase + 1] = float3(0.0, 0.0, 0.0);
+            _OutSH[outBase + 2] = float3(0.0, 0.0, 0.0);
+        }
+        else
+        {
+            _OutSH[outBase + 0] = lerp(_Sh1Centroids[base0 + 0], _Sh1Centroids[base1 + 0], _InterpA);
+            _OutSH[outBase + 1] = lerp(_Sh1Centroids[base0 + 1], _Sh1Centroids[base1 + 1], _InterpA);
+            _OutSH[outBase + 2] = lerp(_Sh1Centroids[base0 + 2], _Sh1Centroids[base1 + 2], _InterpA);
+        }
+    }
+
+    // sh2: out[3..7]
+    if (_RestCoeffCount >= 8)
+    {
+        uint label0 = DecodeU16FromRG(Float4ToU8(_Sh2Labels.Load(int4(xy, _Frame0, 0))));
+        uint label1 = DecodeU16FromRG(Float4ToU8(_Sh2Labels.Load(int4(xy, _Frame1, 0))));
+
+        uint centroidCount = (uint)max(_Sh2CentroidsCount, 0);
+        uint base0 = label0 * 5;
+        uint base1 = label1 * 5;
+        uint end0 = base0 + 5;
+        uint end1 = base1 + 5;
+
+        if (end0 > centroidCount || end1 > centroidCount)
+        {
+            for (uint k = 0; k < 5; k++)
+                _OutSH[outBase + 3 + k] = float3(0.0, 0.0, 0.0);
+        }
+        else
+        {
+            for (uint k = 0; k < 5; k++)
+            {
+                float3 c0 = _Sh2Centroids[base0 + k];
+                float3 c1 = _Sh2Centroids[base1 + k];
+                _OutSH[outBase + 3 + k] = lerp(c0, c1, _InterpA);
+            }
+        }
+    }
+
+    // sh3: out[8..14]
+    if (_RestCoeffCount >= 15)
+    {
+        uint label0 = DecodeU16FromRG(Float4ToU8(_Sh3Labels.Load(int4(xy, _Frame0, 0))));
+        uint label1 = DecodeU16FromRG(Float4ToU8(_Sh3Labels.Load(int4(xy, _Frame1, 0))));
+
+        uint centroidCount = (uint)max(_Sh3CentroidsCount, 0);
+        uint base0 = label0 * 7;
+        uint base1 = label1 * 7;
+        uint end0 = base0 + 7;
+        uint end1 = base1 + 7;
+
+        if (end0 > centroidCount || end1 > centroidCount)
+        {
+            for (uint k = 0; k < 7; k++)
+                _OutSH[outBase + 8 + k] = float3(0.0, 0.0, 0.0);
+        }
+        else
+        {
+            for (uint k = 0; k < 7; k++)
+            {
+                float3 c0 = _Sh3Centroids[base0 + k];
+                float3 c1 = _Sh3Centroids[base1 + k];
+                _OutSH[outBase + 8 + k] = lerp(c0, c1, _InterpA);
+            }
+        }
     }
 }

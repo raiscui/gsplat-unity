@@ -91,10 +91,18 @@ namespace Gsplat
         ComputeShader m_decodeCS;
         int m_kernelDecodeSH0 = -1;
         int m_kernelDecodeSH = -1;
+        int m_kernelDecodeSHV2 = -1;
 
         GraphicsBuffer m_scaleCodebookBuffer;
         GraphicsBuffer m_sh0CodebookBuffer;
+
+        // v1: 单一 shN centroids
         GraphicsBuffer m_shNCentroidsBuffer;
+
+        // v2: SH rest 按 band 拆分为 sh1/sh2/sh3 三套 centroids
+        GraphicsBuffer m_sh1CentroidsBuffer;
+        GraphicsBuffer m_sh2CentroidsBuffer;
+        GraphicsBuffer m_sh3CentroidsBuffer;
 
         public bool Valid =>
             EnableGsplatBackend &&
@@ -263,9 +271,43 @@ namespace Gsplat
             if (!SequenceAsset)
                 return;
 
-            var hasShNStreams = SequenceAsset.SHBands > 0;
             var scaleCodebookCount = SequenceAsset.ScaleCodebook != null ? SequenceAsset.ScaleCodebook.Length : 0;
-            var shNCount = hasShNStreams ? SequenceAsset.ShNCount : 0;
+
+            // v2 兼容策略: 历史 v1 资产可能没有写入 Sog4DVersion(默认 0),这里把它视为 v1.
+            var assetVersion = SequenceAsset.Sog4DVersion;
+            if (assetVersion == 0)
+                assetVersion = 1;
+            var useV2 = assetVersion == 2;
+
+            // `.sog4d` 的量化纹理里,SH rest 的 labels 张数:
+            // - v1: 1 张 shN_labels
+            // - v2: sh1/sh2/sh3 各 1 张,因此张数=effectiveShBands(1..3)
+            void CalcShRestBudget(byte effectiveBands, out int labelStreamCount, out int centroidsVecCount)
+            {
+                labelStreamCount = 0;
+                centroidsVecCount = 0;
+
+                if (effectiveBands <= 0)
+                    return;
+
+                labelStreamCount = useV2 ? effectiveBands : 1;
+
+                if (useV2)
+                {
+                    // v2: centroids 是分 band 的多套 codebook.
+                    centroidsVecCount += SequenceAsset.Sh1Count * 3;
+                    if (effectiveBands >= 2)
+                        centroidsVecCount += SequenceAsset.Sh2Count * 5;
+                    if (effectiveBands >= 3)
+                        centroidsVecCount += SequenceAsset.Sh3Count * 7;
+                }
+                else
+                {
+                    // v1: 单一 shN codebook,每个 label 有 restCoeffCount 个 float3.
+                    var restCoeffCount = GsplatUtils.SHBandsToCoefficientCount(effectiveBands);
+                    centroidsVecCount = SequenceAsset.ShNCount * restCoeffCount;
+                }
+            }
 
             // tasks 6.1: 把 `.sog4d` 的量化纹理 + palette 纳入预算估算.
             // tasks 9.2: 当启用 chunk streaming 时,实际 GPU 常驻帧数应以 loaded chunk 为准(避免误触发 AutoDegrade).
@@ -273,15 +315,17 @@ namespace Gsplat
             if (m_runtimeBundle != null && m_runtimeBundle.ChunkingEnabled && m_runtimeBundle.LoadedChunkFrameCount > 0)
                 loadedFrameCountForGpuEstimate = m_runtimeBundle.LoadedChunkFrameCount;
 
+            CalcShRestBudget(m_effectiveSHBands, out var shRestLabelStreamCount, out var shRestCentroidsVecCount);
+
             var desiredBytes = GsplatUtils.EstimateSog4dGpuBytes(
                 m_effectiveSplatCount,
                 loadedFrameCountForGpuEstimate,
                 SequenceAsset.Layout.Width,
                 SequenceAsset.Layout.Height,
                 m_effectiveSHBands,
-                hasShNStreams,
                 scaleCodebookCount,
-                shNCount);
+                shRestLabelStreamCount,
+                shRestCentroidsVecCount);
             var desiredMiB = GsplatUtils.BytesToMiB(desiredBytes);
             Debug.Log(
                 $"[Gsplat][Sequence] GPU 资源估算: {desiredMiB:F1} MiB " +
@@ -332,15 +376,17 @@ namespace Gsplat
 
             if (beforeCount != m_effectiveSplatCount || beforeBands != m_effectiveSHBands || beforeInterp != m_effectiveInterpolationMode)
             {
+                CalcShRestBudget(m_effectiveSHBands, out var shRestLabelStreamCountAfter, out var shRestCentroidsVecCountAfter);
+
                 var afterBytes = GsplatUtils.EstimateSog4dGpuBytes(
                     m_effectiveSplatCount,
-                    SequenceAsset.FrameCount,
+                    loadedFrameCountForGpuEstimate,
                     SequenceAsset.Layout.Width,
                     SequenceAsset.Layout.Height,
                     m_effectiveSHBands,
-                    hasShNStreams,
                     scaleCodebookCount,
-                    shNCount);
+                    shRestLabelStreamCountAfter,
+                    shRestCentroidsVecCountAfter);
                 var afterMiB = GsplatUtils.BytesToMiB(afterBytes);
 
                 Debug.LogWarning(
@@ -357,14 +403,21 @@ namespace Gsplat
             m_scaleCodebookBuffer?.Dispose();
             m_sh0CodebookBuffer?.Dispose();
             m_shNCentroidsBuffer?.Dispose();
+            m_sh1CentroidsBuffer?.Dispose();
+            m_sh2CentroidsBuffer?.Dispose();
+            m_sh3CentroidsBuffer?.Dispose();
 
             m_scaleCodebookBuffer = null;
             m_sh0CodebookBuffer = null;
             m_shNCentroidsBuffer = null;
+            m_sh1CentroidsBuffer = null;
+            m_sh2CentroidsBuffer = null;
+            m_sh3CentroidsBuffer = null;
 
             m_decodeCS = null;
             m_kernelDecodeSH0 = -1;
             m_kernelDecodeSH = -1;
+            m_kernelDecodeSHV2 = -1;
         }
 
         bool TryCreateOrRecreateDecodeResources()
@@ -419,27 +472,63 @@ namespace Gsplat
             }
 
             m_decodeCS = DecodeComputeShader;
+
+            // v2 兼容策略:
+            // - 新增的 `SequenceAsset.Sog4DVersion` 字段对历史 v1 资产来说可能是默认值 0.
+            // - 因此这里把 0 视为 v1,避免旧资产在升级脚本后突然无法播放.
+            var assetVersion = SequenceAsset.Sog4DVersion;
+            if (assetVersion == 0)
+                assetVersion = 1;
+            var useV2 = assetVersion == 2;
+
             // 仅验证“当前会实际使用”的 kernel,避免某个未使用 kernel 的反射/编译问题阻塞播放.
             // - SHBands==0: 只会用 DecodeKeyframesSH0
-            // - SHBands>0: 只会用 DecodeKeyframesSH
+            // - SHBands>0:
+            //   - v1: DecodeKeyframesSH
+            //   - v2: DecodeKeyframesSH_V2
             if (m_effectiveSHBands > 0)
             {
-                if (!m_decodeCS.HasKernel("DecodeKeyframesSH"))
+                if (useV2)
                 {
-                    Debug.LogError("[Gsplat][Sequence] DecodeComputeShader 缺少必需 kernel: DecodeKeyframesSH.");
-                    m_disabledDueToError = true;
-                    DisposeDecodeResources();
-                    return false;
+                    if (!m_decodeCS.HasKernel("DecodeKeyframesSH_V2"))
+                    {
+                        Debug.LogError("[Gsplat][Sequence] DecodeComputeShader 缺少必需 kernel: DecodeKeyframesSH_V2.");
+                        m_disabledDueToError = true;
+                        DisposeDecodeResources();
+                        return false;
+                    }
+
+                    m_kernelDecodeSHV2 = m_decodeCS.FindKernel("DecodeKeyframesSH_V2");
+                    m_kernelDecodeSH = -1;
+                    m_kernelDecodeSH0 = -1;
+
+                    if (!TryValidateDecodeKernel(m_decodeCS, m_kernelDecodeSHV2, "DecodeKeyframesSH_V2"))
+                    {
+                        m_disabledDueToError = true;
+                        DisposeDecodeResources();
+                        return false;
+                    }
                 }
-
-                m_kernelDecodeSH = m_decodeCS.FindKernel("DecodeKeyframesSH");
-                m_kernelDecodeSH0 = -1;
-
-                if (!TryValidateDecodeKernel(m_decodeCS, m_kernelDecodeSH, "DecodeKeyframesSH"))
+                else
                 {
-                    m_disabledDueToError = true;
-                    DisposeDecodeResources();
-                    return false;
+                    if (!m_decodeCS.HasKernel("DecodeKeyframesSH"))
+                    {
+                        Debug.LogError("[Gsplat][Sequence] DecodeComputeShader 缺少必需 kernel: DecodeKeyframesSH.");
+                        m_disabledDueToError = true;
+                        DisposeDecodeResources();
+                        return false;
+                    }
+
+                    m_kernelDecodeSH = m_decodeCS.FindKernel("DecodeKeyframesSH");
+                    m_kernelDecodeSHV2 = -1;
+                    m_kernelDecodeSH0 = -1;
+
+                    if (!TryValidateDecodeKernel(m_decodeCS, m_kernelDecodeSH, "DecodeKeyframesSH"))
+                    {
+                        m_disabledDueToError = true;
+                        DisposeDecodeResources();
+                        return false;
+                    }
                 }
             }
             else
@@ -454,6 +543,7 @@ namespace Gsplat
 
                 m_kernelDecodeSH0 = m_decodeCS.FindKernel("DecodeKeyframesSH0");
                 m_kernelDecodeSH = -1;
+                m_kernelDecodeSHV2 = -1;
 
                 if (!TryValidateDecodeKernel(m_decodeCS, m_kernelDecodeSH0, "DecodeKeyframesSH0"))
                 {
@@ -472,13 +562,64 @@ namespace Gsplat
             // 3) SH rest centroids buffer(仅当 SHBands>0 时需要)
             if (m_effectiveSHBands > 0)
             {
-                if (!TryCreateOrRecreateShNCentroidsBuffer())
-                    return false;
+                if (useV2)
+                {
+                    // v2: sh1/sh2/sh3
+                    m_shNCentroidsBuffer?.Dispose();
+                    m_shNCentroidsBuffer = null;
+
+                    if (!TryCreateOrRecreateShBandCentroidsBuffer("sh1", coeffCount: 3, SequenceAsset.Sh1Count,
+                            SequenceAsset.Sh1CentroidsType, SequenceAsset.Sh1CentroidsBytes, ref m_sh1CentroidsBuffer))
+                        return false;
+
+                    if (m_effectiveSHBands >= 2)
+                    {
+                        if (!TryCreateOrRecreateShBandCentroidsBuffer("sh2", coeffCount: 5, SequenceAsset.Sh2Count,
+                                SequenceAsset.Sh2CentroidsType, SequenceAsset.Sh2CentroidsBytes, ref m_sh2CentroidsBuffer))
+                            return false;
+                    }
+                    else
+                    {
+                        m_sh2CentroidsBuffer?.Dispose();
+                        m_sh2CentroidsBuffer = null;
+                    }
+
+                    if (m_effectiveSHBands >= 3)
+                    {
+                        if (!TryCreateOrRecreateShBandCentroidsBuffer("sh3", coeffCount: 7, SequenceAsset.Sh3Count,
+                                SequenceAsset.Sh3CentroidsType, SequenceAsset.Sh3CentroidsBytes, ref m_sh3CentroidsBuffer))
+                            return false;
+                    }
+                    else
+                    {
+                        m_sh3CentroidsBuffer?.Dispose();
+                        m_sh3CentroidsBuffer = null;
+                    }
+                }
+                else
+                {
+                    // v1: 单一 shN
+                    m_sh1CentroidsBuffer?.Dispose();
+                    m_sh2CentroidsBuffer?.Dispose();
+                    m_sh3CentroidsBuffer?.Dispose();
+                    m_sh1CentroidsBuffer = null;
+                    m_sh2CentroidsBuffer = null;
+                    m_sh3CentroidsBuffer = null;
+
+                    if (!TryCreateOrRecreateShNCentroidsBuffer())
+                        return false;
+                }
             }
             else
             {
                 m_shNCentroidsBuffer?.Dispose();
                 m_shNCentroidsBuffer = null;
+                m_sh1CentroidsBuffer?.Dispose();
+                m_sh2CentroidsBuffer?.Dispose();
+                m_sh3CentroidsBuffer?.Dispose();
+                m_sh1CentroidsBuffer = null;
+                m_sh2CentroidsBuffer = null;
+                m_sh3CentroidsBuffer = null;
             }
 
             return true;
@@ -718,6 +859,101 @@ namespace Gsplat
             }
         }
 
+        bool TryCreateOrRecreateShBandCentroidsBuffer(
+            string bandName,
+            int coeffCount,
+            int count,
+            string centroidsType,
+            byte[] centroidsBytes,
+            ref GraphicsBuffer centroidsBuffer)
+        {
+            var nice = char.ToUpperInvariant(bandName[0]) + bandName.Substring(1);
+
+            if (count <= 0)
+            {
+                Debug.LogError($"[Gsplat][Sequence] {nice}Count 非法: {count}");
+                m_disabledDueToError = true;
+                return false;
+            }
+
+            if (centroidsBytes == null || centroidsBytes.Length == 0)
+            {
+                Debug.LogError($"[Gsplat][Sequence] SequenceAsset.{nice}CentroidsBytes 为空,无法解码 SH rest({nice}).");
+                m_disabledDueToError = true;
+                return false;
+            }
+
+            if (string.IsNullOrEmpty(centroidsType))
+            {
+                Debug.LogError($"[Gsplat][Sequence] SequenceAsset.{nice}CentroidsType 为空,无法解码 SH rest({nice}).");
+                m_disabledDueToError = true;
+                return false;
+            }
+
+            var scalarBytes = centroidsType == "f16" ? 2 : 4;
+            var expectedBytes = (long)count * coeffCount * 3L * scalarBytes;
+            if (centroidsBytes.LongLength != expectedBytes)
+            {
+                Debug.LogError(
+                    $"[Gsplat][Sequence] {nice}CentroidsBytes 尺寸不匹配: expected {expectedBytes}, got {centroidsBytes.LongLength}. " +
+                    $"(count={count}, coeffCount={coeffCount}, type={centroidsType})");
+                m_disabledDueToError = true;
+                return false;
+            }
+
+            var vecCount = count * coeffCount;
+            if (centroidsBuffer != null && centroidsBuffer.count == vecCount)
+                return true;
+
+            // 目前为了实现简单与稳定,统一把 palette 解码成 float32 的 Vector3 buffer.
+            // 后续若要进一步提升性能/显存,可以考虑在 compute 里直接支持 f16 解码.
+            var decoded = new Vector3[vecCount];
+            if (centroidsType == "f32")
+            {
+                var floats = MemoryMarshal.Cast<byte, float>(centroidsBytes.AsSpan());
+                for (var i = 0; i < vecCount; i++)
+                {
+                    decoded[i] = new Vector3(
+                        floats[i * 3 + 0],
+                        floats[i * 3 + 1],
+                        floats[i * 3 + 2]);
+                }
+            }
+            else
+            {
+                var halves = MemoryMarshal.Cast<byte, ushort>(centroidsBytes.AsSpan());
+                for (var i = 0; i < vecCount; i++)
+                {
+                    decoded[i] = new Vector3(
+                        HalfToFloat(halves[i * 3 + 0]),
+                        HalfToFloat(halves[i * 3 + 1]),
+                        HalfToFloat(halves[i * 3 + 2]));
+                }
+            }
+
+            try
+            {
+                centroidsBuffer?.Dispose();
+                centroidsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, vecCount, Marshal.SizeOf(typeof(Vector3)))
+                {
+                    name = $"Sog4D_{nice}Centroids"
+                };
+                centroidsBuffer.SetData(decoded);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                m_disabledDueToError = true;
+                centroidsBuffer?.Dispose();
+                centroidsBuffer = null;
+                Debug.LogError(
+                    $"[Gsplat][Sequence] {nice}Centroids GraphicsBuffer 创建失败,已禁用该对象的渲染. " +
+                    $"count={vecCount}, stride={Marshal.SizeOf(typeof(Vector3))}.\n" +
+                    ex);
+                return false;
+            }
+        }
+
         bool TryDecodeThisFrame()
         {
             if (!SequenceAsset)
@@ -733,11 +969,45 @@ namespace Gsplat
             }
 
             // SH rest(当 SHBands>0 时必须存在)
-            if (m_effectiveSHBands > 0 && !SequenceAsset.ShNLabels)
+            var assetVersion = SequenceAsset.Sog4DVersion;
+            if (assetVersion == 0)
+                assetVersion = 1;
+            var useV2 = assetVersion == 2;
+
+            if (m_effectiveSHBands > 0)
             {
-                Debug.LogError("[Gsplat][Sequence] SequenceAsset.SHBands>0 但缺少 ShNLabels,请重新导入 .sog4d.");
-                m_disabledDueToError = true;
-                return false;
+                if (useV2)
+                {
+                    if (!SequenceAsset.Sh1Labels)
+                    {
+                        Debug.LogError("[Gsplat][Sequence] SequenceAsset.SHBands>0 但缺少 Sh1Labels,请重新导入 .sog4d.");
+                        m_disabledDueToError = true;
+                        return false;
+                    }
+
+                    if (m_effectiveSHBands >= 2 && !SequenceAsset.Sh2Labels)
+                    {
+                        Debug.LogError("[Gsplat][Sequence] SequenceAsset.SHBands>=2 但缺少 Sh2Labels,请重新导入 .sog4d.");
+                        m_disabledDueToError = true;
+                        return false;
+                    }
+
+                    if (m_effectiveSHBands >= 3 && !SequenceAsset.Sh3Labels)
+                    {
+                        Debug.LogError("[Gsplat][Sequence] SequenceAsset.SHBands>=3 但缺少 Sh3Labels,请重新导入 .sog4d.");
+                        m_disabledDueToError = true;
+                        return false;
+                    }
+                }
+                else
+                {
+                    if (!SequenceAsset.ShNLabels)
+                    {
+                        Debug.LogError("[Gsplat][Sequence] SequenceAsset.SHBands>0 但缺少 ShNLabels,请重新导入 .sog4d.");
+                        m_disabledDueToError = true;
+                        return false;
+                    }
+                }
             }
 
             if (m_renderer == null || m_decodeCS == null)
@@ -776,8 +1046,18 @@ namespace Gsplat
             var rangeMin1 = SequenceAsset.PositionRangeMin[i1];
             var rangeMax1 = SequenceAsset.PositionRangeMax[i1];
 
-            // 选择 kernel: SHBands==0 用 SH0 kernel,否则用 SH kernel.
-            var kernel = m_effectiveSHBands > 0 ? m_kernelDecodeSH : m_kernelDecodeSH0;
+            // 选择 kernel:
+            // - SHBands==0: DecodeKeyframesSH0
+            // - SHBands>0:
+            //   - v1: DecodeKeyframesSH
+            //   - v2: DecodeKeyframesSH_V2
+            var kernel = m_kernelDecodeSH0;
+            var kernelName = "DecodeKeyframesSH0";
+            if (m_effectiveSHBands > 0)
+            {
+                kernel = useV2 ? m_kernelDecodeSHV2 : m_kernelDecodeSH;
+                kernelName = useV2 ? "DecodeKeyframesSH_V2" : "DecodeKeyframesSH";
+            }
 
             // 常量参数
             m_decodeCS.SetInt("_SplatCount", (int)SplatCount);
@@ -797,6 +1077,9 @@ namespace Gsplat
             m_decodeCS.SetInt("_ScaleCodebookCount", m_scaleCodebookBuffer != null ? m_scaleCodebookBuffer.count : 0);
             m_decodeCS.SetInt("_Sh0CodebookCount", m_sh0CodebookBuffer != null ? m_sh0CodebookBuffer.count : 0);
             m_decodeCS.SetInt("_ShNCentroidsCount", m_shNCentroidsBuffer != null ? m_shNCentroidsBuffer.count : 0);
+            m_decodeCS.SetInt("_Sh1CentroidsCount", m_sh1CentroidsBuffer != null ? m_sh1CentroidsBuffer.count : 0);
+            m_decodeCS.SetInt("_Sh2CentroidsCount", m_sh2CentroidsBuffer != null ? m_sh2CentroidsBuffer.count : 0);
+            m_decodeCS.SetInt("_Sh3CentroidsCount", m_sh3CentroidsBuffer != null ? m_sh3CentroidsBuffer.count : 0);
 
             // 输入纹理
             m_decodeCS.SetTexture(kernel, "_PositionHi", SequenceAsset.PositionHi);
@@ -820,8 +1103,30 @@ namespace Gsplat
             {
                 var restCoeffCount = (m_effectiveSHBands + 1) * (m_effectiveSHBands + 1) - 1;
                 m_decodeCS.SetInt("_RestCoeffCount", restCoeffCount);
-                m_decodeCS.SetTexture(kernel, "_ShNLabels", SequenceAsset.ShNLabels);
-                m_decodeCS.SetBuffer(kernel, "_ShNCentroids", m_shNCentroidsBuffer);
+
+                if (useV2)
+                {
+                    m_decodeCS.SetTexture(kernel, "_Sh1Labels", SequenceAsset.Sh1Labels);
+                    m_decodeCS.SetBuffer(kernel, "_Sh1Centroids", m_sh1CentroidsBuffer);
+
+                    if (m_effectiveSHBands >= 2)
+                    {
+                        m_decodeCS.SetTexture(kernel, "_Sh2Labels", SequenceAsset.Sh2Labels);
+                        m_decodeCS.SetBuffer(kernel, "_Sh2Centroids", m_sh2CentroidsBuffer);
+                    }
+
+                    if (m_effectiveSHBands >= 3)
+                    {
+                        m_decodeCS.SetTexture(kernel, "_Sh3Labels", SequenceAsset.Sh3Labels);
+                        m_decodeCS.SetBuffer(kernel, "_Sh3Centroids", m_sh3CentroidsBuffer);
+                    }
+                }
+                else
+                {
+                    m_decodeCS.SetTexture(kernel, "_ShNLabels", SequenceAsset.ShNLabels);
+                    m_decodeCS.SetBuffer(kernel, "_ShNCentroids", m_shNCentroidsBuffer);
+                }
+
                 m_decodeCS.SetBuffer(kernel, "_OutSH", m_renderer.SHBuffer);
             }
 
@@ -841,7 +1146,7 @@ namespace Gsplat
                 m_disabledDueToError = true;
                 Debug.LogError(
                     $"[Gsplat][Sequence] Decode compute dispatch 失败,已禁用该对象的渲染. " +
-                    $"kernel={(m_effectiveSHBands > 0 ? "DecodeKeyframesSH" : "DecodeKeyframesSH0")}, groups={groups}, splats={SplatCount}.\n" +
+                    $"kernel={kernelName}, groups={groups}, splats={SplatCount}.\n" +
                     $"建议: 检查 ComputeShader 是否支持当前 GPU,降低 splat 数,降低 SH,或关闭插值.\n" +
                     ex);
                 return false;
@@ -965,6 +1270,9 @@ namespace Gsplat
             DestroyRuntimeTexture2DArray(ref SequenceAsset.Rotation);
             DestroyRuntimeTexture2DArray(ref SequenceAsset.Sh0);
             DestroyRuntimeTexture2DArray(ref SequenceAsset.ShNLabels);
+            DestroyRuntimeTexture2DArray(ref SequenceAsset.Sh1Labels);
+            DestroyRuntimeTexture2DArray(ref SequenceAsset.Sh2Labels);
+            DestroyRuntimeTexture2DArray(ref SequenceAsset.Sh3Labels);
 
             if (Application.isPlaying)
                 UnityEngine.Object.Destroy(SequenceAsset);

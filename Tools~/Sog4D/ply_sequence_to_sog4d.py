@@ -704,7 +704,12 @@ def _zip_compression(name: str) -> int:
     return zipfile.ZIP_STORED
 
 
-def _build_segments(frame_count: int, seg_len: int) -> list[dict[str, Any]]:
+def _build_segments(
+    frame_count: int,
+    seg_len: int,
+    base_labels_name: str = "shN_labels.webp",
+    delta_path_prefix: str = "sh/delta_",
+) -> list[dict[str, Any]]:
     if seg_len <= 0:
         _die(f"delta segment length 必须 >0, got {seg_len}")
     segs: list[dict[str, Any]] = []
@@ -715,8 +720,8 @@ def _build_segments(frame_count: int, seg_len: int) -> list[dict[str, Any]]:
             {
                 "startFrame": int(start),
                 "frameCount": int(fc),
-                "baseLabelsPath": f"frames/{start:05d}/shN_labels.webp",
-                "deltaPath": f"sh/delta_{start:05d}.bin",
+                "baseLabelsPath": f"frames/{start:05d}/{base_labels_name}",
+                "deltaPath": f"{delta_path_prefix}{start:05d}.bin",
             }
         )
         start += fc
@@ -794,6 +799,11 @@ def _pack_cmd(args: argparse.Namespace) -> None:
 
     _info(f"splats: {splat_count}, shBands: {sh_bands}")
 
+    # v2: SH rest 按 band 拆分的开关.
+    # - 仅在 shBands>0 时有意义.
+    # - 不开启时保持 v1 的单 palette(shN) 行为,以保证兼容与可对比实验.
+    use_sh_split_by_band = bool(args.sh_split_by_band) and sh_bands > 0
+
     # ---------------------------------------------------------------------
     # Pass 1: 逐帧统计 range,并采样用于 codebook/palette 拟合.
     # ---------------------------------------------------------------------
@@ -810,6 +820,14 @@ def _pack_cmd(args: argparse.Namespace) -> None:
     scale_w: list[np.ndarray] = []
     shn_feat: list[np.ndarray] = []
     shn_w: list[np.ndarray] = []
+
+    # v2: 分 band 的采样缓存.
+    sh1_feat: list[np.ndarray] = []
+    sh1_w: list[np.ndarray] = []
+    sh2_feat: list[np.ndarray] = []
+    sh2_w: list[np.ndarray] = []
+    sh3_feat: list[np.ndarray] = []
+    sh3_w: list[np.ndarray] = []
 
     sh0_target = int(args.sh0_sample_count)
     scale_target = int(args.scale_sample_count)
@@ -865,11 +883,31 @@ def _pack_cmd(args: argparse.Namespace) -> None:
             assert frame.rest is not None
             idx = _weighted_choice_no_replace(rng, splat_count, min(shn_per_frame, splat_count), importance)
 
-            # rest: [N,restCoeffCount,3] -> [N, D]
-            d = frame.rest[idx].reshape(idx.shape[0], -1).astype(np.float32, copy=False)
+            # v1: rest: [N,restCoeffCount,3] -> [N,D]
+            # v2: 按 band 切片:
+            # - sh1: rest[0:3]
+            # - sh2: rest[3:8]
+            # - sh3: rest[8:15]
             w = importance[idx].astype(np.float32, copy=False)
-            shn_feat.append(d)
-            shn_w.append(w)
+            if not use_sh_split_by_band:
+                d = frame.rest[idx].reshape(idx.shape[0], -1).astype(np.float32, copy=False)
+                shn_feat.append(d)
+                shn_w.append(w)
+            else:
+                rest_sel = frame.rest[idx]  # [M,restCoeffCount,3]
+                d1 = rest_sel[:, 0:3, :].reshape(idx.shape[0], -1).astype(np.float32, copy=False)
+                sh1_feat.append(d1)
+                sh1_w.append(w)
+
+                if sh_bands >= 2:
+                    d2 = rest_sel[:, 3:8, :].reshape(idx.shape[0], -1).astype(np.float32, copy=False)
+                    sh2_feat.append(d2)
+                    sh2_w.append(w)
+
+                if sh_bands >= 3:
+                    d3 = rest_sel[:, 8:15, :].reshape(idx.shape[0], -1).astype(np.float32, copy=False)
+                    sh3_feat.append(d3)
+                    sh3_w.append(w)
 
         if (fi & 0x7) == 0:
             _info(f"pass1: {fi+1}/{frame_count} frames")
@@ -898,16 +936,61 @@ def _pack_cmd(args: argparse.Namespace) -> None:
     shn_km = None
     shn_centroids = None
     shn_count = 0
-    if sh_bands > 0:
-        shn_samples = np.concatenate(shn_feat, axis=0) if shn_feat else np.empty((0, rest_coeff_count * 3), dtype=np.float32)
-        shn_w_all = np.concatenate(shn_w, axis=0) if shn_w else np.empty((0,), dtype=np.float32)
-        if shn_samples.shape[0] == 0:
-            _die("shN centroids: 采样结果为空")
 
-        shn_count_req = int(args.shn_count)
-        shn_km = _fit_kmeans("shN_centroids", shn_samples, shn_w_all, shn_count_req, int(args.seed), 200_000)
-        shn_centroids = shn_km.cluster_centers_.astype(np.float32, copy=False)  # [K,D]
-        shn_count = int(shn_centroids.shape[0])
+    # v2: sh1/sh2/sh3 centroids/palette
+    sh1_km = None
+    sh2_km = None
+    sh3_km = None
+    sh1_centroids = None
+    sh2_centroids = None
+    sh3_centroids = None
+    sh1_count = 0
+    sh2_count = 0
+    sh3_count = 0
+    if sh_bands > 0:
+        if not use_sh_split_by_band:
+            shn_samples = np.concatenate(shn_feat, axis=0) if shn_feat else np.empty((0, rest_coeff_count * 3), dtype=np.float32)
+            shn_w_all = np.concatenate(shn_w, axis=0) if shn_w else np.empty((0,), dtype=np.float32)
+            if shn_samples.shape[0] == 0:
+                _die("shN centroids: 采样结果为空")
+
+            shn_count_req = int(args.shn_count)
+            shn_km = _fit_kmeans("shN_centroids", shn_samples, shn_w_all, shn_count_req, int(args.seed), 200_000)
+            shn_centroids = shn_km.cluster_centers_.astype(np.float32, copy=False)  # [K,D]
+            shn_count = int(shn_centroids.shape[0])
+        else:
+            # v2: 分别拟合 sh1/sh2/sh3 三套 codebook.
+            # - sh1: 3 coeff * RGB => D=9
+            # - sh2: 5 coeff * RGB => D=15
+            # - sh3: 7 coeff * RGB => D=21
+            sh1_samples = np.concatenate(sh1_feat, axis=0) if sh1_feat else np.empty((0, 9), dtype=np.float32)
+            sh1_w_all = np.concatenate(sh1_w, axis=0) if sh1_w else np.empty((0,), dtype=np.float32)
+            if sh1_samples.shape[0] == 0:
+                _die("sh1 centroids: 采样结果为空")
+            sh1_count_req = int(args.sh1_count) if args.sh1_count is not None else int(args.shn_count)
+            sh1_km = _fit_kmeans("sh1_centroids", sh1_samples, sh1_w_all, sh1_count_req, int(args.seed), 200_000)
+            sh1_centroids = sh1_km.cluster_centers_.astype(np.float32, copy=False)  # [K,9]
+            sh1_count = int(sh1_centroids.shape[0])
+
+            if sh_bands >= 2:
+                sh2_samples = np.concatenate(sh2_feat, axis=0) if sh2_feat else np.empty((0, 15), dtype=np.float32)
+                sh2_w_all = np.concatenate(sh2_w, axis=0) if sh2_w else np.empty((0,), dtype=np.float32)
+                if sh2_samples.shape[0] == 0:
+                    _die("sh2 centroids: 采样结果为空")
+                sh2_count_req = int(args.sh2_count) if args.sh2_count is not None else int(args.shn_count)
+                sh2_km = _fit_kmeans("sh2_centroids", sh2_samples, sh2_w_all, sh2_count_req, int(args.seed), 200_000)
+                sh2_centroids = sh2_km.cluster_centers_.astype(np.float32, copy=False)  # [K,15]
+                sh2_count = int(sh2_centroids.shape[0])
+
+            if sh_bands >= 3:
+                sh3_samples = np.concatenate(sh3_feat, axis=0) if sh3_feat else np.empty((0, 21), dtype=np.float32)
+                sh3_w_all = np.concatenate(sh3_w, axis=0) if sh3_w else np.empty((0,), dtype=np.float32)
+                if sh3_samples.shape[0] == 0:
+                    _die("sh3 centroids: 采样结果为空")
+                sh3_count_req = int(args.sh3_count) if args.sh3_count is not None else int(args.shn_count)
+                sh3_km = _fit_kmeans("sh3_centroids", sh3_samples, sh3_w_all, sh3_count_req, int(args.seed), 200_000)
+                sh3_centroids = sh3_km.cluster_centers_.astype(np.float32, copy=False)  # [K,21]
+                sh3_count = int(sh3_centroids.shape[0])
 
     # layout
     width, height = _auto_layout(splat_count, args.layout_width, args.layout_height)
@@ -930,15 +1013,43 @@ def _pack_cmd(args: argparse.Namespace) -> None:
         _die(f"--shN-labels-encoding 必须是 full 或 delta-v1, got {shn_labels_encoding}")
 
     delta_seg_len = int(args.delta_segment_length)
-    sh_delta_segments = _build_segments(frame_count, delta_seg_len) if (sh_bands > 0 and shn_labels_encoding == "delta-v1") else None
+    sh_delta_segments = None
+    sh1_delta_segments = None
+    sh2_delta_segments = None
+    sh3_delta_segments = None
+    if sh_bands > 0 and shn_labels_encoding == "delta-v1":
+        if not use_sh_split_by_band:
+            sh_delta_segments = _build_segments(frame_count, delta_seg_len)
+        else:
+            sh1_delta_segments = _build_segments(
+                frame_count,
+                delta_seg_len,
+                base_labels_name="sh1_labels.webp",
+                delta_path_prefix="sh/sh1_delta_",
+            )
+            if sh_bands >= 2:
+                sh2_delta_segments = _build_segments(
+                    frame_count,
+                    delta_seg_len,
+                    base_labels_name="sh2_labels.webp",
+                    delta_path_prefix="sh/sh2_delta_",
+                )
+            if sh_bands >= 3:
+                sh3_delta_segments = _build_segments(
+                    frame_count,
+                    delta_seg_len,
+                    base_labels_name="sh3_labels.webp",
+                    delta_path_prefix="sh/sh3_delta_",
+                )
 
     # meta.json (直接生成 Unity JsonUtility 友好的结构: Vector3 用 {x,y,z})
     def v3_list(a: np.ndarray) -> list[dict[str, float]]:
         return [{"x": float(x), "y": float(y), "z": float(z)} for x, y, z in a.tolist()]
 
+    meta_version = 2 if use_sh_split_by_band else 1
     meta: dict[str, Any] = {
         "format": "sog4d",
-        "version": 1,
+        "version": int(meta_version),
         "splatCount": int(splat_count),
         "frameCount": int(frame_count),
         "timeMapping": time_mapping,
@@ -964,17 +1075,56 @@ def _pack_cmd(args: argparse.Namespace) -> None:
     }
 
     if sh_bands > 0:
-        assert shn_centroids is not None
         meta_sh = meta["streams"]["sh"]
-        meta_sh["shNCount"] = int(shn_count)
-        meta_sh["shNCentroidsType"] = args.shn_centroids_type
-        meta_sh["shNCentroidsPath"] = "shN_centroids.bin"
-        meta_sh["shNLabelsEncoding"] = shn_labels_encoding
+        if not use_sh_split_by_band:
+            assert shn_centroids is not None
+            meta_sh["shNCount"] = int(shn_count)
+            meta_sh["shNCentroidsType"] = args.shn_centroids_type
+            meta_sh["shNCentroidsPath"] = "shN_centroids.bin"
+            meta_sh["shNLabelsEncoding"] = shn_labels_encoding
 
-        if shn_labels_encoding == "full":
-            meta_sh["shNLabelsPath"] = "frames/{frame}/shN_labels.webp"
+            if shn_labels_encoding == "full":
+                meta_sh["shNLabelsPath"] = "frames/{frame}/shN_labels.webp"
+            else:
+                meta_sh["shNDeltaSegments"] = sh_delta_segments
         else:
-            meta_sh["shNDeltaSegments"] = sh_delta_segments
+            assert sh1_centroids is not None
+            meta_sh["sh1"] = {
+                "count": int(sh1_count),
+                "centroidsType": args.shn_centroids_type,
+                "centroidsPath": "sh1_centroids.bin",
+                "labelsEncoding": shn_labels_encoding,
+            }
+            if shn_labels_encoding == "full":
+                meta_sh["sh1"]["labelsPath"] = "frames/{frame}/sh1_labels.webp"
+            else:
+                meta_sh["sh1"]["deltaSegments"] = sh1_delta_segments
+
+            if sh_bands >= 2:
+                assert sh2_centroids is not None
+                meta_sh["sh2"] = {
+                    "count": int(sh2_count),
+                    "centroidsType": args.shn_centroids_type,
+                    "centroidsPath": "sh2_centroids.bin",
+                    "labelsEncoding": shn_labels_encoding,
+                }
+                if shn_labels_encoding == "full":
+                    meta_sh["sh2"]["labelsPath"] = "frames/{frame}/sh2_labels.webp"
+                else:
+                    meta_sh["sh2"]["deltaSegments"] = sh2_delta_segments
+
+            if sh_bands >= 3:
+                assert sh3_centroids is not None
+                meta_sh["sh3"] = {
+                    "count": int(sh3_count),
+                    "centroidsType": args.shn_centroids_type,
+                    "centroidsPath": "sh3_centroids.bin",
+                    "labelsEncoding": shn_labels_encoding,
+                }
+                if shn_labels_encoding == "full":
+                    meta_sh["sh3"]["labelsPath"] = "frames/{frame}/sh3_labels.webp"
+                else:
+                    meta_sh["sh3"]["deltaSegments"] = sh3_delta_segments
 
     # 输出 ZIP
     compression = _zip_compression(args.zip_compression)
@@ -985,18 +1135,48 @@ def _pack_cmd(args: argparse.Namespace) -> None:
         # meta.json
         zf.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=2))
 
-        # shN centroids.bin
+        # SH rest centroids.bin
         if sh_bands > 0:
-            assert shn_centroids is not None
-            rest_count = (sh_bands + 1) * (sh_bands + 1) - 1
-            centroids3 = shn_centroids.reshape(shn_count, rest_count, 3)
-            if args.shn_centroids_type == "f16":
-                data = centroids3.astype("<f2").tobytes(order="C")
-            elif args.shn_centroids_type == "f32":
-                data = centroids3.astype("<f4").tobytes(order="C")
+            if not use_sh_split_by_band:
+                assert shn_centroids is not None
+                rest_count = (sh_bands + 1) * (sh_bands + 1) - 1
+                centroids3 = shn_centroids.reshape(shn_count, rest_count, 3)
+                if args.shn_centroids_type == "f16":
+                    data = centroids3.astype("<f2").tobytes(order="C")
+                elif args.shn_centroids_type == "f32":
+                    data = centroids3.astype("<f4").tobytes(order="C")
+                else:
+                    _die(f"未知 shN centroids type: {args.shn_centroids_type}")
+                zf.writestr("shN_centroids.bin", data)
             else:
-                _die(f"未知 shN centroids type: {args.shn_centroids_type}")
-            zf.writestr("shN_centroids.bin", data)
+                assert sh1_centroids is not None
+                c1 = sh1_centroids.reshape(sh1_count, 3, 3)
+                if args.shn_centroids_type == "f16":
+                    zf.writestr("sh1_centroids.bin", c1.astype("<f2").tobytes(order="C"))
+                elif args.shn_centroids_type == "f32":
+                    zf.writestr("sh1_centroids.bin", c1.astype("<f4").tobytes(order="C"))
+                else:
+                    _die(f"未知 sh centroids type: {args.shn_centroids_type}")
+
+                if sh_bands >= 2:
+                    assert sh2_centroids is not None
+                    c2 = sh2_centroids.reshape(sh2_count, 5, 3)
+                    if args.shn_centroids_type == "f16":
+                        zf.writestr("sh2_centroids.bin", c2.astype("<f2").tobytes(order="C"))
+                    elif args.shn_centroids_type == "f32":
+                        zf.writestr("sh2_centroids.bin", c2.astype("<f4").tobytes(order="C"))
+                    else:
+                        _die(f"未知 sh centroids type: {args.shn_centroids_type}")
+
+                if sh_bands >= 3:
+                    assert sh3_centroids is not None
+                    c3 = sh3_centroids.reshape(sh3_count, 7, 3)
+                    if args.shn_centroids_type == "f16":
+                        zf.writestr("sh3_centroids.bin", c3.astype("<f2").tobytes(order="C"))
+                    elif args.shn_centroids_type == "f32":
+                        zf.writestr("sh3_centroids.bin", c3.astype("<f4").tobytes(order="C"))
+                    else:
+                        _die(f"未知 sh centroids type: {args.shn_centroids_type}")
 
         # 为 scale 最近邻准备 KDTree(3D)
         if cKDTree is None:
@@ -1004,13 +1184,26 @@ def _pack_cmd(args: argparse.Namespace) -> None:
         scale_tree = cKDTree(scale_centers_log.astype(np.float32, copy=False))
 
         # delta-v1 的状态机
-        segs = sh_delta_segments or []
         seg_idx = 0
         seg_end = 0
+
+        # v1: 单 palette 的 delta
+        segs = sh_delta_segments or []
         delta_bio: Optional[io.BytesIO] = None
         prev_labels: Optional[np.ndarray] = None  # u16 [splatCount]
 
-        def start_segment(seg: dict[str, Any]) -> None:
+        # v2: 分 band 的 delta
+        segs1 = sh1_delta_segments or []
+        segs2 = sh2_delta_segments or []
+        segs3 = sh3_delta_segments or []
+        delta_bio1: Optional[io.BytesIO] = None
+        delta_bio2: Optional[io.BytesIO] = None
+        delta_bio3: Optional[io.BytesIO] = None
+        prev1: Optional[np.ndarray] = None
+        prev2: Optional[np.ndarray] = None
+        prev3: Optional[np.ndarray] = None
+
+        def start_segment_v1(seg: dict[str, Any]) -> None:
             nonlocal delta_bio, prev_labels, seg_end
             delta_bio = io.BytesIO()
             _write_delta_v1_header(
@@ -1023,15 +1216,78 @@ def _pack_cmd(args: argparse.Namespace) -> None:
             prev_labels = None
             seg_end = int(seg["startFrame"]) + int(seg["frameCount"])
 
-        def flush_segment(seg: dict[str, Any]) -> None:
+        def flush_segment_v1(seg: dict[str, Any]) -> None:
             nonlocal delta_bio
             assert delta_bio is not None
             zf.writestr(seg["deltaPath"], delta_bio.getvalue())
             delta_bio.close()
             delta_bio = None
 
+        def start_segment_v2() -> None:
+            nonlocal delta_bio1, delta_bio2, delta_bio3, prev1, prev2, prev3, seg_end
+            seg1 = segs1[seg_idx]
+            delta_bio1 = io.BytesIO()
+            _write_delta_v1_header(
+                delta_bio1,
+                int(seg1["startFrame"]),
+                int(seg1["frameCount"]),
+                int(splat_count),
+                int(sh1_count),
+            )
+            prev1 = None
+            seg_end = int(seg1["startFrame"]) + int(seg1["frameCount"])
+
+            if sh_bands >= 2:
+                seg2 = segs2[seg_idx]
+                delta_bio2 = io.BytesIO()
+                _write_delta_v1_header(
+                    delta_bio2,
+                    int(seg2["startFrame"]),
+                    int(seg2["frameCount"]),
+                    int(splat_count),
+                    int(sh2_count),
+                )
+                prev2 = None
+
+            if sh_bands >= 3:
+                seg3 = segs3[seg_idx]
+                delta_bio3 = io.BytesIO()
+                _write_delta_v1_header(
+                    delta_bio3,
+                    int(seg3["startFrame"]),
+                    int(seg3["frameCount"]),
+                    int(splat_count),
+                    int(sh3_count),
+                )
+                prev3 = None
+
+        def flush_segment_v2() -> None:
+            nonlocal delta_bio1, delta_bio2, delta_bio3
+            seg1 = segs1[seg_idx]
+            assert delta_bio1 is not None
+            zf.writestr(seg1["deltaPath"], delta_bio1.getvalue())
+            delta_bio1.close()
+            delta_bio1 = None
+
+            if sh_bands >= 2:
+                seg2 = segs2[seg_idx]
+                assert delta_bio2 is not None
+                zf.writestr(seg2["deltaPath"], delta_bio2.getvalue())
+                delta_bio2.close()
+                delta_bio2 = None
+
+            if sh_bands >= 3:
+                seg3 = segs3[seg_idx]
+                assert delta_bio3 is not None
+                zf.writestr(seg3["deltaPath"], delta_bio3.getvalue())
+                delta_bio3.close()
+                delta_bio3 = None
+
         if sh_bands > 0 and shn_labels_encoding == "delta-v1":
-            start_segment(segs[0])
+            if not use_sh_split_by_band:
+                start_segment_v1(segs[0])
+            else:
+                start_segment_v2()
 
         # 逐帧编码并写入 WebP
         for fi, ply in enumerate(ply_files):
@@ -1095,50 +1351,145 @@ def _pack_cmd(args: argparse.Namespace) -> None:
             # shN labels
             # -----------------------------
             if sh_bands > 0:
-                assert shn_km is not None
                 assert frame.rest is not None
-                rest_flat = frame.rest.reshape(splat_count, -1).astype(np.float32, copy=False)
+                if not use_sh_split_by_band:
+                    assert shn_km is not None
+                    rest_flat = frame.rest.reshape(splat_count, -1).astype(np.float32, copy=False)
 
-                # sklearn 的 predict 会在 C 侧做距离计算,比 Python 循环更稳.
-                labels = shn_km.predict(rest_flat).astype(np.uint16, copy=False)
+                    # sklearn 的 predict 会在 C 侧做距离计算,比 Python 循环更稳.
+                    labels = shn_km.predict(rest_flat).astype(np.uint16, copy=False)
 
-                if shn_labels_encoding == "full":
-                    rgba_labels = _pack_u16_to_rgba(labels, splat_count, width, height)
-                    _save_webp_lossless_rgba(zf, frame_dir + "shN_labels.webp", rgba_labels)
-                else:
-                    # delta-v1
-                    assert sh_delta_segments is not None
-                    seg = segs[seg_idx]
-
-                    # segment 边界: flush 上一个,开启下一个.
-                    if fi >= seg_end:
-                        flush_segment(seg)
-                        seg_idx += 1
-                        start_segment(segs[seg_idx])
+                    if shn_labels_encoding == "full":
+                        rgba_labels = _pack_u16_to_rgba(labels, splat_count, width, height)
+                        _save_webp_lossless_rgba(zf, frame_dir + "shN_labels.webp", rgba_labels)
+                    else:
+                        # delta-v1
+                        assert sh_delta_segments is not None
                         seg = segs[seg_idx]
 
-                    # segment 首帧: 写 base labels WebP,不写 update block.
-                    if prev_labels is None:
-                        rgba_labels = _pack_u16_to_rgba(labels, splat_count, width, height)
-                        _save_webp_lossless_rgba(zf, seg["baseLabelsPath"], rgba_labels)
-                        prev_labels = labels
+                        # segment 边界: flush 上一个,开启下一个.
+                        if fi >= seg_end:
+                            flush_segment_v1(seg)
+                            seg_idx += 1
+                            start_segment_v1(segs[seg_idx])
+                            seg = segs[seg_idx]
+
+                        # segment 首帧: 写 base labels WebP,不写 update block.
+                        if prev_labels is None:
+                            rgba_labels = _pack_u16_to_rgba(labels, splat_count, width, height)
+                            _save_webp_lossless_rgba(zf, seg["baseLabelsPath"], rgba_labels)
+                            prev_labels = labels
+                        else:
+                            assert delta_bio is not None
+                            diff = labels != prev_labels
+                            splat_ids = np.nonzero(diff)[0].astype(np.uint32, copy=False)
+                            delta_bio.write(struct.pack("<I", int(splat_ids.shape[0])))
+                            for sid in splat_ids.tolist():
+                                lab = int(labels[int(sid)])
+                                delta_bio.write(struct.pack("<IHH", int(sid), int(lab), 0))
+                            prev_labels = labels
+                else:
+                    # v2: sh1/sh2/sh3 三套 labels.
+                    assert sh1_km is not None
+
+                    sh1_flat = frame.rest[:, 0:3, :].reshape(splat_count, -1).astype(np.float32, copy=False)
+                    labels1 = sh1_km.predict(sh1_flat).astype(np.uint16, copy=False)
+
+                    labels2 = None
+                    labels3 = None
+                    if sh_bands >= 2:
+                        assert sh2_km is not None
+                        sh2_flat = frame.rest[:, 3:8, :].reshape(splat_count, -1).astype(np.float32, copy=False)
+                        labels2 = sh2_km.predict(sh2_flat).astype(np.uint16, copy=False)
+                    if sh_bands >= 3:
+                        assert sh3_km is not None
+                        sh3_flat = frame.rest[:, 8:15, :].reshape(splat_count, -1).astype(np.float32, copy=False)
+                        labels3 = sh3_km.predict(sh3_flat).astype(np.uint16, copy=False)
+
+                    if shn_labels_encoding == "full":
+                        rgba1 = _pack_u16_to_rgba(labels1, splat_count, width, height)
+                        _save_webp_lossless_rgba(zf, frame_dir + "sh1_labels.webp", rgba1)
+
+                        if sh_bands >= 2:
+                            assert labels2 is not None
+                            rgba2 = _pack_u16_to_rgba(labels2, splat_count, width, height)
+                            _save_webp_lossless_rgba(zf, frame_dir + "sh2_labels.webp", rgba2)
+
+                        if sh_bands >= 3:
+                            assert labels3 is not None
+                            rgba3 = _pack_u16_to_rgba(labels3, splat_count, width, height)
+                            _save_webp_lossless_rgba(zf, frame_dir + "sh3_labels.webp", rgba3)
                     else:
-                        assert delta_bio is not None
-                        diff = labels != prev_labels
-                        splat_ids = np.nonzero(diff)[0].astype(np.uint32, copy=False)
-                        delta_bio.write(struct.pack("<I", int(splat_ids.shape[0])))
-                        for sid in splat_ids.tolist():
-                            lab = int(labels[int(sid)])
-                            delta_bio.write(struct.pack("<IHH", int(sid), int(lab), 0))
-                        prev_labels = labels
+                        # delta-v1: 三套 delta 同步推进(segments 边界一致).
+                        assert sh1_delta_segments is not None
+                        seg1 = segs1[seg_idx]
+
+                        if fi >= seg_end:
+                            flush_segment_v2()
+                            seg_idx += 1
+                            start_segment_v2()
+                            seg1 = segs1[seg_idx]
+
+                        # sh1
+                        if prev1 is None:
+                            rgba1 = _pack_u16_to_rgba(labels1, splat_count, width, height)
+                            _save_webp_lossless_rgba(zf, seg1["baseLabelsPath"], rgba1)
+                            prev1 = labels1
+                        else:
+                            assert delta_bio1 is not None
+                            diff = labels1 != prev1
+                            splat_ids = np.nonzero(diff)[0].astype(np.uint32, copy=False)
+                            delta_bio1.write(struct.pack("<I", int(splat_ids.shape[0])))
+                            for sid in splat_ids.tolist():
+                                lab = int(labels1[int(sid)])
+                                delta_bio1.write(struct.pack("<IHH", int(sid), int(lab), 0))
+                            prev1 = labels1
+
+                        if sh_bands >= 2:
+                            assert labels2 is not None
+                            seg2 = segs2[seg_idx]
+                            if prev2 is None:
+                                rgba2 = _pack_u16_to_rgba(labels2, splat_count, width, height)
+                                _save_webp_lossless_rgba(zf, seg2["baseLabelsPath"], rgba2)
+                                prev2 = labels2
+                            else:
+                                assert delta_bio2 is not None
+                                diff = labels2 != prev2
+                                splat_ids = np.nonzero(diff)[0].astype(np.uint32, copy=False)
+                                delta_bio2.write(struct.pack("<I", int(splat_ids.shape[0])))
+                                for sid in splat_ids.tolist():
+                                    lab = int(labels2[int(sid)])
+                                    delta_bio2.write(struct.pack("<IHH", int(sid), int(lab), 0))
+                                prev2 = labels2
+
+                        if sh_bands >= 3:
+                            assert labels3 is not None
+                            seg3 = segs3[seg_idx]
+                            if prev3 is None:
+                                rgba3 = _pack_u16_to_rgba(labels3, splat_count, width, height)
+                                _save_webp_lossless_rgba(zf, seg3["baseLabelsPath"], rgba3)
+                                prev3 = labels3
+                            else:
+                                assert delta_bio3 is not None
+                                diff = labels3 != prev3
+                                splat_ids = np.nonzero(diff)[0].astype(np.uint32, copy=False)
+                                delta_bio3.write(struct.pack("<I", int(splat_ids.shape[0])))
+                                for sid in splat_ids.tolist():
+                                    lab = int(labels3[int(sid)])
+                                    delta_bio3.write(struct.pack("<IHH", int(sid), int(lab), 0))
+                                prev3 = labels3
 
             if (fi & 0x7) == 0:
                 _info(f"pack: {fi+1}/{frame_count} frames")
 
         # delta 最后一个 segment flush
         if sh_bands > 0 and shn_labels_encoding == "delta-v1":
-            assert seg_idx < len(segs)
-            flush_segment(segs[seg_idx])
+            if not use_sh_split_by_band:
+                assert seg_idx < len(segs)
+                flush_segment_v1(segs[seg_idx])
+            else:
+                assert seg_idx < len(segs1)
+                flush_segment_v2()
 
     _info("pack done.")
 
@@ -1201,7 +1552,8 @@ def _validate_cmd(args: argparse.Namespace) -> None:
         # -----------------------------------------------------------------
         if meta.get("format") != "sog4d":
             _die(f"meta.json.format 非法: {meta.get('format')}")
-        if int(meta.get("version", 0)) != 1:
+        ver = int(meta.get("version", 0))
+        if ver not in (1, 2):
             _die(f"meta.json.version 非法: {meta.get('version')}")
 
         splat_count = int(meta.get("splatCount", 0))
@@ -1259,100 +1611,140 @@ def _validate_cmd(args: argparse.Namespace) -> None:
             _info("validate ok (bands=0).")
             return
 
-        shn_count = int(sh.get("shNCount", 0))
-        if not (1 <= shn_count <= 65535):
-            _die(f"shNCount 非法: {shn_count}")
-
-        # centroids size
-        centroids_bytes = zf.read(sh["shNCentroidsPath"])
-        rest_coeff_count = (bands + 1) * (bands + 1) - 1
-        scalar_bytes = 2 if sh["shNCentroidsType"] == "f16" else 4
-        expected = shn_count * rest_coeff_count * 3 * scalar_bytes
-        if len(centroids_bytes) != expected:
-            _die(f"shN_centroids.bin 大小不匹配: expected {expected} got {len(centroids_bytes)}")
-
-        enc = sh.get("shNLabelsEncoding") or "full"
-        if enc == "full":
+        def validate_full_labels(template: str, count: int, tag: str) -> None:
             for f in range(frame_count):
-                rgba = _read_zip_webp_rgba(zf, resolve(sh["shNLabelsPath"], f))
-                _validate_u16_map_rg(rgba, splat_count, width, height, shn_count, f"shN_labels frame={f}")
-            _info("validate ok (full labels).")
+                rgba = _read_zip_webp_rgba(zf, resolve(template, f))
+                _validate_u16_map_rg(rgba, splat_count, width, height, count, f"{tag}_labels frame={f}")
+
+        def validate_delta_v1(segs: list[dict[str, Any]], count: int, tag: str) -> None:
+            if not segs:
+                _die(f"delta-v1: {tag}.deltaSegments 为空")
+
+            # segments 连续性
+            start = 0
+            for i, seg in enumerate(segs):
+                if int(seg["startFrame"]) != start:
+                    _die(f"delta-v1: {tag}.segment[{i}].startFrame 不连续: expected {start} got {seg['startFrame']}")
+                fc = int(seg["frameCount"])
+                if fc <= 0:
+                    _die(f"delta-v1: {tag}.segment[{i}].frameCount 非法: {fc}")
+                start += fc
+            if start != frame_count:
+                _die(f"delta-v1: {tag} segments 覆盖帧数不等于 frameCount: sum={start}, frameCount={frame_count}")
+
+            # delta 逐段验证(包含 header 与 block 的越界/递增)
+            for i, seg in enumerate(segs):
+                base_rgba = _read_zip_webp_rgba(zf, seg["baseLabelsPath"])
+                _validate_u16_map_rg(base_rgba, splat_count, width, height, count, f"delta-v1 {tag} baseLabels seg={i}")
+
+                # 解析 base labels 作为 prev
+                flat = base_rgba.reshape(-1, 4)
+                prev = (flat[:splat_count, 0].astype(np.uint16) + (flat[:splat_count, 1].astype(np.uint16) << 8)).copy()
+
+                delta = zf.read(seg["deltaPath"])
+                bio = io.BytesIO(delta)
+                magic = bio.read(8)
+                if magic != b"SOG4DLB1":
+                    _die(f"delta-v1: magic 不匹配: {tag} seg={i} got={magic!r}")
+                hdr = bio.read(20)
+                if len(hdr) != 20:
+                    _die(f"delta-v1: header 截断: {tag} seg={i}")
+                dv, seg_start, seg_fc, sc, shc = struct.unpack("<IIIII", hdr)
+                if dv != 1:
+                    _die(f"delta-v1: version 非法: {tag} seg={i} got={dv}")
+                if int(seg_start) != int(seg["startFrame"]):
+                    _die(f"delta-v1: segmentStartFrame mismatch: {tag} seg={i} meta={seg['startFrame']} file={seg_start}")
+                if int(seg_fc) != int(seg["frameCount"]):
+                    _die(f"delta-v1: segmentFrameCount mismatch: {tag} seg={i} meta={seg['frameCount']} file={seg_fc}")
+                if int(sc) != splat_count:
+                    _die(f"delta-v1: splatCount mismatch: {tag} seg={i} meta={splat_count} file={sc}")
+                if int(shc) != count:
+                    _die(f"delta-v1: {tag}Count mismatch: seg={i} meta={count} file={shc}")
+
+                for local in range(1, int(seg_fc)):
+                    raw = bio.read(4)
+                    if len(raw) != 4:
+                        _die(f"delta-v1 truncated: {tag} seg={i} localFrame={local} missing updateCount")
+                    (uc,) = struct.unpack("<I", raw)
+                    if uc > splat_count:
+                        _die(f"delta-v1 invalid updateCount: {tag} seg={i} localFrame={local} updateCount={uc}")
+
+                    prev_sid = -1
+                    for u in range(int(uc)):
+                        rec = bio.read(8)
+                        if len(rec) != 8:
+                            _die(f"delta-v1 truncated: {tag} seg={i} localFrame={local} update={u}")
+                        sid, lab, res = struct.unpack("<IHH", rec)
+                        if res != 0:
+                            _die(f"delta-v1 reserved!=0: {tag} seg={i} localFrame={local} update={u}")
+                        if sid >= splat_count:
+                            _die(f"delta-v1 splatId 越界: {tag} seg={i} localFrame={local} sid={sid}")
+                        if lab >= count:
+                            _die(f"delta-v1 label 越界: {tag} seg={i} localFrame={local} lab={lab}")
+                        if sid <= prev_sid:
+                            _die(f"delta-v1 splatId 非严格递增: {tag} seg={i} localFrame={local} sid={sid} prev={prev_sid}")
+                        prev_sid = int(sid)
+                        prev[int(sid)] = np.uint16(lab)
+
+        # -------------------------------------------------------------
+        # v1/v2: SH rest schema 分歧点
+        # -------------------------------------------------------------
+        if ver == 1:
+            shn_count = int(sh.get("shNCount", 0))
+            if not (1 <= shn_count <= 65535):
+                _die(f"shNCount 非法: {shn_count}")
+
+            centroids_bytes = zf.read(sh["shNCentroidsPath"])
+            rest_coeff_count = (bands + 1) * (bands + 1) - 1
+            scalar_bytes = 2 if sh["shNCentroidsType"] == "f16" else 4
+            expected = shn_count * rest_coeff_count * 3 * scalar_bytes
+            if len(centroids_bytes) != expected:
+                _die(f"shN_centroids.bin 大小不匹配: expected {expected} got {len(centroids_bytes)}")
+
+            enc = sh.get("shNLabelsEncoding") or "full"
+            if enc == "full":
+                validate_full_labels(sh["shNLabelsPath"], shn_count, "shN")
+                _info("validate ok (v1 full labels).")
+                return
+            if enc != "delta-v1":
+                _die(f"未知 shNLabelsEncoding: {enc}")
+
+            segs = sh.get("shNDeltaSegments") or []
+            validate_delta_v1(segs, shn_count, "shN")
+            _info("validate ok (v1 delta-v1).")
             return
 
-        if enc != "delta-v1":
-            _die(f"未知 shNLabelsEncoding: {enc}")
+        # v2: sh1/sh2/sh3
+        def validate_band(band_key: str, coeff_count: int) -> None:
+            band = sh.get(band_key) or {}
+            if not band:
+                _die(f"streams.sh.{band_key} 缺失")
 
-        segs = sh.get("shNDeltaSegments") or []
-        if not segs:
-            _die("delta-v1: shNDeltaSegments 为空")
+            count = int(band.get("count", 0))
+            if not (1 <= count <= 65535):
+                _die(f"{band_key}.count 非法: {count}")
 
-        # segments 连续性
-        start = 0
-        for i, seg in enumerate(segs):
-            if int(seg["startFrame"]) != start:
-                _die(f"delta-v1: segment[{i}].startFrame 不连续: expected {start} got {seg['startFrame']}")
-            fc = int(seg["frameCount"])
-            if fc <= 0:
-                _die(f"delta-v1: segment[{i}].frameCount 非法: {fc}")
-            start += fc
-        if start != frame_count:
-            _die(f"delta-v1: segments 覆盖帧数不等于 frameCount: sum={start}, frameCount={frame_count}")
+            centroids_bytes = zf.read(band["centroidsPath"])
+            scalar_bytes = 2 if band.get("centroidsType") == "f16" else 4
+            expected = count * coeff_count * 3 * scalar_bytes
+            if len(centroids_bytes) != expected:
+                _die(f"{band_key}_centroids.bin 大小不匹配: expected {expected} got {len(centroids_bytes)}")
 
-        # delta 逐段验证(包含 header 与 block 的越界/递增)
-        for i, seg in enumerate(segs):
-            base_rgba = _read_zip_webp_rgba(zf, seg["baseLabelsPath"])
-            _validate_u16_map_rg(base_rgba, splat_count, width, height, shn_count, f"delta-v1 baseLabels seg={i}")
+            enc = band.get("labelsEncoding") or "full"
+            if enc == "full":
+                validate_full_labels(band["labelsPath"], count, band_key)
+                return
+            if enc != "delta-v1":
+                _die(f"未知 {band_key}.labelsEncoding: {enc}")
+            segs = band.get("deltaSegments") or []
+            validate_delta_v1(segs, count, band_key)
 
-            # 解析 base labels 作为 prev
-            flat = base_rgba.reshape(-1, 4)
-            prev = (flat[:splat_count, 0].astype(np.uint16) + (flat[:splat_count, 1].astype(np.uint16) << 8)).copy()
-
-            delta = zf.read(seg["deltaPath"])
-            bio = io.BytesIO(delta)
-            magic = bio.read(8)
-            if magic != b"SOG4DLB1":
-                _die(f"delta-v1: magic 不匹配: seg={i} got={magic!r}")
-            hdr = bio.read(20)
-            if len(hdr) != 20:
-                _die(f"delta-v1: header 截断: seg={i}")
-            ver, seg_start, seg_fc, sc, shc = struct.unpack("<IIIII", hdr)
-            if ver != 1:
-                _die(f"delta-v1: version 非法: seg={i} got={ver}")
-            if int(seg_start) != int(seg["startFrame"]):
-                _die(f"delta-v1: segmentStartFrame mismatch: seg={i} meta={seg['startFrame']} file={seg_start}")
-            if int(seg_fc) != int(seg["frameCount"]):
-                _die(f"delta-v1: segmentFrameCount mismatch: seg={i} meta={seg['frameCount']} file={seg_fc}")
-            if int(sc) != splat_count:
-                _die(f"delta-v1: splatCount mismatch: seg={i} meta={splat_count} file={sc}")
-            if int(shc) != shn_count:
-                _die(f"delta-v1: shNCount mismatch: seg={i} meta={shn_count} file={shc}")
-
-            for local in range(1, int(seg_fc)):
-                raw = bio.read(4)
-                if len(raw) != 4:
-                    _die(f"delta-v1 truncated: seg={i} localFrame={local} missing updateCount")
-                (uc,) = struct.unpack("<I", raw)
-                if uc > splat_count:
-                    _die(f"delta-v1 invalid updateCount: seg={i} localFrame={local} updateCount={uc}")
-
-                prev_sid = -1
-                for u in range(int(uc)):
-                    rec = bio.read(8)
-                    if len(rec) != 8:
-                        _die(f"delta-v1 truncated: seg={i} localFrame={local} update={u}")
-                    sid, lab, res = struct.unpack("<IHH", rec)
-                    if res != 0:
-                        _die(f"delta-v1 reserved!=0: seg={i} localFrame={local} update={u}")
-                    if sid >= splat_count:
-                        _die(f"delta-v1 splatId 越界: seg={i} localFrame={local} sid={sid}")
-                    if lab >= shn_count:
-                        _die(f"delta-v1 label 越界: seg={i} localFrame={local} lab={lab}")
-                    if sid <= prev_sid:
-                        _die(f"delta-v1 splatId 非严格递增: seg={i} localFrame={local} sid={sid} prev={prev_sid}")
-                    prev_sid = int(sid)
-                    prev[int(sid)] = np.uint16(lab)
-
-        _info("validate ok (delta-v1).")
+        validate_band("sh1", 3)
+        if bands >= 2:
+            validate_band("sh2", 5)
+        if bands >= 3:
+            validate_band("sh3", 7)
+        _info("validate ok (v2).")
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -1383,7 +1775,15 @@ def _build_arg_parser() -> argparse.ArgumentParser:
 
     # SHN palette + labels
     pack.add_argument("--sh-bands", type=int, default=None, help="强制 SH bands(默认按 PLY f_rest_* 自动推导)")
+    pack.add_argument(
+        "--sh-split-by-band",
+        action="store_true",
+        help="输出 v2: 把 SH rest 按 band 拆成 sh1/sh2/sh3 三套 palette+labels(更贴近 DualGS/DynGsplat 的 four codebooks).",
+    )
     pack.add_argument("--shN-count", dest="shn_count", type=int, default=8192, help="shN palette entry 数(默认 8192)")
+    pack.add_argument("--sh1-count", type=int, default=None, help="v2: sh1 palette entry 数(默认继承 --shN-count)")
+    pack.add_argument("--sh2-count", type=int, default=None, help="v2: sh2 palette entry 数(默认继承 --shN-count)")
+    pack.add_argument("--sh3-count", type=int, default=None, help="v2: sh3 palette entry 数(默认继承 --shN-count)")
     pack.add_argument("--shN-centroids-type", dest="shn_centroids_type", default="f16", choices=["f16", "f32"], help="centroids.bin 标量类型")
     pack.add_argument("--shN-sample-count", dest="shn_sample_count", type=int, default=200_000, help="shN centroids 拟合采样量(总量)")
     pack.add_argument(

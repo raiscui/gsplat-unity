@@ -180,6 +180,11 @@ namespace Gsplat
         // --------------------------------------------------------------------
         // 基础元数据
         // --------------------------------------------------------------------
+        // `.sog4d` meta.json.version.
+        // - v1: 单一 SHN(palette+labels).
+        // - v2: SH rest 按 band 拆分为 sh1/sh2/sh3 三套(palette+labels).
+        public int Sog4DVersion;
+
         public uint SplatCount;
         public int FrameCount;
         public byte SHBands; // 0..3
@@ -224,12 +229,34 @@ namespace Gsplat
 
         // --------------------------------------------------------------------
         // SH rest stream(可选)
-        // - 当前的 spec 选择 palette(bin) + labels(webp) 的形式.
+        // - v1: palette(bin) + labels(webp 或 delta-v1 展开).
+        // - v2: 仍是 palette+labels,但按 band 拆成 sh1/sh2/sh3 三套.
         // - 导入期(Editor)可以把 delta 展开为 per-frame labels,以保持运行时随机访问简单.
         // --------------------------------------------------------------------
         [HideInInspector] public int ShNCount;
         [HideInInspector] public string ShNCentroidsType; // "f16" | "f32"
         [HideInInspector] public byte[] ShNCentroidsBytes; // `shN_centroids.bin` 的原始字节
         [HideInInspector] public Texture2DArray ShNLabels;
+
+        // --------------------------------------------------------------------
+        // v2: SH rest 按 band 拆分(可选)
+        // - bands>=1: sh1 必需.
+        // - bands>=2: sh2 必需.
+        // - bands>=3: sh3 必需.
+        // --------------------------------------------------------------------
+        [HideInInspector] public int Sh1Count;
+        [HideInInspector] public string Sh1CentroidsType; // "f16" | "f32"
+        [HideInInspector] public byte[] Sh1CentroidsBytes; // `sh1_centroids.bin`
+        [HideInInspector] public Texture2DArray Sh1Labels;
+
+        [HideInInspector] public int Sh2Count;
+        [HideInInspector] public string Sh2CentroidsType; // "f16" | "f32"
+        [HideInInspector] public byte[] Sh2CentroidsBytes; // `sh2_centroids.bin`
+        [HideInInspector] public Texture2DArray Sh2Labels;
+
+        [HideInInspector] public int Sh3Count;
+        [HideInInspector] public string Sh3CentroidsType; // "f16" | "f32"
+        [HideInInspector] public byte[] Sh3CentroidsBytes; // `sh3_centroids.bin`
+        [HideInInspector] public Texture2DArray Sh3Labels;
     }
 }
