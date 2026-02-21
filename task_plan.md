@@ -564,3 +564,50 @@ Unity Console 不再出现:
   - 同时已复制到输出目录:
     - `gaussian_pertimestamp_out/gaussian_pertimestamp_quality_sh3.sog4d`
   - `validate ok (delta-v1)`, size=8.3MiB
+
+---
+
+# 任务计划: 输出 `.sog4d` 详细准确规格(用于 FreeTimeGsVanilla 改版导出器)
+
+## 目标
+输出一份可以直接用来实现 exporter 的 `.sog4d` 文件格式规格.
+重点是: 结构清晰,字段类型准确,二进制布局不含糊.
+
+## 阶段
+- [x] 阶段1: 回读现有 specs/实现(Importer + Tools)
+- [x] 阶段2: 对齐 v1/v2 与 delta-v1 的真实细节
+- [x] 阶段3: 产出对外可用的规格说明(回复 + 可选落盘文档)
+- [x] 阶段4: 四文件收尾(WORKLOG/notes/LATER_PLANS)
+
+## 关键问题
+1. `.sog4d` 的容器与 `meta.json` schema 的强约束有哪些(哪些必须 fail-fast).
+2. delta-v1 的二进制布局里 update entry 是否包含 reserved 字段(需要按实现对齐).
+3. v2 的 SH rest 按 band 拆分(sh1/sh2/sh3)对 exporter 的影响是什么.
+
+## 做出的决定
+- [决定] 以当前仓库实现为准来输出规格:
+  - `Editor/GsplatSog4DImporter.cs` 代表 Unity 侧"读者"的真实期望.
+  - `Tools~/Sog4D/ply_sequence_to_sog4d.py` 代表一份可运行的"写者"参考实现.
+  - 如发现 OpenSpec 文档与实现不一致,以实现为准,并在回复中明确指出差异.
+
+## 状态
+**已完成**
+- 时间: 2026-02-21
+- 我已输出 `.sog4d` 的统一规格说明,并完成四文件收尾.
+
+## 进展记录
+### 2026-02-21 15:34:59 +0800
+- 已完成回读与对齐:
+  - 以 `Editor/GsplatSog4DImporter.cs` 与 `Tools~/Sog4D/ply_sequence_to_sog4d.py` 为准核对所有字段与二进制布局.
+  - 已更新 `openspec/specs/sog4d-sequence-encoding/spec.md`:
+    - 补齐 `meta.json.version=2` 的 sh1/sh2/sh3 per-band 编码.
+    - 补齐 delta-v1 的 update entry: `(splatId u32, newLabel u16, reserved u16=0)`,并要求 block 内 splatId 严格递增.
+  - `openspec validate --specs --strict` 已通过.
+- 下一步:
+  - 输出 `.sog4d` 的统一规格说明(用于 FreeTimeGsVanilla 改版 exporter).
+  - 然后完成四文件收尾.
+
+### 2026-02-21 15:38:10 +0800
+- 已输出统一规格说明到对话(用于实现 exporter).
+- 已完成四文件收尾:
+  - `task_plan.md`/`notes.md`/`WORKLOG.md`/`LATER_PLANS.md` 均已追加本次任务记录.

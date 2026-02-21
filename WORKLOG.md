@@ -415,3 +415,21 @@
     - `/Users/cuiluming/local_doc/l_dev/my/unity/gaussian_pertimestamp_out/`
   - 质量优先版本也已复制到该目录:
     - `gaussian_pertimestamp_out/gaussian_pertimestamp_quality_sh3.sog4d`
+
+## 2026-02-21 15:34:59 +0800
+- 为了让 FreeTimeGsVanilla 改版 exporter 能直接生成可被 Unity 导入的 `.sog4d`,我回读了 importer + pack 工具,并把规格对齐到实现.
+- 已更新规格文档,补齐实现里已经支持但 OpenSpec 之前未覆盖的部分:
+  - `openspec/specs/sog4d-sequence-encoding/spec.md`:
+    - 补齐 `meta.json.version=2` 的 SH rest per-band 编码(sh1/sh2/sh3).
+    - 补齐 delta-v1 update entry 的真实布局与约束:
+      - `(u32 splatId, u16 newLabel, u16 reserved=0)`.
+      - 同一个 block 内 `splatId` 必须严格递增.
+- 规格一致性校验:
+  - `openspec validate --specs --strict` 通过(8 passed).
+- 已在对话中输出统一后的 `.sog4d` 详细规格,并给出权威参考文件路径(Importer/Tools/Specs).
+
+## 2026-02-21 16:20:30 +0800
+- 为了让 FreeTimeGsVanilla 改版更快落地 `.sog4d` exporter,我补了一份“从 checkpoint 到 `.sog4d`”的数据流映射手册:
+  - `Tools~/Sog4D/FreeTimeGsCheckpointToSog4D.md`
+- 同时在工具 README 增加入口,让使用者不需要翻聊天记录:
+  - `Tools~/Sog4D/README.md`

@@ -258,6 +258,16 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
   --self-check
 ```
 
+---
+
+## 3. FreeTimeGsVanilla checkpoint -> `.sog4d`(数据流映射手册)
+
+如果你的输入不是 PLY 序列,而是 FreeTimeGS/FreeTimeGsVanilla 的 checkpoint(`ckpt_*.pt`),
+并且你希望直接利用其中的 `means/velocities/times/durations` 来生成 `.sog4d`,
+请直接看这份手册:
+
+- `Tools~/Sog4D/FreeTimeGsCheckpointToSog4D.md`
+
 ### 2.8 手动指定 layout(调试或对齐外部工具)
 
 适用场景:

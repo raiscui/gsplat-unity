@@ -158,7 +158,12 @@
 - `f_dc.b = sh0Codebook[B]`
 - `opacity = A / 255`
 
-当 `bands > 0` 时,`streams.sh` 还 MUST 包含:
+当 `bands > 0` 时,SH rest 的编码方式 MUST 由 `meta.json.version` 决定:
+- `version=1`: 使用单一 SHN palette + labels(兼容路径).
+- `version=2`: SH rest 按 band 拆分为 `sh1`/`sh2`/`sh3` 三套 palette + labels(推荐).
+
+#### Encoding v1(meta.json.version == 1): SHN palette + labels
+当 `meta.json.version == 1` 时,`streams.sh` 还 MUST 包含:
 - `shNCount`: 整数,范围 MUST 为 `[1, 65535]`
 - `shNCentroidsType`: 字符串,值 MUST 为 `"f16"` 或 `"f32"`
 - `shNCentroidsPath`: 字符串,例如 `"shN_centroids.bin"`
@@ -197,22 +202,24 @@
 - 每个像素 RG 表示一个 u16 label(小端): `label = r + (g << 8)`
 - `label` MUST 满足 `label < shNCount`
 
-`deltaPath` 指向的二进制文件 MUST 为 little-endian,并使用格式 `shNLabelDeltaV1`:
+`deltaPath` 指向的二进制文件 MUST 为 little-endian,并使用格式 `labelDeltaV1`:
 - Header:
   - `magic`: 8 bytes ASCII,值 MUST 为 `"SOG4DLB1"`
   - `version`: u32,值 MUST 为 `1`
   - `segmentStartFrame`: u32,值 MUST 等于该 segment 的 `startFrame`
   - `segmentFrameCount`: u32,值 MUST 等于该 segment 的 `frameCount`
   - `splatCount`: u32,值 MUST 等于 `meta.json.splatCount`
-  - `shNCount`: u32,值 MUST 等于 `streams.sh.shNCount`
+  - `labelCount`: u32,值 MUST 等于 `streams.sh.shNCount`
 
 delta body MUST 为一组按 frame 顺序的 block.
 对于 segment 内每个 frame(从 `startFrame+1` 到 `startFrame+frameCount-1`):
 - block MUST 以 `updateCount`(u32)开头
 - 随后 MUST 紧跟 `updateCount` 个 update 条目
-- 每个 update MUST 为 `(splatId, newLabel)`:
+- 每个 update MUST 为 `(splatId, newLabel, reserved)`:
   - `splatId`: u32,范围 MUST 为 `[0, splatCount-1]`
-  - `newLabel`: u16,范围 MUST 为 `[0, shNCount-1]`
+  - `newLabel`: u16,范围 MUST 为 `[0, labelCount-1]`
+  - `reserved`: u16,值 MUST 为 `0`
+- 同一个 block 内的 update 条目 MUST 按 `splatId` 严格递增(避免重复或乱序应用).
 
 #### Scenario: shNLabelsEncoding="delta-v1" 时缺少 segments
 - **WHEN** `shNLabelsEncoding="delta-v1"` 但 `shNDeltaSegments` 缺失
@@ -223,30 +230,62 @@ delta body MUST 为一组按 frame 顺序的 block.
 - **THEN** 导入器 MUST 失败,并输出明确的 error(包含 frameIndex 与 label 值)
 
 #### Scenario: shN delta 中 newLabel 越界
-- **WHEN** delta 文件中出现 `newLabel >= shNCount`
+- **WHEN** delta 文件中出现 `newLabel >= labelCount`
 - **THEN** 导入器 MUST 失败,并输出明确的 error(包含 frameIndex 与 newLabel 值)
+
+#### Encoding v2(meta.json.version == 2): per-band palettes(sh1/sh2/sh3)
+当 `meta.json.version == 2` 且 `bands > 0` 时:
+- 系统 MUST 使用 per-band 的 palette + labels,并在 `streams.sh` 下声明:
+  - `sh1`: 当 `bands >= 1` 时 MUST 存在,表示 l=1 的 3 个 rest coefficients.
+  - `sh2`: 当 `bands >= 2` 时 MUST 存在,表示 l=2 的 5 个 rest coefficients.
+  - `sh3`: 当 `bands >= 3` 时 MUST 存在,表示 l=3 的 7 个 rest coefficients.
+
+每个 band stream MUST 为对象,并 MUST 包含:
+- `count`: 整数,范围 MUST 为 `[1, 65535]`
+- `centroidsType`: 字符串,值 MUST 为 `"f16"` 或 `"f32"`
+- `centroidsPath`: 字符串,指向该 band 的 centroids binary 文件
+- `labelsEncoding`: 字符串,值 MUST 为 `"full"` 或 `"delta-v1"`(缺失时视为 `"full"`)
+
+当 `labelsEncoding="full"` 时,该 band stream 还 MUST 包含:
+- `labelsPath`: per-frame 模板,例如 `"frames/{frame}/sh1_labels.webp"`
+
+当 `labelsEncoding="delta-v1"` 时,该 band stream 还 MUST 包含:
+- `deltaSegments`: 数组,按 `startFrame` 升序排列,覆盖 `[0, frameCount)` 的所有帧
+- 并且该 band stream MUST NOT 包含 `labelsPath`
+
+`deltaSegments` 的 segment schema 与 `shNDeltaSegments` 一致:
+- `startFrame`: 整数
+- `frameCount`: 正整数
+- `baseLabelsPath`: 字符串,指向该 segment 首帧的 labels WebP
+- `deltaPath`: 字符串,指向该 segment 的 delta 二进制文件
+
+v2 的 delta 文件 MUST 复用同一个 `labelDeltaV1` 二进制布局:
+- `labelCount` MUST 等于对应 band 的 `count`
+- update 的 `newLabel` MUST 小于该 band 的 `count`
 
 ### Requirement: SH centroids MUST be stored in a binary file for efficiency
 当 `bands > 0` 时,系统 MUST 通过二进制文件承载 SH rest 的 centroids(palette).
 这样做的目的是避免 JSON 解析开销,并降低 bundle 体积.
 
-`streams.sh.shNCentroidsPath` MUST 指向一个 binary 文件(默认 `"shN_centroids.bin"`).
-该文件 MUST 为 little-endian.
+当 `meta.json.version == 1` 时:
+- `streams.sh.shNCentroidsPath` MUST 指向一个 binary 文件(默认 `"shN_centroids.bin"`).
+- 该文件 MUST 为 little-endian.
+- 当 `shNCentroidsType="f16"` 时,该文件 MUST 以 `float16` 存储.
+- 当 `shNCentroidsType="f32"` 时,该文件 MUST 以 `float32` 存储.
+- 并且该文件 MUST 满足 size:
+  - `size == shNCount * restCoeffCount * 3 * sizeof(floatType)`
+  - `restCoeffCount = (bands + 1)^2 - 1`
+  - `3` 表示 RGB 三通道
 
-当 `shNCentroidsType="f16"` 时:
-- 该文件 MUST 以 `float16` 存储
+当 `meta.json.version == 2` 时:
+- 对每个存在的 band stream(`sh1`/`sh2`/`sh3`),其 `centroidsPath` MUST 指向对应的 binary 文件.
+- 该文件 MUST 为 little-endian.
+- 当 `centroidsType="f16"` 时,该文件 MUST 以 `float16` 存储.
+- 当 `centroidsType="f32"` 时,该文件 MUST 以 `float32` 存储.
+- 并且每个文件 MUST 满足 size:
+  - `size == count * coeffCount * 3 * sizeof(floatType)`
+  - `coeffCount` 固定为: `sh1=3`,`sh2=5`,`sh3=7`
 
-当 `shNCentroidsType="f32"` 时:
-- 该文件 MUST 以 `float32` 存储
-
-并且该文件 MUST 满足 size:
-- `size == shNCount * restCoeffCount * 3 * sizeof(floatType)`
-
-其中:
-- `restCoeffCount = (bands + 1)^2 - 1`
-- `3` 表示 RGB 三通道
-
-#### Scenario: centroids.bin 尺寸不匹配
-- **WHEN** `shN_centroids.bin` 的文件大小不满足公式
+#### Scenario: centroids binary 尺寸不匹配
+- **WHEN** 任意一个被 `streams.sh.*.centroidsPath` 引用的 centroids binary 文件大小不满足对应公式
 - **THEN** 导入器 MUST 失败,并输出明确的 error(包含期望 size 与实际 size)
-

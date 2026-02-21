@@ -55,3 +55,14 @@
   - 方向:
     - 提供 `Editor/Plugins/Windows/*.dll` 与 `Editor/Plugins/Linux/*.so` 版本的 `GsplatWebpDecoder`.
     - 统一由 `Editor/GsplatWebpNative.cs` 做 P/Invoke(按平台分发二进制即可).
+
+## 2026-02-21 15:34:59 +0800
+- 候选补强: 增加 `.sog4d` v2 的最小测试数据与 importer 回归用例.
+  - 背景:
+    - 当前 `Tests/Editor/Sog4DTestData/` 只有 v1(delta-v1) 的最小 bundle.
+    - 但实现已经支持 `meta.json.version=2` 的 sh1/sh2/sh3 per-band 编码与 per-band deltaSegments.
+  - 目标:
+    - 提供一份 `minimal_valid_v2_*.sog4d.zip` 测试数据.
+    - 覆盖 per-band centroids size 校验,labels(full/delta-v1) 两条路径.
+  - 价值:
+    - 防止未来改动导致 v2 路径 silent break.

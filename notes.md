@@ -677,3 +677,72 @@
 - 约定(本次输出采用):
   - 把 `.sog4d` 输出集中放到一个独立目录:
     - `/Users/cuiluming/local_doc/l_dev/my/unity/gaussian_pertimestamp_out/`
+
+---
+
+## 2026-02-21 15:34:59 +0800: 输出 `.sog4d` 规格(给 FreeTimeGsVanilla 改版 exporter)
+
+### 权威来源(以实现为准)
+
+- 规格入口:
+  - `openspec/specs/sog4d-container/spec.md`
+  - `openspec/specs/sog4d-sequence-encoding/spec.md`
+  - `openspec/specs/sog4d-unity-importer/spec.md`
+- 读者实现(Unity importer):
+  - `Editor/GsplatSog4DImporter.cs`
+- 写者实现(离线 pack/validate 工具):
+  - `Tools~/Sog4D/ply_sequence_to_sog4d.py`
+- 运行时解码(用于对齐字节语义):
+  - `Runtime/Shaders/GsplatSequenceDecode.compute`
+
+### 这次补齐/对齐的关键细节
+
+- delta-v1 的 update entry 真实布局:
+  - `u32 splatId` + `u16 newLabel` + `u16 reserved`.
+  - `reserved` 必须为 0.
+  - 同一个 block 内,`splatId` 必须严格递增.
+- `meta.json.version=2` 的 SH rest 编码:
+  - SH rest 按 band 拆分为 `sh1`(3 coeff),`sh2`(5 coeff),`sh3`(7 coeff).
+  - 每个 band 都是独立的 palette(centroids.bin) + labels(WebP 或 delta-v1).
+- WebP 是数据图:
+  - 必须 lossless.
+  - 读取时必须禁用 sRGB/压缩/mipmap/重采样等会改变 byte 的处理.
+
+### exporter 最小 checklist(避免踩坑)
+
+- `splatCount` 必须 frame-to-frame 稳定,并且 splatId 的顺序在所有帧一致.
+- `layout.type` 当前只支持 `"row-major"`,并且 `pixelIndex == splatId`.
+- 所有 per-frame 路径模板:
+  - 必须包含 `{frame}`.
+  - `{frame}` 必须替换为 5 位零填充十进制(`00000`).
+- ZIP bundle 内的所有路径必须是相对路径:
+  - 只能用 "/" 分隔符.
+  - 不能包含 ":".
+  - 不能包含 "." 或 ".." 片段(避免 path traversal).
+
+---
+
+## 2026-02-21 16:20:30 +0800: FreeTimeGsVanilla checkpoint 的 4D 字段仍然存在(用于 `.sog4d` exporter 映射)
+
+### 公开仓库事实(可直接对照代码)
+
+- `OpsiClear/FreeTimeGsVanilla` 的 checkpoint(`ckpt_*.pt`)里,`ckpt["splats"]` 仍然包含:
+  - `means/scales/quats/opacities/sh0/shN/times/durations/velocities`
+  - 并且 `opacities` 是 logit,`scales` 是 log scale,`durations` 是 log(sigma).
+- temporal opacity 的权威实现:
+  - `sigma = exp(durations)`
+  - `temporal_opacity(t) = exp(-0.5 * ((t - mu_t)/sigma)^2)`
+  - `opacity(t) = sigmoid(opacities_logit) * temporal_opacity(t)`
+
+### 易踩坑
+
+- 公开仓库里存在一个容易误抄的片段:
+  - `_export_ply_compact()` 内部曾出现过“直接用 durations 做除法”的写法.
+  - 但同仓库的 `compute_temporal_opacity()` 明确使用 `exp(durations)`.
+  - 因此 exporter 侧应以 `compute_temporal_opacity()` 的公式为准,避免把 log(sigma) 当 sigma 用.
+
+### 本仓库给 exporter 的落盘手册
+
+- 已新增手册:
+  - `Tools~/Sog4D/FreeTimeGsCheckpointToSog4D.md`
+- 并已在 `Tools~/Sog4D/README.md` 增加入口说明.
