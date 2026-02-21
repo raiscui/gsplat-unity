@@ -20,6 +20,8 @@ namespace Gsplat
         static readonly int k_matrixMv = Shader.PropertyToID("_MatrixMV");
         static readonly int k_timeNormalized = Shader.PropertyToID("_TimeNormalized");
         static readonly int k_has4D = Shader.PropertyToID("_Has4D");
+        static readonly int k_timeModel = Shader.PropertyToID("_TimeModel");
+        static readonly int k_temporalCutoff = Shader.PropertyToID("_TemporalCutoff");
         static readonly int k_eNumKeys = Shader.PropertyToID("e_numKeys");
         static readonly int k_eThreadBlocks = Shader.PropertyToID("e_threadBlocks");
         static readonly int k_bPassHist = Shader.PropertyToID("b_passHist");
@@ -52,6 +54,8 @@ namespace Gsplat
             public GraphicsBuffer DurationBuffer;
             public float TimeNormalized;
             public bool Has4D;
+            public int TimeModel; // 1=window,2=gaussian(0 视为 window)
+            public float TemporalCutoff; // gaussian cutoff
             public GraphicsBuffer InputKeys;
             public GraphicsBuffer InputValues;
             public SupportResources Resources;
@@ -183,6 +187,14 @@ namespace Gsplat
             cmd.SetComputeMatrixParam(m_CS, k_matrixMv, args.MatrixMv);
             cmd.SetComputeFloatParam(m_CS, k_timeNormalized, Mathf.Clamp01(args.TimeNormalized));
             cmd.SetComputeIntParam(m_CS, k_has4D, args.Has4D ? 1 : 0);
+            // 时间核: 兼容旧资产 timeModel=0.
+            var tm = args.TimeModel == 2 ? 2 : 1;
+            var cut = (float.IsNaN(args.TemporalCutoff) || float.IsInfinity(args.TemporalCutoff) ||
+                       args.TemporalCutoff <= 0.0f || args.TemporalCutoff >= 1.0f)
+                ? 0.01f
+                : args.TemporalCutoff;
+            cmd.SetComputeIntParam(m_CS, k_timeModel, tm);
+            cmd.SetComputeFloatParam(m_CS, k_temporalCutoff, cut);
 
             //CalcDistance
             cmd.SetComputeBufferParam(m_CS, m_kernelCalcDistance, k_positionBuffer, positionBuffer);

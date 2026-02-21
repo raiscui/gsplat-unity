@@ -32,6 +32,8 @@ Shader "Gsplat/Standard"
             int _SHDegree;
             int _Has4D;
             float _TimeNormalized;
+            int _TimeModel; // 1=window(time0+duration), 2=gaussian(mu+sigma)
+            float _TemporalCutoff; // gaussian cutoff,例如 0.01
             float4x4 _MATRIX_M;
             StructuredBuffer<uint> _OrderBuffer;
             StructuredBuffer<float3> _PositionBuffer;
@@ -118,17 +120,33 @@ Shader "Gsplat/Standard"
                     return o;
                 }
 
+                float temporalWeight = 1.0;
                 float3 modelCenter = _PositionBuffer[source.id];
                 if (_Has4D != 0)
                 {
                     float t0 = _TimeBuffer[source.id];
                     float dt = _DurationBuffer[source.id];
                     float t = _TimeNormalized;
-                    // 时间窗外: 直接硬裁剪,不产生任何颜色贡献.
-                    if (t < t0 || t > t0 + dt)
+                    if (_TimeModel == 1)
                     {
-                        o.vertex = discardVec;
-                        return o;
+                        // window: 时间窗外直接硬裁剪,不产生任何颜色贡献.
+                        if (t < t0 || t > t0 + dt)
+                        {
+                            o.vertex = discardVec;
+                            return o;
+                        }
+                    }
+                    else
+                    {
+                        // gaussian: t0=mu, dt=sigma
+                        float sigma = max(dt, 1e-6);
+                        float x = (t - t0) / sigma;
+                        temporalWeight = exp(-0.5 * x * x);
+                        if (temporalWeight < _TemporalCutoff)
+                        {
+                            o.vertex = discardVec;
+                            return o;
+                        }
                     }
 
                     float3 vel = _VelocityBuffer[source.id];
@@ -150,6 +168,10 @@ Shader "Gsplat/Standard"
                 }
 
                 float4 color = _ColorBuffer[source.id];
+                // gaussian: 把 temporal weight 乘到 opacity 上,实现平滑淡入淡出.
+                // window: temporalWeight=1.0,保持旧行为.
+                if (_Has4D != 0)
+                    color.w *= temporalWeight;
                 color.rgb = color.rgb * SH_C0 + 0.5;
                 #ifndef SH_BANDS_0
                 // calculate the model-space view direction

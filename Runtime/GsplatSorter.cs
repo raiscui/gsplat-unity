@@ -24,6 +24,8 @@ namespace Gsplat
         // --------------------------------------------------------------------
         public bool Has4D { get; }
         public float TimeNormalized { get; }
+        public int TimeModel { get; } // 1=window, 2=gaussian(0 视为 window)
+        public float TemporalCutoff { get; } // gaussian cutoff,仅在 TimeModel=2 时使用
         public GraphicsBuffer VelocityBuffer { get; }
         public GraphicsBuffer TimeBuffer { get; }
         public GraphicsBuffer DurationBuffer { get; }
@@ -196,6 +198,8 @@ namespace Gsplat
                     DurationBuffer = gs.DurationBuffer,
                     Has4D = gs.Has4D,
                     TimeNormalized = gs.TimeNormalized,
+                    TimeModel = gs.TimeModel,
+                    TemporalCutoff = gs.TemporalCutoff,
                     InputKeys = res.InputKeys,
                     InputValues = res.OrderBuffer,
                     Resources = res.Resources

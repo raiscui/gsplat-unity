@@ -47,6 +47,8 @@ namespace Gsplat
         static readonly int k_shDegree = Shader.PropertyToID("_SHDegree");
         static readonly int k_has4D = Shader.PropertyToID("_Has4D");
         static readonly int k_timeNormalized = Shader.PropertyToID("_TimeNormalized");
+        static readonly int k_timeModel = Shader.PropertyToID("_TimeModel");
+        static readonly int k_temporalCutoff = Shader.PropertyToID("_TemporalCutoff");
 
 #if UNITY_EDITOR
         // --------------------------------------------------------------------
@@ -168,8 +170,11 @@ namespace Gsplat
         /// <param name="shDegree">Order of SH coefficients used for rendering. The final value is capped by the SHBands property.</param>
         /// <param name="timeNormalized">归一化时间 [0,1],仅在 Has4D=true 时生效.</param>
         /// <param name="motionPadding">4D 运动的保守 padding(对象空间),用于避免剔除错误.</param>
+        /// <param name="timeModel">时间核语义: 1=window(time0+duration), 2=gaussian(mu+sigma).</param>
+        /// <param name="temporalCutoff">gaussian cutoff,仅在 timeModel=2 时使用.</param>
         public void Render(uint splatCount, Transform transform, Bounds localBounds, int layer,
-            bool gammaToLinear = false, int shDegree = 3, float timeNormalized = 0.0f, float motionPadding = 0.0f)
+            bool gammaToLinear = false, int shDegree = 3, float timeNormalized = 0.0f, float motionPadding = 0.0f,
+            int timeModel = 1, float temporalCutoff = 0.01f)
         {
             if (!Valid || !GsplatSettings.Instance.Valid || !GsplatSorter.Instance.Valid)
                 return;
@@ -181,6 +186,15 @@ namespace Gsplat
             m_propertyBlock.SetMatrix(k_matrixM, transform.localToWorldMatrix);
             m_propertyBlock.SetInteger(k_has4D, Has4D ? 1 : 0);
             m_propertyBlock.SetFloat(k_timeNormalized, Mathf.Clamp01(timeNormalized));
+            // 时间核:
+            // - 兼容旧资产: timeModel=0 视为 window.
+            // - temporalCutoff 仅用于 gaussian,但我们仍统一设置,避免 shader 侧分支依赖未初始化值.
+            var tm = timeModel == 2 ? 2 : 1;
+            var cut = (float.IsNaN(temporalCutoff) || float.IsInfinity(temporalCutoff) || temporalCutoff <= 0.0f || temporalCutoff >= 1.0f)
+                ? 0.01f
+                : temporalCutoff;
+            m_propertyBlock.SetInteger(k_timeModel, tm);
+            m_propertyBlock.SetFloat(k_temporalCutoff, cut);
 
             // 对 4D 运动做保守 bounds 扩展,避免相机剔除错误.
             if (motionPadding > 0.0f && !float.IsNaN(motionPadding) && !float.IsInfinity(motionPadding))

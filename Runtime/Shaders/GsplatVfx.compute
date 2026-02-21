@@ -31,6 +31,8 @@ StructuredBuffer<float> _DurationBuffer;
 int _SplatCount;
 float _TimeNormalized;
 int _Has4D;
+int _TimeModel; // 1=window(time0+duration), 2=gaussian(mu+sigma)
+float _TemporalCutoff; // gaussian cutoff,例如 0.01
 
 // --------------------------------------------------------------------
 // 输出: 提供给 VFX Graph 的 buffers.
@@ -110,16 +112,33 @@ void BuildDynamic(uint3 id : SV_DispatchThreadID)
     float dt = _DurationBuffer[idx];
     float t = _TimeNormalized;
 
-    // 时间窗外: 透明度清零(不贡献任何颜色).
-    // 注意: position 写回 pos0 是为了避免出现 NaN/Inf 扩散到后续计算.
-    if (t < t0 || t > t0 + dt)
+    float temporalWeight = 1.0;
+    if (_TimeModel == 1)
     {
-        _VfxPositionBuffer[idx] = pos0;
-        _VfxColorBuffer[idx] = float4(baseRgb, 0.0);
-        return;
+        // window: 时间窗外透明度清零(不贡献任何颜色).
+        // 注意: position 写回 pos0 是为了避免出现 NaN/Inf 扩散到后续计算.
+        if (t < t0 || t > t0 + dt)
+        {
+            _VfxPositionBuffer[idx] = pos0;
+            _VfxColorBuffer[idx] = float4(baseRgb, 0.0);
+            return;
+        }
+    }
+    else
+    {
+        // gaussian: t0=mu, dt=sigma
+        float sigma = max(dt, 1e-6);
+        float x = (t - t0) / sigma;
+        temporalWeight = exp(-0.5 * x * x);
+        if (temporalWeight < _TemporalCutoff)
+        {
+            _VfxPositionBuffer[idx] = pos0;
+            _VfxColorBuffer[idx] = float4(baseRgb, 0.0);
+            return;
+        }
     }
 
     float3 vel = _VelocityBuffer[idx];
     _VfxPositionBuffer[idx] = pos0 + vel * (t - t0);
-    _VfxColorBuffer[idx] = float4(baseRgb, col0.w);
+    _VfxColorBuffer[idx] = float4(baseRgb, col0.w * temporalWeight);
 }

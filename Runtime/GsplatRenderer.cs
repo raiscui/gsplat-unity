@@ -39,6 +39,8 @@ namespace Gsplat
         public bool Has4D => m_renderer != null && m_renderer.Has4D;
         bool IGsplat.Has4D => m_renderer != null && m_renderer.Has4D;
         float IGsplat.TimeNormalized => m_timeNormalizedThisFrame;
+        int IGsplat.TimeModel => GetEffectiveTimeModel();
+        float IGsplat.TemporalCutoff => GetEffectiveTemporalCutoff();
         GraphicsBuffer IGsplat.VelocityBuffer => m_renderer != null ? m_renderer.VelocityBuffer : null;
         GraphicsBuffer IGsplat.TimeBuffer => m_renderer != null ? m_renderer.TimeBuffer : null;
         GraphicsBuffer IGsplat.DurationBuffer => m_renderer != null ? m_renderer.DurationBuffer : null;
@@ -68,6 +70,23 @@ namespace Gsplat
                    asset.Velocities != null &&
                    asset.Times != null &&
                    asset.Durations != null;
+        }
+
+        int GetEffectiveTimeModel()
+        {
+            // 兼容旧资产:
+            // - 旧版本没有 TimeModel 字段时,默认值可能为 0.
+            // - 我们把 0 视为 window,以保持旧行为不变.
+            var m = (int)(GsplatAsset ? GsplatAsset.TimeModel : (byte)0);
+            return m == 2 ? 2 : 1;
+        }
+
+        float GetEffectiveTemporalCutoff()
+        {
+            var c = GsplatAsset ? GsplatAsset.TemporalGaussianCutoff : 0.0f;
+            if (float.IsNaN(c) || float.IsInfinity(c) || c <= 0.0f || c >= 1.0f)
+                return 0.01f;
+            return c;
         }
 
         void RefreshEffectiveConfigAndLog()
@@ -302,7 +321,8 @@ namespace Gsplat
                 }
 
                 m_renderer.Render(SplatCount, transform, GsplatAsset.Bounds,
-                    gameObject.layer, GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding);
+                    gameObject.layer, GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding,
+                    timeModel: GetEffectiveTimeModel(), temporalCutoff: GetEffectiveTemporalCutoff());
             }
         }
     }

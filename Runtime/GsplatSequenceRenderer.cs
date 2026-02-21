@@ -118,6 +118,8 @@ namespace Gsplat
         // 4DGS buffers(本序列后端不使用 velocity/time/duration,但仍返回 dummy buffer 以避免 compute 绑定报错).
         bool IGsplat.Has4D => m_renderer != null && m_renderer.Has4D;
         float IGsplat.TimeNormalized => m_timeNormalizedThisFrame;
+        int IGsplat.TimeModel => 1; // sequence 后端不使用 4D 时间核,保持 window 默认值
+        float IGsplat.TemporalCutoff => 0.01f;
         GraphicsBuffer IGsplat.VelocityBuffer => m_renderer != null ? m_renderer.VelocityBuffer : null;
         GraphicsBuffer IGsplat.TimeBuffer => m_renderer != null ? m_renderer.TimeBuffer : null;
         GraphicsBuffer IGsplat.DurationBuffer => m_renderer != null ? m_renderer.DurationBuffer : null;
@@ -224,7 +226,8 @@ namespace Gsplat
                 return;
 
             m_renderer.Render(SplatCount, transform, SequenceAsset.UnionBounds, gameObject.layer,
-                GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f);
+                GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
+                timeModel: 1, temporalCutoff: 0.01f);
         }
 
         bool TryCreateOrRecreateRenderer()

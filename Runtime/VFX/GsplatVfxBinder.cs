@@ -155,6 +155,8 @@ namespace Gsplat.VFX
         static readonly int k_splatCount = Shader.PropertyToID("_SplatCount");
         static readonly int k_timeNormalized = Shader.PropertyToID("_TimeNormalized");
         static readonly int k_has4D = Shader.PropertyToID("_Has4D");
+        static readonly int k_timeModel = Shader.PropertyToID("_TimeModel");
+        static readonly int k_temporalCutoff = Shader.PropertyToID("_TemporalCutoff");
 
         const int k_threads = 256;
 
@@ -191,6 +193,8 @@ namespace Gsplat.VFX
         GraphicsBuffer m_lastDynamicVelocityBuffer;
         GraphicsBuffer m_lastDynamicTimeBuffer;
         GraphicsBuffer m_lastDynamicDurationBuffer;
+        int m_lastDynamicTimeModel = -1;
+        float m_lastDynamicTemporalCutoff = float.NaN;
 
 #if UNITY_EDITOR
         // ----------------------------------------------------------------
@@ -272,6 +276,8 @@ namespace Gsplat.VFX
             m_lastDynamicVelocityBuffer = null;
             m_lastDynamicTimeBuffer = null;
             m_lastDynamicDurationBuffer = null;
+            m_lastDynamicTimeModel = -1;
+            m_lastDynamicTemporalCutoff = float.NaN;
         }
 
 #if UNITY_EDITOR
@@ -416,10 +422,24 @@ namespace Gsplat.VFX
             // 3D-only 时,timeNormalized 对输出无影响,用一个稳定值避免 Inspector 拖动导致空转.
             var effectiveTimeNormalized = GsplatRenderer.Has4D ? timeNormalized : 0.0f;
 
+            // 时间核: 与主后端保持一致,避免 VFX 后端的可见性与 motion 语义走偏.
+            // 兼容旧资产: TimeModel=0 视为 window.
+            var timeModel = 1;
+            var cutoff = 0.01f;
+            if (GsplatRenderer && GsplatRenderer.GsplatAsset)
+            {
+                timeModel = GsplatRenderer.GsplatAsset.TimeModel == 2 ? 2 : 1;
+                var c = GsplatRenderer.GsplatAsset.TemporalGaussianCutoff;
+                if (!float.IsNaN(c) && !float.IsInfinity(c) && c > 0.0f && c < 1.0f)
+                    cutoff = c;
+            }
+
             // 输入完全一致时跳过 Dispatch,避免 TimeNormalized 静止时每帧空转.
             // 注意: 这里对 timeNormalized 用 Approximately,避免 Inspector slider 的微小抖动导致无法命中缓存.
             if (m_lastDynamicActiveCount == activeCount &&
                 Mathf.Approximately(m_lastDynamicTimeNormalized, effectiveTimeNormalized) &&
+                m_lastDynamicTimeModel == timeModel &&
+                Mathf.Approximately(m_lastDynamicTemporalCutoff, cutoff) &&
                 m_lastDynamicPositionBuffer == pos &&
                 m_lastDynamicColorBuffer == col &&
                 m_lastDynamicVelocityBuffer == vel &&
@@ -436,10 +456,14 @@ namespace Gsplat.VFX
             m_lastDynamicVelocityBuffer = vel;
             m_lastDynamicTimeBuffer = t0;
             m_lastDynamicDurationBuffer = dt;
+            m_lastDynamicTimeModel = timeModel;
+            m_lastDynamicTemporalCutoff = cutoff;
 
             VfxComputeShader.SetInt(k_splatCount, activeCount);
             VfxComputeShader.SetInt(k_has4D, GsplatRenderer.Has4D ? 1 : 0);
             VfxComputeShader.SetFloat(k_timeNormalized, Mathf.Clamp01(effectiveTimeNormalized));
+            VfxComputeShader.SetInt(k_timeModel, timeModel);
+            VfxComputeShader.SetFloat(k_temporalCutoff, cutoff);
 
             VfxComputeShader.SetBuffer(m_kernelBuildDynamic, k_positionBuffer, pos);
             VfxComputeShader.SetBuffer(m_kernelBuildDynamic, k_colorBuffer, col);

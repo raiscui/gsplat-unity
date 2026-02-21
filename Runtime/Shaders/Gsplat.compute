@@ -35,6 +35,8 @@ StructuredBuffer<float> _DurationBuffer;
 float4x4 _MatrixMV;
 float _TimeNormalized;
 int _Has4D;
+int _TimeModel; // 1=window(time0+duration), 2=gaussian(mu+sigma)
+float _TemporalCutoff; // gaussian cutoff,例如 0.01
 
 [numthreads(GROUP_SIZE,1,1)]
 void InitPayload(uint3 id : SV_DispatchThreadID)
@@ -60,11 +62,26 @@ void CalcDistance(uint3 id : SV_DispatchThreadID)
         float t0 = _TimeBuffer[splatId];
         float dt = _DurationBuffer[splatId];
         float t = _TimeNormalized;
-        // 时间窗外: 写入一个极端 key,把它们推到排序尾部(渲染仍以 shader 裁剪为准).
-        if (t < t0 || t > t0 + dt)
+        if (_TimeModel == 1)
         {
-            b_sort[idx] = 1e30;
-            return;
+            // window: 时间窗外写入一个极端 key,把它们推到排序尾部(渲染仍以 shader 裁剪为准).
+            if (t < t0 || t > t0 + dt)
+            {
+                b_sort[idx] = 1e30;
+                return;
+            }
+        }
+        else
+        {
+            // gaussian: t0=mu, dt=sigma
+            float sigma = max(dt, 1e-6);
+            float x = (t - t0) / sigma;
+            float w = exp(-0.5 * x * x);
+            if (w < _TemporalCutoff)
+            {
+                b_sort[idx] = 1e30;
+                return;
+            }
         }
 
         float3 vel = _VelocityBuffer[splatId];
