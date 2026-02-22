@@ -434,6 +434,14 @@
 - 同时在工具 README 增加入口,让使用者不需要翻聊天记录:
   - `Tools~/Sog4D/README.md`
 
+## 2026-02-22 14:47:09 UTC
+- `.splat4d v2` 支持 delta-v1 的“运行时动态 SH”(GPU compute scatter)闭环落地:
+  - `Runtime/GsplatAsset.cs` 增加可序列化的 `Splat4DShDeltaSegment` 与 per-band delta 字段(隐藏字段).
+  - `Editor/GsplatSplat4DImporter.cs`(v3)在 `labelsEncoding=delta-v1` 时持久化 per-segment 的 SHLB(base labels)与 SHDL(delta bytes),并保留 frame0 解码行为用于初次上传.
+  - `Runtime/Shaders/GsplatShDelta.compute` 新增按 updates(splatId,label)对 `SHBuffer` 做散写的 kernels.
+  - `Runtime/GsplatRenderer.cs` 在 `Update` 渲染前按 `TimeNormalized` 应用 deltas,并在 compute 不可用时禁用动态 SH(保持 frame0,避免黑屏).
+  - 新增 EditMode tests: `Tests/Editor/GsplatSplat4DImporterDeltaV1Tests.cs`(纯 C# 解码 delta-v1,不跑 GPU).
+  - 更新 `CHANGELOG.md` 记录该用户可见行为变化.
 ## 2026-02-22 15:20:43 +0800
 - 修复 FreeTimeGsVanilla 导出的 legacy `.sog4d` meta.json 兼容问题(让 Unity 能导入):
   - `Editor/GsplatSog4DImporter.cs` / `Runtime/GsplatSog4DRuntimeBundle.cs`:

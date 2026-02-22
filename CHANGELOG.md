@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Supports streaming data from RAM to VRAM ([#6](https://github.com/wuyize25/gsplat-unity/issues/6)). An option `Async Upload` is added to `GsplatRenderer` to enable this feature.
+- `.splat4d v2` supports SH delta-v1 at runtime: when `labelsEncoding=delta-v1`, `GsplatRenderer` applies per-frame label updates and uses a compute shader to scatter-write updated SH coefficients into `SHBuffer` (falls back to static frame0 SH when compute is unavailable).
 
 ### Fixed
 

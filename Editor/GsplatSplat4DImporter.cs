@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using UnityEditor;
@@ -20,7 +21,8 @@ namespace Gsplat.Editor
     // importer version bump:
     // - v2: v1 `.splat4d` 在遇到明显非归一化的 time/duration 时,支持自动识别为 gaussian(mu+sigma).
     // - 目的: 避免旧数据在 Unity 内被错误按 window 语义裁剪,导致观感退化成"薄层/稀疏".
-    [ScriptedImporter(2, "splat4d")]
+    // - v3: `.splat4d v2` labelsEncoding=delta-v1 时,把 per-segment base labels + delta bytes 持久化到资产,供运行时应用.
+    [ScriptedImporter(3, "splat4d")]
     public sealed class GsplatSplat4DImporter : ScriptedImporter
     {
         // 与 HLSL 侧 `SH_C0` 保持一致,用于把 baseRgb 还原回 f_dc 系数:
@@ -885,6 +887,17 @@ namespace Gsplat.Editor
             var shBands = (int)header.shBands;
             var restCoeffCountTotal = GsplatUtils.SHBandsToCoefficientCount((byte)shBands);
 
+            // 避免旧字段残留:
+            // - 同一路径下资产在 reimport 时会复用同一个 ScriptableObject 实例,
+            //   如果不清空,可能出现“新文件没带 delta,但资产还残留旧 delta”的混乱状态.
+            asset.ShFrameCount = 0;
+            asset.Sh1Centroids = null;
+            asset.Sh2Centroids = null;
+            asset.Sh3Centroids = null;
+            asset.Sh1DeltaSegments = null;
+            asset.Sh2DeltaSegments = null;
+            asset.Sh3DeltaSegments = null;
+
             Splat4DV2BandInfo GetBandInfo(int band)
             {
                 return band switch
@@ -911,6 +924,38 @@ namespace Gsplat.Editor
                 3 => 8,
                 _ => 0
             };
+
+            void SetBandCentroids(int band, Vector3[] centroids)
+            {
+                switch (band)
+                {
+                    case 1:
+                        asset.Sh1Centroids = centroids;
+                        break;
+                    case 2:
+                        asset.Sh2Centroids = centroids;
+                        break;
+                    case 3:
+                        asset.Sh3Centroids = centroids;
+                        break;
+                }
+            }
+
+            void SetBandDeltaSegments(int band, global::Gsplat.Splat4DShDeltaSegment[] deltaSegments)
+            {
+                switch (band)
+                {
+                    case 1:
+                        asset.Sh1DeltaSegments = deltaSegments;
+                        break;
+                    case 2:
+                        asset.Sh2DeltaSegments = deltaSegments;
+                        break;
+                    case 3:
+                        asset.Sh3DeltaSegments = deltaSegments;
+                        break;
+                }
+            }
 
             Splat4DV2Section? FindSingle(uint kind, uint band)
             {
@@ -950,6 +995,8 @@ namespace Gsplat.Editor
 
                 // labels: full 或 delta-v1(我们只需要 base labels(第一个 segment))
                 Splat4DV2Section labelsSection;
+                List<global::Gsplat.Splat4DShDeltaSegment> deltaSegmentsForBand = null;
+                var expectedLabelsBytes = (ulong)header.splatCount * 2ul;
                 if (info.labelsEncoding == 1)
                 {
                     var lbOpt = FindSingle(k_sectShLb, (uint)band);
@@ -977,7 +1024,8 @@ namespace Gsplat.Editor
                         return Fail($"v2 missing base labels segment(startFrame=0) for band={band}");
                     labelsSection = lb0.Value;
 
-                    // 轻量校验 segments 覆盖性与 delta header.
+                    // 轻量校验 segments 覆盖性与 delta header,并把 base labels + delta bytes 持久化到资产.
+                    deltaSegmentsForBand = new List<global::Gsplat.Splat4DShDeltaSegment>();
                     var expectedStart = 0u;
                     while (expectedStart < header.frameCount)
                     {
@@ -999,6 +1047,10 @@ namespace Gsplat.Editor
                             return Fail($"v2 delta-v1 segments broken for band={band}: missing SHLB/SHDL at startFrame={expectedStart}");
                         if (segLb.Value.frameCount == 0 || segLb.Value.frameCount != segDl.Value.frameCount)
                             return Fail($"v2 delta-v1 segments mismatch for band={band} startFrame={expectedStart}");
+                        if (segLb.Value.length != expectedLabelsBytes)
+                            return Fail($"invalid SHLB.length for band={band} startFrame={expectedStart}: {segLb.Value.length}, expected {expectedLabelsBytes}");
+
+                        if (!ValidateRange(segLb.Value, $"SHLB(band={band},start={expectedStart})")) return false;
 
                         if (!ValidateRange(segDl.Value, $"SHDL(band={band},start={expectedStart})")) return false;
                         fs.Seek((long)segDl.Value.offset, SeekOrigin.Begin);
@@ -1024,12 +1076,32 @@ namespace Gsplat.Editor
                             return Fail($"invalid delta header in SHDL(band={band},start={expectedStart})");
                         }
 
+                        // 读取并持久化 base labels / delta bytes(运行时使用).
+                        fs.Seek((long)segLb.Value.offset, SeekOrigin.Begin);
+                        var baseBytes = br.ReadBytes((int)segLb.Value.length);
+                        if (baseBytes.Length != (int)segLb.Value.length)
+                            return Fail($"unexpected EOF while reading SHLB(band={band},start={expectedStart})");
+
+                        fs.Seek((long)segDl.Value.offset, SeekOrigin.Begin);
+                        var deltaBytes = br.ReadBytes((int)segDl.Value.length);
+                        if (deltaBytes.Length != (int)segDl.Value.length)
+                            return Fail($"unexpected EOF while reading SHDL(band={band},start={expectedStart})");
+
+                        deltaSegmentsForBand.Add(new global::Gsplat.Splat4DShDeltaSegment
+                        {
+                            StartFrame = (int)expectedStart,
+                            FrameCount = (int)segLb.Value.frameCount,
+                            BaseLabelsBytes = baseBytes,
+                            DeltaBytes = deltaBytes
+                        });
+
                         expectedStart += segLb.Value.frameCount;
                     }
+
+                    asset.ShFrameCount = (int)header.frameCount;
                 }
 
                 if (!ValidateRange(labelsSection, $"SHLB(band={band})")) return false;
-                var expectedLabelsBytes = (ulong)header.splatCount * 2ul;
                 if (labelsSection.length != expectedLabelsBytes)
                     return Fail($"invalid SHLB.length for band={band}: {labelsSection.length}, expected {expectedLabelsBytes}");
 
@@ -1077,6 +1149,9 @@ namespace Gsplat.Editor
                     }
                 }
 
+                // centroids 持久化到资产(运行时应用 delta 需要它).
+                SetBandCentroids(band, centroids);
+
                 // 读取 labels
                 fs.Seek((long)labelsSection.offset, SeekOrigin.Begin);
                 var labelsBytes = br.ReadBytes((int)labelsSection.length);
@@ -1106,6 +1181,10 @@ namespace Gsplat.Editor
                             i / (float)splatCount);
                     }
                 }
+
+                // delta segments 持久化到资产(仅 delta-v1).
+                if (deltaSegmentsForBand != null)
+                    SetBandDeltaSegments(band, deltaSegmentsForBand.ToArray());
             }
 
             return true;

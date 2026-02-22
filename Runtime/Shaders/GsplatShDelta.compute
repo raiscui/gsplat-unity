@@ -1,0 +1,61 @@
+// Copyright (c) 2026 Yize Wu
+// SPDX-License-Identifier: MIT
+
+// `.splat4d v2` delta-v1: 用稀疏 updates(splatId,label)对 SHBuffer 做 scatter 写入.
+// 设计目标:
+// - 不依赖 wave ops.
+// - 不在 shader 内查询 buffer size(兼容 Metal/HLSLcc).
+// - 每个线程处理 1 条 update.
+
+#pragma kernel ApplySh1Updates
+#pragma kernel ApplySh2Updates
+#pragma kernel ApplySh3Updates
+
+StructuredBuffer<uint2> _Updates; // (splatId,label)
+int _UpdateCount;
+
+StructuredBuffer<float3> _Centroids; // entry-major: [label][coeff]
+RWStructuredBuffer<float3> _SHBuffer; // [splatId][restCoeff]
+
+int _RestCoeffCountTotal; // e.g. shBands=3 -> 15
+int _BandCoeffOffset; // sh1=0, sh2=3, sh3=8
+int _BandCoeffCount; // sh1=3, sh2=5, sh3=7
+
+void ApplyUpdate(uint idx)
+{
+    if (idx >= (uint)_UpdateCount)
+        return;
+
+    uint2 u = _Updates[idx];
+    uint splatId = u.x;
+    uint label = u.y;
+
+    uint centroidBase = label * (uint)_BandCoeffCount;
+    uint dstBase = splatId * (uint)_RestCoeffCountTotal + (uint)_BandCoeffOffset;
+
+    // 备注:
+    // - 这里假设 importer 已保证 label/splatId 的范围合法.
+    // - 若输入不可信,建议在 C# 侧做校验并禁用动态 SH,避免 GPU 越界写入.
+    [loop]
+    for (uint c = 0; c < (uint)_BandCoeffCount; c++)
+        _SHBuffer[dstBase + c] = _Centroids[centroidBase + c];
+}
+
+[numthreads(256, 1, 1)]
+void ApplySh1Updates(uint3 id : SV_DispatchThreadID)
+{
+    ApplyUpdate(id.x);
+}
+
+[numthreads(256, 1, 1)]
+void ApplySh2Updates(uint3 id : SV_DispatchThreadID)
+{
+    ApplyUpdate(id.x);
+}
+
+[numthreads(256, 1, 1)]
+void ApplySh3Updates(uint3 id : SV_DispatchThreadID)
+{
+    ApplyUpdate(id.x);
+}
+
