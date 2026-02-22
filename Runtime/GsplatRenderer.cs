@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Buffers.Binary;
+using System.IO;
+using System.Runtime.InteropServices;
 using UnityEngine;
 
 namespace Gsplat
@@ -27,6 +30,57 @@ namespace Gsplat
 
         GsplatAsset m_prevAsset;
         GsplatRendererImpl m_renderer;
+
+        // --------------------------------------------------------------------
+        // `.splat4d v2` SH delta-v1 runtime state(可选)
+        // - 当 asset 未提供 delta 字段,或 compute 不可用时,这些资源为 null.
+        // - 设计目标: 在 TimeNormalized 播放时,按 targetFrame 应用 label updates,
+        //   并用 compute scatter 更新 SHBuffer.
+        // --------------------------------------------------------------------
+        [StructLayout(LayoutKind.Sequential)]
+        struct ShDeltaUpdate
+        {
+            public uint splatId;
+            public uint label;
+        }
+
+        sealed class ShDeltaSegmentRuntime
+        {
+            public int StartFrame;
+            public int FrameCount;
+            public int LabelCount;
+            public byte[] BaseLabelsBytes; // u16 little-endian
+            public byte[] DeltaBytes; // delta-v1 header+body
+            public int[] BlockOffsets; // length = FrameCount-1, points to updateCount within DeltaBytes
+        }
+
+        bool m_shDeltaDisabled;
+        bool m_shDeltaInitialized;
+        int m_shDeltaFrameCount;
+        int m_shDeltaCurrentFrame;
+        int m_shDeltaCurrentSegmentIndex;
+
+        ComputeShader m_shDeltaCS;
+        int m_kernelApplySh1 = -1;
+        int m_kernelApplySh2 = -1;
+        int m_kernelApplySh3 = -1;
+
+        GraphicsBuffer m_shDeltaUpdatesBuffer;
+        int m_shDeltaUpdatesCapacity;
+        ShDeltaUpdate[] m_shDeltaUpdatesScratch;
+
+        GraphicsBuffer m_sh1CentroidsBuffer;
+        GraphicsBuffer m_sh2CentroidsBuffer;
+        GraphicsBuffer m_sh3CentroidsBuffer;
+
+        ShDeltaSegmentRuntime[] m_sh1Segments;
+        ShDeltaSegmentRuntime[] m_sh2Segments;
+        ShDeltaSegmentRuntime[] m_sh3Segments;
+
+        ushort[] m_sh1Labels;
+        ushort[] m_sh2Labels;
+        ushort[] m_sh3Labels;
+        ushort[] m_shLabelsScratch;
 
         public bool Valid =>
             EnableGsplatBackend &&
@@ -87,6 +141,845 @@ namespace Gsplat
             if (float.IsNaN(c) || float.IsInfinity(c) || c <= 0.0f || c >= 1.0f)
                 return 0.01f;
             return c;
+        }
+
+        static int BandCoeffCount(int band) => band switch
+        {
+            1 => 3,
+            2 => 5,
+            3 => 7,
+            _ => 0
+        };
+
+        static int BandCoeffOffset(int band) => band switch
+        {
+            1 => 0,
+            2 => 3,
+            3 => 8,
+            _ => 0
+        };
+
+        static int DivRoundUp(int x, int d) => (x + d - 1) / d;
+
+        void DisposeShDeltaResources()
+        {
+            m_shDeltaUpdatesBuffer?.Dispose();
+            m_shDeltaUpdatesBuffer = null;
+            m_shDeltaUpdatesCapacity = 0;
+            m_shDeltaUpdatesScratch = null;
+
+            m_sh1CentroidsBuffer?.Dispose();
+            m_sh2CentroidsBuffer?.Dispose();
+            m_sh3CentroidsBuffer?.Dispose();
+            m_sh1CentroidsBuffer = null;
+            m_sh2CentroidsBuffer = null;
+            m_sh3CentroidsBuffer = null;
+
+            m_sh1Segments = null;
+            m_sh2Segments = null;
+            m_sh3Segments = null;
+
+            m_sh1Labels = null;
+            m_sh2Labels = null;
+            m_sh3Labels = null;
+            m_shLabelsScratch = null;
+
+            m_shDeltaCS = null;
+            m_kernelApplySh1 = -1;
+            m_kernelApplySh2 = -1;
+            m_kernelApplySh3 = -1;
+
+            m_shDeltaInitialized = false;
+            m_shDeltaDisabled = false;
+            m_shDeltaFrameCount = 0;
+            m_shDeltaCurrentFrame = 0;
+            m_shDeltaCurrentSegmentIndex = 0;
+        }
+
+        void EnsureShDeltaUpdatesCapacity(int required)
+        {
+            required = Math.Max(required, 1);
+            if (m_shDeltaUpdatesBuffer != null &&
+                m_shDeltaUpdatesCapacity >= required &&
+                m_shDeltaUpdatesScratch != null &&
+                m_shDeltaUpdatesScratch.Length >= required)
+            {
+                return;
+            }
+
+            // 说明:
+            // - updates 可能在 segment 边界处变大(需要 diff 到 base labels).
+            // - 这里用 NextPowerOfTwo 减少反复扩容次数.
+            var cap = Mathf.NextPowerOfTwo(required);
+            if (cap < required)
+                cap = required; // 极端情况下 NextPowerOfTwo 溢出时兜底
+
+            m_shDeltaUpdatesBuffer?.Dispose();
+            m_shDeltaUpdatesBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, cap, 8);
+            m_shDeltaUpdatesCapacity = cap;
+            m_shDeltaUpdatesScratch = new ShDeltaUpdate[cap];
+        }
+
+        static bool TryValidateKernel(ComputeShader cs, int kernel, string kernelName, out string error)
+        {
+            error = null;
+            if (!cs)
+            {
+                error = "ComputeShader is null";
+                return false;
+            }
+
+            try
+            {
+                if (!cs.IsSupported(kernel))
+                {
+                    error = $"kernel not supported: {kernelName}";
+                    return false;
+                }
+            }
+            catch (Exception e)
+            {
+                error = $"kernel validation threw: {kernelName}: {e.Message}";
+                return false;
+            }
+
+            return true;
+        }
+
+        static bool TryBuildSegmentRuntimes(
+            Splat4DShDeltaSegment[] segments,
+            int effectiveSplatCount,
+            out ShDeltaSegmentRuntime[] runtimes,
+            out string error)
+        {
+            runtimes = null;
+            error = null;
+
+            if (segments == null || segments.Length == 0)
+            {
+                error = "segments missing";
+                return false;
+            }
+
+            var expectedLabelCount = -1;
+            var outArr = new ShDeltaSegmentRuntime[segments.Length];
+            for (var i = 0; i < segments.Length; i++)
+            {
+                var s = segments[i];
+                if (s == null)
+                {
+                    error = $"segment[{i}] is null";
+                    return false;
+                }
+
+                if (s.FrameCount <= 0)
+                {
+                    error = $"segment[{i}] invalid FrameCount={s.FrameCount}";
+                    return false;
+                }
+
+                if (s.BaseLabelsBytes == null || s.BaseLabelsBytes.Length < effectiveSplatCount * 2)
+                {
+                    error = $"segment[{i}] base labels bytes too small: {s.BaseLabelsBytes?.Length ?? 0}";
+                    return false;
+                }
+
+                if (s.DeltaBytes == null || s.DeltaBytes.Length < 28)
+                {
+                    error = $"segment[{i}] delta bytes too small: {s.DeltaBytes?.Length ?? 0}";
+                    return false;
+                }
+
+                var span = s.DeltaBytes.AsSpan();
+                // delta-v1 header: magic(8) + version/start/count/splatCount/labelCount (5*u32)
+                var version = (int)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(8, 4));
+                var segStart = (int)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(12, 4));
+                var segCount = (int)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(16, 4));
+                var splatCount = (int)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(20, 4));
+                var labelCount = (int)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(24, 4));
+                if (version != 1 || segStart != s.StartFrame || segCount != s.FrameCount)
+                {
+                    error = $"segment[{i}] delta header mismatch: v={version} start={segStart} count={segCount}";
+                    return false;
+                }
+
+                if (splatCount < effectiveSplatCount)
+                {
+                    error = $"segment[{i}] delta splatCount too small: {splatCount} < effective {effectiveSplatCount}";
+                    return false;
+                }
+                if (labelCount <= 0)
+                {
+                    error = $"segment[{i}] delta labelCount invalid: {labelCount}";
+                    return false;
+                }
+                if (expectedLabelCount < 0)
+                    expectedLabelCount = labelCount;
+                else if (expectedLabelCount != labelCount)
+                {
+                    error = $"segment[{i}] delta labelCount mismatch: {labelCount} != expected {expectedLabelCount}";
+                    return false;
+                }
+
+                var blockCount = s.FrameCount - 1;
+                var offsets = new int[Math.Max(blockCount, 0)];
+                var p = 28;
+                for (var b = 0; b < blockCount; b++)
+                {
+                    if (p + 4 > span.Length)
+                    {
+                        error = $"segment[{i}] delta truncated while building offsets";
+                        return false;
+                    }
+
+                    offsets[b] = p;
+                    var updateCount = (int)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(p, 4));
+                    p += 4;
+
+                    var need = (long)updateCount * 8L;
+                    if (need < 0 || p + need > span.Length)
+                    {
+                        error = $"segment[{i}] delta updates payload out of range: updateCount={updateCount}";
+                        return false;
+                    }
+
+                    p += (int)need;
+                }
+
+                if (p != span.Length)
+                {
+                    error = $"segment[{i}] delta has trailing bytes: parsed={p} total={span.Length}";
+                    return false;
+                }
+
+                outArr[i] = new ShDeltaSegmentRuntime
+                {
+                    StartFrame = s.StartFrame,
+                    FrameCount = s.FrameCount,
+                    LabelCount = labelCount,
+                    BaseLabelsBytes = s.BaseLabelsBytes,
+                    DeltaBytes = s.DeltaBytes,
+                    BlockOffsets = offsets
+                };
+            }
+
+            runtimes = outArr;
+            return true;
+        }
+
+        static int FindSegmentIndex(ShDeltaSegmentRuntime[] segments, int frame)
+        {
+            if (segments == null)
+                return -1;
+
+            for (var i = 0; i < segments.Length; i++)
+            {
+                var s = segments[i];
+                var start = s.StartFrame;
+                var endExcl = start + s.FrameCount;
+                if (frame >= start && frame < endExcl)
+                    return i;
+            }
+
+            return -1;
+        }
+
+        static int ReadUpdateBlock(
+            ShDeltaSegmentRuntime seg,
+            int relFrame,
+            int effectiveSplatCount,
+            int maxLabelExclusive,
+            ShDeltaUpdate[] outUpdates)
+        {
+            // relFrame: segment 内相对帧索引. startFrame 本身是 rel=0,没有 delta block.
+            if (relFrame <= 0)
+                return 0;
+
+            var span = seg.DeltaBytes.AsSpan();
+            var blockOffset = seg.BlockOffsets[relFrame - 1];
+            var updateCount = (int)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(blockOffset, 4));
+            var p = blockOffset + 4;
+
+            var wrote = 0;
+            var hasLast = false;
+            uint lastSplatId = 0;
+            for (var i = 0; i < updateCount; i++)
+            {
+                var splatId = (uint)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(p, 4));
+                p += 4;
+                var newLabel = (uint)BinaryPrimitives.ReadUInt16LittleEndian(span.Slice(p, 2));
+                p += 2;
+                var reserved = BinaryPrimitives.ReadUInt16LittleEndian(span.Slice(p, 2));
+                p += 2;
+
+                // reserved 必须为 0. 若遇到非法数据,直接抛异常让上层禁用动态 SH.
+                if (reserved != 0)
+                    throw new InvalidDataException("delta-v1 reserved field must be 0");
+
+                // 约束: 同一帧 block 内 splatId 必须严格递增(与 spec 对齐).
+                if (hasLast && splatId <= lastSplatId)
+                    throw new InvalidDataException("delta-v1 splatId must be strictly increasing within a frame");
+                hasLast = true;
+                lastSplatId = splatId;
+
+                if (newLabel >= (uint)maxLabelExclusive)
+                    throw new InvalidDataException("delta-v1 label out of range");
+
+                if (splatId >= (uint)effectiveSplatCount)
+                    continue; // 被 CapSplatCount 截断的部分直接忽略,避免 OOB.
+
+                if (wrote >= outUpdates.Length)
+                    throw new InvalidDataException("delta-v1 updateCount exceeds scratch capacity");
+                outUpdates[wrote++] = new ShDeltaUpdate { splatId = splatId, label = newLabel };
+            }
+
+            return wrote;
+        }
+
+        static void DecodeLabelsAtFrame(
+            ShDeltaSegmentRuntime seg,
+            int targetFrame,
+            int effectiveSplatCount,
+            int maxLabelExclusive,
+            ushort[] outLabels)
+        {
+            // 1) base labels(段起始帧的绝对状态)
+            Buffer.BlockCopy(seg.BaseLabelsBytes, 0, outLabels, 0, effectiveSplatCount * 2);
+
+            // 2) 逐帧应用 delta blocks,直到 targetFrame
+            var rel = targetFrame - seg.StartFrame;
+            if (rel <= 0)
+                return;
+
+            var span = seg.DeltaBytes.AsSpan();
+            for (var r = 1; r <= rel; r++)
+            {
+                var blockOffset = seg.BlockOffsets[r - 1];
+                var updateCount = (int)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(blockOffset, 4));
+                var p = blockOffset + 4;
+                var hasLast = false;
+                uint lastSplatId = 0;
+                for (var i = 0; i < updateCount; i++)
+                {
+                    var splatId = (int)BinaryPrimitives.ReadUInt32LittleEndian(span.Slice(p, 4));
+                    p += 4;
+                    var newLabel = BinaryPrimitives.ReadUInt16LittleEndian(span.Slice(p, 2));
+                    p += 2;
+                    var reserved = BinaryPrimitives.ReadUInt16LittleEndian(span.Slice(p, 2));
+                    p += 2;
+                    if (reserved != 0)
+                        throw new InvalidDataException("delta-v1 reserved field must be 0");
+
+                    if (hasLast && (uint)splatId <= lastSplatId)
+                        throw new InvalidDataException("delta-v1 splatId must be strictly increasing within a frame");
+                    hasLast = true;
+                    lastSplatId = (uint)splatId;
+
+                    if (newLabel >= maxLabelExclusive)
+                        throw new InvalidDataException("delta-v1 label out of range");
+
+                    if (splatId < 0 || splatId >= effectiveSplatCount)
+                        continue;
+                    outLabels[splatId] = newLabel;
+                }
+            }
+        }
+
+        static bool TryValidateSegmentsAligned(
+            ShDeltaSegmentRuntime[] baseSegments,
+            ShDeltaSegmentRuntime[] otherSegments,
+            int band,
+            out string error)
+        {
+            error = null;
+            if (baseSegments == null || baseSegments.Length == 0)
+            {
+                error = "base segments missing";
+                return false;
+            }
+
+            if (otherSegments == null || otherSegments.Length != baseSegments.Length)
+            {
+                error =
+                    $"band={band} segments length mismatch: {otherSegments?.Length ?? 0} != {baseSegments.Length}";
+                return false;
+            }
+
+            for (var i = 0; i < baseSegments.Length; i++)
+            {
+                var a = baseSegments[i];
+                var b = otherSegments[i];
+                if (a.StartFrame != b.StartFrame || a.FrameCount != b.FrameCount)
+                {
+                    error =
+                        $"band={band} segments not aligned at index={i}: " +
+                        $"(start,count)=({b.StartFrame},{b.FrameCount}) != base({a.StartFrame},{a.FrameCount})";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        static bool TryValidateBaseLabelsRange(
+            ShDeltaSegmentRuntime[] segments,
+            int effectiveSplatCount,
+            int band,
+            out string error)
+        {
+            error = null;
+            if (segments == null || segments.Length == 0)
+            {
+                error = $"band={band} segments missing";
+                return false;
+            }
+
+            var maxLabelExclusive = segments[0].LabelCount;
+            if (maxLabelExclusive <= 0)
+            {
+                error = $"band={band} invalid labelCount={maxLabelExclusive}";
+                return false;
+            }
+
+            // 说明:
+            // - importer 只会解码 startFrame=0 的 base labels.
+            // - 其它 segment 的 base labels 仅做 header 校验,不做 label range 校验.
+            // - runtime 需要保证“任意 seek 到 segment base”都不会把越界 label 喂给 GPU.
+            //
+            // 这里选择在 init 时一次性校验所有 segments 的 base labels,换取运行期更安全.
+            for (var s = 0; s < segments.Length; s++)
+            {
+                var seg = segments[s];
+                var byteLen = effectiveSplatCount * 2;
+                if (seg.BaseLabelsBytes == null || seg.BaseLabelsBytes.Length < byteLen)
+                {
+                    error = $"band={band} segment[{s}] base labels too small";
+                    return false;
+                }
+
+                if (BitConverter.IsLittleEndian)
+                {
+                    var labels = MemoryMarshal.Cast<byte, ushort>(seg.BaseLabelsBytes.AsSpan(0, byteLen));
+                    for (var i = 0; i < effectiveSplatCount; i++)
+                    {
+                        if (labels[i] >= maxLabelExclusive)
+                        {
+                            error =
+                                $"band={band} segment[{s}] base label out of range: " +
+                                $"splatId={i} label={labels[i]} >= {maxLabelExclusive}";
+                            return false;
+                        }
+                    }
+                }
+                else
+                {
+                    var span = seg.BaseLabelsBytes.AsSpan(0, byteLen);
+                    for (var i = 0; i < effectiveSplatCount; i++)
+                    {
+                        var label = BinaryPrimitives.ReadUInt16LittleEndian(span.Slice(i * 2, 2));
+                        if (label >= maxLabelExclusive)
+                        {
+                            error =
+                                $"band={band} segment[{s}] base label out of range: " +
+                                $"splatId={i} label={label} >= {maxLabelExclusive}";
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            return true;
+        }
+
+        bool TryDispatchShDeltaUpdates(int band, GraphicsBuffer centroids, int kernel, ShDeltaUpdate[] updates, int updateCount)
+        {
+            if (updateCount <= 0)
+                return true;
+            if (!m_shDeltaCS || kernel < 0 || !centroids || m_renderer == null || m_renderer.SHBuffer == null)
+                return false;
+
+            EnsureShDeltaUpdatesCapacity(updateCount);
+            m_shDeltaUpdatesBuffer.SetData(updates, 0, 0, updateCount);
+
+            var restCoeffCountTotal = GsplatUtils.SHBandsToCoefficientCount(m_renderer.SHBands);
+            var coeffCount = BandCoeffCount(band);
+            var coeffOffset = BandCoeffOffset(band);
+
+            m_shDeltaCS.SetInt("_UpdateCount", updateCount);
+            m_shDeltaCS.SetInt("_RestCoeffCountTotal", restCoeffCountTotal);
+            m_shDeltaCS.SetInt("_BandCoeffOffset", coeffOffset);
+            m_shDeltaCS.SetInt("_BandCoeffCount", coeffCount);
+            m_shDeltaCS.SetBuffer(kernel, "_Updates", m_shDeltaUpdatesBuffer);
+            m_shDeltaCS.SetBuffer(kernel, "_Centroids", centroids);
+            m_shDeltaCS.SetBuffer(kernel, "_SHBuffer", m_renderer.SHBuffer);
+
+            var groups = DivRoundUp(updateCount, 256);
+            m_shDeltaCS.Dispatch(kernel, groups, 1, 1);
+            return true;
+        }
+
+        void TryInitShDeltaRuntime()
+        {
+            DisposeShDeltaResources();
+
+            if (!GsplatAsset || m_renderer == null)
+                return;
+            if (m_renderer.SHBands <= 0)
+                return;
+
+            // delta 数据必须存在且 frameCount 有意义.
+            if (GsplatAsset.ShFrameCount <= 0 || GsplatAsset.Sh1DeltaSegments == null || GsplatAsset.Sh1DeltaSegments.Length == 0)
+                return;
+
+            if (!SystemInfo.supportsComputeShaders)
+            {
+                Debug.LogWarning("[Gsplat] 当前平台不支持 ComputeShader,将禁用 `.splat4d` 动态 SH(delta-v1).");
+                m_shDeltaDisabled = true;
+                return;
+            }
+
+            var settings = GsplatSettings.Instance;
+            if (!settings || !settings.ShDeltaComputeShader)
+            {
+                Debug.LogWarning("[Gsplat] 缺少 ShDeltaComputeShader,将禁用 `.splat4d` 动态 SH(delta-v1).");
+                m_shDeltaDisabled = true;
+                return;
+            }
+
+            m_shDeltaCS = settings.ShDeltaComputeShader;
+            try
+            {
+                m_kernelApplySh1 = m_shDeltaCS.FindKernel("ApplySh1Updates");
+                m_kernelApplySh2 = m_shDeltaCS.FindKernel("ApplySh2Updates");
+                m_kernelApplySh3 = m_shDeltaCS.FindKernel("ApplySh3Updates");
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[Gsplat] ShDeltaComputeShader 缺少必需 kernel,将禁用动态 SH: {e.Message}");
+                m_shDeltaDisabled = true;
+                return;
+            }
+
+            if (!TryValidateKernel(m_shDeltaCS, m_kernelApplySh1, "ApplySh1Updates", out var kernelError))
+            {
+                Debug.LogWarning($"[Gsplat] ShDeltaComputeShader kernel 无效,将禁用动态 SH: {kernelError}");
+                m_shDeltaDisabled = true;
+                return;
+            }
+
+            // band2/band3 的 kernel 是否可用,按需校验(只要 effectiveSHBands 用不到,就不强制要求).
+            if (m_renderer.SHBands >= 2 &&
+                !TryValidateKernel(m_shDeltaCS, m_kernelApplySh2, "ApplySh2Updates", out kernelError))
+            {
+                Debug.LogWarning($"[Gsplat] ShDeltaComputeShader kernel 无效,将禁用动态 SH: {kernelError}");
+                m_shDeltaDisabled = true;
+                return;
+            }
+            if (m_renderer.SHBands >= 3 &&
+                !TryValidateKernel(m_shDeltaCS, m_kernelApplySh3, "ApplySh3Updates", out kernelError))
+            {
+                Debug.LogWarning($"[Gsplat] ShDeltaComputeShader kernel 无效,将禁用动态 SH: {kernelError}");
+                m_shDeltaDisabled = true;
+                return;
+            }
+
+            var effectiveSplatCount = checked((int)m_effectiveSplatCount);
+
+            // 1) segments runtime
+            if (!TryBuildSegmentRuntimes(GsplatAsset.Sh1DeltaSegments, effectiveSplatCount, out m_sh1Segments, out var err))
+            {
+                Debug.LogWarning($"[Gsplat] SH delta segments 无效(band=1),将禁用动态 SH: {err}");
+                m_shDeltaDisabled = true;
+                return;
+            }
+            if (m_renderer.SHBands >= 2)
+            {
+                if (!TryBuildSegmentRuntimes(GsplatAsset.Sh2DeltaSegments, effectiveSplatCount, out m_sh2Segments, out err))
+                {
+                    Debug.LogWarning($"[Gsplat] SH delta segments 无效(band=2),将禁用动态 SH: {err}");
+                    m_shDeltaDisabled = true;
+                    return;
+                }
+            }
+            if (m_renderer.SHBands >= 3)
+            {
+                if (!TryBuildSegmentRuntimes(GsplatAsset.Sh3DeltaSegments, effectiveSplatCount, out m_sh3Segments, out err))
+                {
+                    Debug.LogWarning($"[Gsplat] SH delta segments 无效(band=3),将禁用动态 SH: {err}");
+                    m_shDeltaDisabled = true;
+                    return;
+                }
+            }
+
+            // 1.1) 多 band 时要求 segments 对齐(同一 index 对应同一 [start,count]).
+            // - 这能简化运行期的 “frame -> segment” 映射,并避免 band 间状态不一致.
+            if (m_renderer.SHBands >= 2 &&
+                !TryValidateSegmentsAligned(m_sh1Segments, m_sh2Segments, 2, out err))
+            {
+                Debug.LogWarning($"[Gsplat] SH delta segments 不对齐,将禁用动态 SH: {err}");
+                m_shDeltaDisabled = true;
+                return;
+            }
+            if (m_renderer.SHBands >= 3 &&
+                !TryValidateSegmentsAligned(m_sh1Segments, m_sh3Segments, 3, out err))
+            {
+                Debug.LogWarning($"[Gsplat] SH delta segments 不对齐,将禁用动态 SH: {err}");
+                m_shDeltaDisabled = true;
+                return;
+            }
+
+            // 1.2) 校验所有 segments 的 base labels 范围(避免 seek 时 GPU 越界).
+            if (!TryValidateBaseLabelsRange(m_sh1Segments, effectiveSplatCount, 1, out err) ||
+                (m_renderer.SHBands >= 2 && !TryValidateBaseLabelsRange(m_sh2Segments, effectiveSplatCount, 2, out err)) ||
+                (m_renderer.SHBands >= 3 && !TryValidateBaseLabelsRange(m_sh3Segments, effectiveSplatCount, 3, out err)))
+            {
+                Debug.LogWarning($"[Gsplat] SH base labels 无效,将禁用动态 SH: {err}");
+                m_shDeltaDisabled = true;
+                return;
+            }
+
+            // 2) centroids buffers(常驻)
+            if (GsplatAsset.Sh1Centroids == null || GsplatAsset.Sh1Centroids.Length == 0)
+            {
+                Debug.LogWarning("[Gsplat] 缺少 Sh1Centroids,将禁用动态 SH(delta-v1).");
+                m_shDeltaDisabled = true;
+                return;
+            }
+            // 每个 band 的 centroids 数量必须匹配 delta header 的 labelCount.
+            if (GsplatAsset.Sh1Centroids.Length != m_sh1Segments[0].LabelCount * BandCoeffCount(1))
+            {
+                Debug.LogWarning("[Gsplat] Sh1Centroids 长度与 delta labelCount 不一致,将禁用动态 SH(delta-v1).");
+                m_shDeltaDisabled = true;
+                return;
+            }
+            m_sh1CentroidsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, GsplatAsset.Sh1Centroids.Length, 12);
+            m_sh1CentroidsBuffer.SetData(GsplatAsset.Sh1Centroids);
+
+            if (m_renderer.SHBands >= 2)
+            {
+                if (GsplatAsset.Sh2Centroids == null || GsplatAsset.Sh2Centroids.Length == 0)
+                {
+                    Debug.LogWarning("[Gsplat] 缺少 Sh2Centroids,将禁用动态 SH(delta-v1).");
+                    m_shDeltaDisabled = true;
+                    return;
+                }
+                if (GsplatAsset.Sh2Centroids.Length != m_sh2Segments[0].LabelCount * BandCoeffCount(2))
+                {
+                    Debug.LogWarning("[Gsplat] Sh2Centroids 长度与 delta labelCount 不一致,将禁用动态 SH(delta-v1).");
+                    m_shDeltaDisabled = true;
+                    return;
+                }
+                m_sh2CentroidsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, GsplatAsset.Sh2Centroids.Length, 12);
+                m_sh2CentroidsBuffer.SetData(GsplatAsset.Sh2Centroids);
+            }
+            if (m_renderer.SHBands >= 3)
+            {
+                if (GsplatAsset.Sh3Centroids == null || GsplatAsset.Sh3Centroids.Length == 0)
+                {
+                    Debug.LogWarning("[Gsplat] 缺少 Sh3Centroids,将禁用动态 SH(delta-v1).");
+                    m_shDeltaDisabled = true;
+                    return;
+                }
+                if (GsplatAsset.Sh3Centroids.Length != m_sh3Segments[0].LabelCount * BandCoeffCount(3))
+                {
+                    Debug.LogWarning("[Gsplat] Sh3Centroids 长度与 delta labelCount 不一致,将禁用动态 SH(delta-v1).");
+                    m_shDeltaDisabled = true;
+                    return;
+                }
+                m_sh3CentroidsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, GsplatAsset.Sh3Centroids.Length, 12);
+                m_sh3CentroidsBuffer.SetData(GsplatAsset.Sh3Centroids);
+            }
+
+            // 3) labels state(从 startFrame=0 的 base labels 初始化)
+            m_shLabelsScratch = new ushort[effectiveSplatCount];
+
+            m_sh1Labels = new ushort[effectiveSplatCount];
+            Buffer.BlockCopy(m_sh1Segments[0].BaseLabelsBytes, 0, m_sh1Labels, 0, effectiveSplatCount * 2);
+            if (m_renderer.SHBands >= 2)
+            {
+                m_sh2Labels = new ushort[effectiveSplatCount];
+                Buffer.BlockCopy(m_sh2Segments[0].BaseLabelsBytes, 0, m_sh2Labels, 0, effectiveSplatCount * 2);
+            }
+            if (m_renderer.SHBands >= 3)
+            {
+                m_sh3Labels = new ushort[effectiveSplatCount];
+                Buffer.BlockCopy(m_sh3Segments[0].BaseLabelsBytes, 0, m_sh3Labels, 0, effectiveSplatCount * 2);
+            }
+
+            m_shDeltaFrameCount = GsplatAsset.ShFrameCount;
+            m_shDeltaCurrentFrame = 0;
+            m_shDeltaCurrentSegmentIndex = 0;
+
+            // updates buffer 先给一个小容量,后续按需扩容.
+            EnsureShDeltaUpdatesCapacity(1024);
+
+            m_shDeltaInitialized = true;
+        }
+
+        void TryApplyShDeltaForTime(float t)
+        {
+            if (!m_shDeltaInitialized || m_shDeltaDisabled)
+                return;
+
+            if (m_pendingSplatCount > 0)
+                return; // 异步上传未完成时,避免被 UploadData 覆盖.
+
+            var frameCount = m_shDeltaFrameCount;
+            if (frameCount <= 1)
+                return;
+
+            var target = Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(t) * (frameCount - 1)), 0, frameCount - 1);
+            if (target == m_shDeltaCurrentFrame)
+                return;
+
+            try
+            {
+                if (!TryApplyShDeltaToFrame(target))
+                {
+                    Debug.LogWarning("[Gsplat] 动态 SH(delta-v1) 更新失败,将禁用后续更新并保持 frame0.");
+                    m_shDeltaDisabled = true;
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"[Gsplat] 动态 SH(delta-v1) 更新异常,将禁用后续更新并保持 frame0: {e.Message}");
+                m_shDeltaDisabled = true;
+            }
+        }
+
+        bool TryApplyShDeltaToFrame(int targetFrame)
+        {
+            var effectiveSplatCount = checked((int)m_effectiveSplatCount);
+            if (effectiveSplatCount <= 0)
+                return true;
+
+            // 优化: 仅处理最常见的顺序播放(前进 1 帧).
+            if (targetFrame == m_shDeltaCurrentFrame + 1)
+            {
+                var segIndex = FindSegmentIndex(m_sh1Segments, targetFrame);
+                if (segIndex == m_shDeltaCurrentSegmentIndex)
+                {
+                    var seg = m_sh1Segments[segIndex];
+                    var rel = targetFrame - seg.StartFrame;
+                    if (rel > 0)
+                    {
+                        // 先读 updateCount 决定 scratch 容量,避免 updateCount 较大时数组越界.
+                        var required = (int)BinaryPrimitives.ReadUInt32LittleEndian(
+                            seg.DeltaBytes.AsSpan(seg.BlockOffsets[rel - 1], 4));
+                        if (m_renderer.SHBands >= 2)
+                        {
+                            var seg2 = m_sh2Segments[segIndex];
+                            var u2 = (int)BinaryPrimitives.ReadUInt32LittleEndian(
+                                seg2.DeltaBytes.AsSpan(seg2.BlockOffsets[rel - 1], 4));
+                            required = Math.Max(required, u2);
+                        }
+                        if (m_renderer.SHBands >= 3)
+                        {
+                            var seg3 = m_sh3Segments[segIndex];
+                            var u3 = (int)BinaryPrimitives.ReadUInt32LittleEndian(
+                                seg3.DeltaBytes.AsSpan(seg3.BlockOffsets[rel - 1], 4));
+                            required = Math.Max(required, u3);
+                        }
+                        EnsureShDeltaUpdatesCapacity(required);
+
+                        // band1
+                        var wrote = ReadUpdateBlock(seg, rel, effectiveSplatCount, seg.LabelCount, m_shDeltaUpdatesScratch);
+                        if (!TryDispatchShDeltaUpdates(1, m_sh1CentroidsBuffer, m_kernelApplySh1, m_shDeltaUpdatesScratch, wrote))
+                            return false;
+                        for (var i = 0; i < wrote; i++)
+                            m_sh1Labels[m_shDeltaUpdatesScratch[i].splatId] = (ushort)m_shDeltaUpdatesScratch[i].label;
+
+                        // band2/band3(可选)
+                        if (m_renderer.SHBands >= 2)
+                        {
+                            var seg2 = m_sh2Segments[segIndex];
+                            wrote = ReadUpdateBlock(seg2, rel, effectiveSplatCount, seg2.LabelCount, m_shDeltaUpdatesScratch);
+                            if (!TryDispatchShDeltaUpdates(2, m_sh2CentroidsBuffer, m_kernelApplySh2, m_shDeltaUpdatesScratch, wrote))
+                                return false;
+                            for (var i = 0; i < wrote; i++)
+                                m_sh2Labels[m_shDeltaUpdatesScratch[i].splatId] = (ushort)m_shDeltaUpdatesScratch[i].label;
+                        }
+                        if (m_renderer.SHBands >= 3)
+                        {
+                            var seg3 = m_sh3Segments[segIndex];
+                            wrote = ReadUpdateBlock(seg3, rel, effectiveSplatCount, seg3.LabelCount, m_shDeltaUpdatesScratch);
+                            if (!TryDispatchShDeltaUpdates(3, m_sh3CentroidsBuffer, m_kernelApplySh3, m_shDeltaUpdatesScratch, wrote))
+                                return false;
+                            for (var i = 0; i < wrote; i++)
+                                m_sh3Labels[m_shDeltaUpdatesScratch[i].splatId] = (ushort)m_shDeltaUpdatesScratch[i].label;
+                        }
+
+                        m_shDeltaCurrentFrame = targetFrame;
+                        return true;
+                    }
+                }
+            }
+
+            // 兜底: seek/jump/backward -> 从 segment base 解码到目标帧,再 diff 应用.
+            var newSegIndex = FindSegmentIndex(m_sh1Segments, targetFrame);
+            if (newSegIndex < 0)
+                return false;
+
+            EnsureShDeltaUpdatesCapacity(effectiveSplatCount);
+
+            // band1
+            var s1 = m_sh1Segments[newSegIndex];
+            DecodeLabelsAtFrame(s1, targetFrame, effectiveSplatCount, s1.LabelCount, m_shLabelsScratch);
+            var wroteDiff = 0;
+            for (var i = 0; i < effectiveSplatCount; i++)
+            {
+                var cur = m_sh1Labels[i];
+                var next = m_shLabelsScratch[i];
+                if (cur == next)
+                    continue;
+                m_shDeltaUpdatesScratch[wroteDiff++] = new ShDeltaUpdate { splatId = (uint)i, label = next };
+            }
+            if (!TryDispatchShDeltaUpdates(1, m_sh1CentroidsBuffer, m_kernelApplySh1, m_shDeltaUpdatesScratch, wroteDiff))
+                return false;
+            for (var i = 0; i < wroteDiff; i++)
+                m_sh1Labels[m_shDeltaUpdatesScratch[i].splatId] = (ushort)m_shDeltaUpdatesScratch[i].label;
+
+            // band2/band3
+            if (m_renderer.SHBands >= 2)
+            {
+                var s2 = m_sh2Segments[newSegIndex];
+                DecodeLabelsAtFrame(s2, targetFrame, effectiveSplatCount, s2.LabelCount, m_shLabelsScratch);
+                wroteDiff = 0;
+                for (var i = 0; i < effectiveSplatCount; i++)
+                {
+                    var cur = m_sh2Labels[i];
+                    var next = m_shLabelsScratch[i];
+                    if (cur == next)
+                        continue;
+                    m_shDeltaUpdatesScratch[wroteDiff++] = new ShDeltaUpdate { splatId = (uint)i, label = next };
+                }
+                if (!TryDispatchShDeltaUpdates(2, m_sh2CentroidsBuffer, m_kernelApplySh2, m_shDeltaUpdatesScratch, wroteDiff))
+                    return false;
+                for (var i = 0; i < wroteDiff; i++)
+                    m_sh2Labels[m_shDeltaUpdatesScratch[i].splatId] = (ushort)m_shDeltaUpdatesScratch[i].label;
+            }
+            if (m_renderer.SHBands >= 3)
+            {
+                var s3 = m_sh3Segments[newSegIndex];
+                DecodeLabelsAtFrame(s3, targetFrame, effectiveSplatCount, s3.LabelCount, m_shLabelsScratch);
+                wroteDiff = 0;
+                for (var i = 0; i < effectiveSplatCount; i++)
+                {
+                    var cur = m_sh3Labels[i];
+                    var next = m_shLabelsScratch[i];
+                    if (cur == next)
+                        continue;
+                    m_shDeltaUpdatesScratch[wroteDiff++] = new ShDeltaUpdate { splatId = (uint)i, label = next };
+                }
+                if (!TryDispatchShDeltaUpdates(3, m_sh3CentroidsBuffer, m_kernelApplySh3, m_shDeltaUpdatesScratch, wroteDiff))
+                    return false;
+                for (var i = 0; i < wroteDiff; i++)
+                    m_sh3Labels[m_shDeltaUpdatesScratch[i].splatId] = (ushort)m_shDeltaUpdatesScratch[i].label;
+            }
+
+            m_shDeltaCurrentSegmentIndex = newSegIndex;
+            m_shDeltaCurrentFrame = targetFrame;
+            return true;
         }
 
         void RefreshEffectiveConfigAndLog()
@@ -251,7 +1144,11 @@ namespace Gsplat
             GsplatSorter.Instance.RegisterGsplat(this);
             m_timeNormalizedThisFrame = Mathf.Clamp01(TimeNormalized);
             if (!TryCreateOrRecreateRenderer())
+            {
+                // renderer 创建失败时也要清理 delta 资源,避免旧状态残留.
+                TryInitShDeltaRuntime();
                 return;
+            }
 #if UNITY_EDITOR
             if (AsyncUpload && Application.isPlaying)
 #else
@@ -261,6 +1158,9 @@ namespace Gsplat
             else
                 SetBufferData();
 
+            // 初始化 delta runtime(若 asset 没有 delta 字段,这里会自动 no-op).
+            TryInitShDeltaRuntime();
+
             // 避免下一帧 Update 再次重复触发一次重建.
             m_prevAsset = GsplatAsset;
         }
@@ -268,6 +1168,7 @@ namespace Gsplat
         void OnDisable()
         {
             GsplatSorter.Instance.UnregisterGsplat(this);
+            DisposeShDeltaResources();
             m_renderer?.Dispose();
             m_renderer = null;
             m_prevAsset = null;
@@ -308,7 +1209,13 @@ namespace Gsplat
                     else
                         SetBufferData();
                 }
+
+                // asset 或 renderer 发生变化时,delta runtime 必须重建(包括清理旧资源).
+                TryInitShDeltaRuntime();
             }
+
+            // 在渲染前按 TimeNormalized 应用 delta-v1 updates(仅在帧变化时 dispatch).
+            TryApplyShDeltaForTime(m_timeNormalizedThisFrame);
 
             if (Valid)
             {

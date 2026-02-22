@@ -49,6 +49,9 @@ namespace Gsplat
                     settings.ComputeShader =
                         AssetDatabase.LoadAssetAtPath<ComputeShader>(GsplatUtils.k_PackagePath +
                                                                      "Runtime/Shaders/Gsplat.compute");
+                    settings.ShDeltaComputeShader =
+                        AssetDatabase.LoadAssetAtPath<ComputeShader>(GsplatUtils.k_PackagePath +
+                                                                     "Runtime/Shaders/GsplatShDelta.compute");
                     settings.OnValidate();
                     AssetDatabase.CreateAsset(settings, k_gsplatSettingsPath);
                     AssetDatabase.SaveAssets();
@@ -62,6 +65,7 @@ namespace Gsplat
 
         public Shader Shader;
         public ComputeShader ComputeShader;
+        public ComputeShader ShDeltaComputeShader;
 
         [Tooltip(
             "每个 GPU instance 里包含的 splat quad 数量(也可以理解为 instance 的 batch size).\n" +
@@ -176,6 +180,15 @@ namespace Gsplat
 
         void OnValidate()
         {
+#if UNITY_EDITOR
+            // 兼容旧 settings 资产: 新增字段可能为空,这里尽量自动补齐默认值,降低升级成本.
+            if (!ShDeltaComputeShader)
+            {
+                ShDeltaComputeShader =
+                    AssetDatabase.LoadAssetAtPath<ComputeShader>(GsplatUtils.k_PackagePath +
+                                                                 "Runtime/Shaders/GsplatShDelta.compute");
+            }
+#endif
             if (Shader != m_prevShader)
             {
                 CreateMaterials();
