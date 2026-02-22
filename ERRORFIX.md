@@ -377,3 +377,51 @@
 - 为了避免把输出写在 `time_*.ply` 的输入目录里导致后续被上游导出脚本清理,
   当前推荐把 `.sog4d` 输出放在独立目录,例如:
   - `/Users/cuiluming/local_doc/l_dev/my/unity/gaussian_pertimestamp_out/`
+
+## 2026-02-22 15:20:43 +0800: 修复 FreeTimeGsVanilla `.sog4d` 导入失败(legacy meta.json) + 改良 `.splat4d` VFX 默认资产查找
+
+### 现象
+
+1) FreeTimeGsVanilla 导出的 `.sog4d` 在离线自检阶段失败:
+- `python3 Tools~/Sog4D/ply_sequence_to_sog4d.py validate --input <file>.sog4d`
+- 输出: `[sog4d][error] meta.json.format 非法: None`
+
+2) Unity Console 出现 VFX warning:
+- `[Gsplat][VFX] 未找到默认 VFX Graph asset: Packages/.../Samples~/VFXGraphSample/VFX/SplatSorted.vfx 或 .../Splat.vfx ...`
+- 堆栈定位: `Editor/GsplatSplat4DImporter.cs`(OnImportAsset)
+
+### 本质(根因)
+
+1) `.sog4d`:
+- legacy `meta.json` 缺少顶层 `"format": "sog4d"`.
+- 且把 Vector3 字段写成 `[[x,y,z]]`(list-of-3),与 Unity `JsonUtility` 解析 `Vector3[]` 的 `{x,y,z}` 形态不兼容.
+- 另外,本包在构建 ZIP entry map 时曾“同名取第一个”,导致无法通过追加更新 `meta.json` 的方式修复大文件 bundle.
+
+2) `.splat4d` VFX:
+- Unity 的 Sample import 会把 `Samples~` 下的资源拷贝到 `Assets/Samples/...`.
+- 但 importer 只尝试从 `Packages/.../Samples~` 直接加载,因此即使用户已导入 sample,也可能仍找不到默认 `.vfx`.
+
+### 修复
+
+1) `.sog4d` ZIP 兼容与快速修复路径:
+- `Editor/GsplatSog4DImporter.cs` / `Runtime/GsplatSog4DRuntimeBundle.cs`:
+  - ZIP entry map 改为“同名取最后一个”,符合 zip update 语义.
+- `Tools~/Sog4D/ply_sequence_to_sog4d.py`:
+  - 新增 `normalize-meta` 子命令:
+    - 自动补齐 `meta.format="sog4d"`.
+    - 把 `streams.position.rangeMin/rangeMax` 与 `streams.scale.codebook` 从 `[[x,y,z]]` 规范化为 `{x,y,z}`.
+    - 通过追加新的 `meta.json` entry 修复,避免重写 1GB+ 的 bundle.
+
+2) `.splat4d` 默认 VFX Graph 资产查找:
+- `Editor/GsplatSplat4DImporter.cs`:
+  - 先尝试包内路径,失败后在 `Assets/Samples/**/VFX/` 下搜索 `SplatSorted.vfx`/`Splat.vfx`.
+
+### 验证
+
+- `.sog4d` 修复验证(真实文件):
+  - `python3 Tools~/Sog4D/ply_sequence_to_sog4d.py normalize-meta --input <file>.sog4d --validate`
+  - 输出: `[sog4d] validate ok (v1 delta-v1).`
+- `.splat4d` VFX 自动绑定:
+  - 需要在 Unity 中导入 sample 后验证:
+    - 导入 `.splat4d` 不再输出“未找到默认 VFX Graph asset”的 warning.
+    - prefab 自动挂上 `VisualEffect` + `GsplatVfxBinder`,并把 `EnableGsplatBackend=false`.

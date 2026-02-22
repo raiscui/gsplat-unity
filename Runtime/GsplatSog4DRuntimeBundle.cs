@@ -1363,8 +1363,8 @@ namespace Gsplat
                 var name = NormalizeZipPath(entry.FullName);
                 if (string.IsNullOrEmpty(name))
                     continue;
-                if (!map.ContainsKey(name))
-                    map.Add(name, entry);
+                // 与 Editor importer 保持一致: 保留最后一个同名 entry,以符合 zip update 语义.
+                map[name] = entry;
             }
 
             return map;

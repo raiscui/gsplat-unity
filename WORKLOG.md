@@ -433,3 +433,20 @@
   - `Tools~/Sog4D/FreeTimeGsCheckpointToSog4D.md`
 - 同时在工具 README 增加入口,让使用者不需要翻聊天记录:
   - `Tools~/Sog4D/README.md`
+
+## 2026-02-22 15:20:43 +0800
+- 修复 FreeTimeGsVanilla 导出的 legacy `.sog4d` meta.json 兼容问题(让 Unity 能导入):
+  - `Editor/GsplatSog4DImporter.cs` / `Runtime/GsplatSog4DRuntimeBundle.cs`:
+    - ZIP entry map 改为“同名取最后一个”,符合 zip update 语义,也支持通过追加修复 `meta.json`.
+  - `Tools~/Sog4D/ply_sequence_to_sog4d.py`:
+    - 新增 `normalize-meta` 子命令:
+      - 自动补齐 `meta.format="sog4d"`.
+      - 把 Vector3 字段从 `[[x,y,z]]` 规范化为 `{x,y,z}`(Unity `JsonUtility` 可解析).
+    - 已对真实文件执行并 `validate ok`:
+      - `python3 Tools~/Sog4D/ply_sequence_to_sog4d.py normalize-meta --input <file>.sog4d --validate`
+- 改良 `.splat4d` 一键导入的 VFX 默认资产查找:
+  - `Editor/GsplatSplat4DImporter.cs`:
+    - 增加对 `Assets/Samples/**/VFX/SplatSorted.vfx`/`Splat.vfx` 的搜索(适配 Unity 的 Sample import 落点).
+    - 找不到时的 warning 文案更准确,减少误导.
+- 文档同步:
+  - `Tools~/Sog4D/README.md` 增加 `normalize-meta` 用法与典型报错解释.

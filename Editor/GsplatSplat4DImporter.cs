@@ -158,12 +158,60 @@ namespace Gsplat.Editor
 
 #if GSPLAT_ENABLE_VFX_GRAPH
         // SplatVFX 风格: 导入后自动生成 prefab + VisualEffect + binder.
-        // - VFX Graph asset 放在 Samples~ 中,所以这里用 package 路径直接加载.
+        // - VFX Graph asset 放在 Samples~ 中,但 Unity 的 Sample import 会把它拷贝到 `Assets/Samples/...`.
+        //   因此这里需要同时尝试:
+        //   1) 包内路径(开发时/某些工程布局下可用)
+        //   2) `Assets/Samples/...` 下的查找(用户从 Package Manager 导入 sample 后的真实落点)
         const string k_defaultVfxAssetPath = GsplatUtils.k_PackagePath + "Samples~/VFXGraphSample/VFX/Splat.vfx";
         const string k_defaultVfxSortedAssetPath = GsplatUtils.k_PackagePath + "Samples~/VFXGraphSample/VFX/SplatSorted.vfx";
 
         // VFX 后端辅助 compute shader(用于生成 AxisBuffer/动态 buffers).
         const string k_vfxComputeShaderPath = GsplatUtils.k_PackagePath + "Runtime/Shaders/GsplatVfx.compute";
+
+        static UnityEngine.VFX.VisualEffectAsset TryLoadDefaultVfxAsset()
+        {
+            // 1) 优先包内路径(在某些工程/开发布局下可能可直接访问).
+            var a = AssetDatabase.LoadAssetAtPath<UnityEngine.VFX.VisualEffectAsset>(k_defaultVfxSortedAssetPath);
+            if (a != null)
+                return a;
+            a = AssetDatabase.LoadAssetAtPath<UnityEngine.VFX.VisualEffectAsset>(k_defaultVfxAssetPath);
+            if (a != null)
+                return a;
+
+            // 2) 次选: Unity sample 实际导入落点.
+            // - 只搜索 `Assets/Samples`,避免全工程扫描带来的 import 性能回退.
+            // - 以 path suffix 过滤,防止同名资源误命中.
+            if (!AssetDatabase.IsValidFolder("Assets/Samples"))
+                return null;
+
+            var sampleFolders = new[] { "Assets/Samples" };
+            a = FindVfxAssetInFolders("SplatSorted", "/VFX/SplatSorted.vfx", sampleFolders);
+            if (a != null)
+                return a;
+            a = FindVfxAssetInFolders("Splat", "/VFX/Splat.vfx", sampleFolders);
+            return a;
+        }
+
+        static UnityEngine.VFX.VisualEffectAsset FindVfxAssetInFolders(string nameHint, string pathSuffix, string[] searchFolders)
+        {
+            var query = $"t:VisualEffectAsset {nameHint}";
+            var guids = AssetDatabase.FindAssets(query, searchFolders);
+            foreach (var guid in guids)
+            {
+                var path = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(path))
+                    continue;
+
+                // 统一分隔符,并用 suffix 过滤.
+                var normalized = path.Replace('\\', '/');
+                if (!normalized.EndsWith(pathSuffix, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                return AssetDatabase.LoadAssetAtPath<UnityEngine.VFX.VisualEffectAsset>(path);
+            }
+
+            return null;
+        }
 #endif
 
         public override void OnImportAsset(AssetImportContext ctx)
@@ -419,9 +467,7 @@ namespace Gsplat.Editor
             // 优先选择 "质量优先" 的 sorted 变体:
             // - 它在 VFX Output 上启用了 sorting,遮挡关系更接近 Gsplat 主后端.
             // - 如果宿主项目/旧版本包中不存在该资产,则回退到原 `Splat.vfx`.
-            var vfxAsset = AssetDatabase.LoadAssetAtPath<UnityEngine.VFX.VisualEffectAsset>(k_defaultVfxSortedAssetPath);
-            if (vfxAsset == null)
-                vfxAsset = AssetDatabase.LoadAssetAtPath<UnityEngine.VFX.VisualEffectAsset>(k_defaultVfxAssetPath);
+            var vfxAsset = TryLoadDefaultVfxAsset();
             var vfxCompute = AssetDatabase.LoadAssetAtPath<ComputeShader>(k_vfxComputeShaderPath);
 
             if (vfxAsset != null && vfxCompute != null)
@@ -445,9 +491,10 @@ namespace Gsplat.Editor
             }
             else
             {
-                // Samples~ 可能没被导入/没被识别,此时给出可执行提示.
+                // Samples~ 默认不会被导入为 Asset,用户需要在 Package Manager 里点 Import Sample.
                 Debug.LogWarning(
                     $"[Gsplat][VFX] 未找到默认 VFX Graph asset: {k_defaultVfxSortedAssetPath} 或 {k_defaultVfxAssetPath}. " +
+                    "并且在 `Assets/Samples/**/VFX/` 下也未搜索到 `SplatSorted.vfx`/`Splat.vfx`. " +
                     "你仍可使用 Gsplat 主后端渲染. 若需要 VFX 后端,请导入本包 Samples~/VFXGraphSample,或手动指定 VisualEffectAsset.");
             }
 #endif

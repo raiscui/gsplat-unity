@@ -66,3 +66,15 @@
     - 覆盖 per-band centroids size 校验,labels(full/delta-v1) 两条路径.
   - 价值:
     - 防止未来改动导致 v2 路径 silent break.
+
+## 2026-02-22 15:20:43 +0800
+- 候选改进: 同步修复 FreeTimeGsVanilla 的 `.sog4d` exporter(meta.json schema 对齐本包).
+  - 背景:
+    - 已发现某些 exporter 版本缺少 `meta.format`,并把 Vector3 写成 `[[x,y,z]]`,导致 Unity importer 解析失败.
+    - 目前可以用本包 `Tools~/Sog4D/ply_sequence_to_sog4d.py normalize-meta` 救火修复既有 bundle.
+  - 目标:
+    - exporter 直接输出规范形态:
+      - `meta.format="sog4d"`
+      - `streams.position.rangeMin/rangeMax` 与 `streams.scale.codebook` 输出为 `{x,y,z}` 数组.
+  - 价值:
+    - 新产物开箱即用,避免在团队里传播“先导出再修 meta”的隐性流程.

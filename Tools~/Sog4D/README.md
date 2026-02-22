@@ -332,6 +332,38 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py validate --input out.sog4d
 
 如果你在 pack 时加了 `--self-check`,它会在输出后自动跑一遍 validate.
 
+## 3.1 修复 legacy `.sog4d` 的 `meta.json`(兼容部分旧导出器)
+
+你可能会遇到这种报错:
+- `[sog4d][error] meta.json.format 非法: None`
+
+根因通常是:
+- `meta.json` 顶层缺少 `"format": "sog4d"`.
+- 或者把 Vector3 写成 `[[x,y,z]]`(list-of-3),而不是 Unity `JsonUtility` 期望的 `{x,y,z}`.
+
+这会导致:
+- `validate` 直接失败.
+- Unity `.sog4d` importer 无法解析 `streams.position.rangeMin/rangeMax` 与 `streams.scale.codebook`.
+
+本工具提供 `normalize-meta` 子命令一键修复:
+
+```bash
+python3 Tools~/Sog4D/ply_sequence_to_sog4d.py normalize-meta \
+  --input bad.sog4d \
+  --validate
+```
+
+说明:
+- 默认会就地更新(通过追加一个新的 `meta.json` entry).
+- 如果你希望保留原文件不变,可以输出到新文件:
+
+```bash
+python3 Tools~/Sog4D/ply_sequence_to_sog4d.py normalize-meta \
+  --input bad.sog4d \
+  --output fixed.sog4d \
+  --validate
+```
+
 ## 4. 参数速查(你到底该改哪个)
 
 - `--sh-bands`:

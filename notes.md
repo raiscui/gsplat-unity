@@ -746,3 +746,38 @@
 - 已新增手册:
   - `Tools~/Sog4D/FreeTimeGsCheckpointToSog4D.md`
 - 并已在 `Tools~/Sog4D/README.md` 增加入口说明.
+
+---
+
+## 2026-02-22 15:12:11 +0800: FreeTimeGsVanilla 导出的 `.sog4d` 在本包 Unity 导入失败(根因确认)
+
+### 证据1: 离线 validate 直接失败
+
+- 目标文件(示例):
+  - `.../Assets/Gsplat/splat/v2/ckpt_29999_f61_full_sh3_v1delta_k512.sog4d`
+- 命令:
+  - `python3 Tools~/Sog4D/ply_sequence_to_sog4d.py validate --input <file>.sog4d`
+- 输出:
+  - `[sog4d][error] meta.json.format 非法: None`
+
+### 证据2: meta.json schema 与本包 spec/JsonUtility 不一致
+
+- 该 `.sog4d` 内 `meta.json` 顶层缺少:
+  - `"format": "sog4d"`
+- 且 Vector3 相关字段使用了 legacy 写法:
+  - `streams.position.rangeMin/rangeMax`: `[[x,y,z], ...]`
+  - `streams.scale.codebook`: `[[x,y,z], ...]`
+- 但本包 Unity importer 依赖 `JsonUtility` 解析 `Vector3[]`,
+  它要求 JSON 形态为:
+  - `[{ "x": ..., "y": ..., "z": ... }, ...]`
+
+### 补充: `.splat4d` 默认 VFX Graph 资产查找路径存在误导
+
+- `.splat4d` importer 当前尝试从包内 `Samples~/VFXGraphSample/VFX/*.vfx` 加载默认资产.
+- 但 Unity 的 sample import 行为是拷贝到 `Assets/Samples/...`,
+  因此仅靠 `Packages/.../Samples~` 路径通常找不到,会导致 warning 与“自动绑定不生效”.
+
+### 结论(根因)
+
+1. FreeTimeGsVanilla exporter 产物的 `meta.json` 缺少必需字段,且 Vector3 序列化形态不符合本包约定,因此 Unity 侧必然导入失败.
+2. `.splat4d` importer 对 VFX sample 的资产查找只覆盖了包内路径,未覆盖 Unity 实际导入后的 `Assets/Samples/...` 路径.

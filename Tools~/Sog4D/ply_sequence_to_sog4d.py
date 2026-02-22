@@ -27,7 +27,9 @@ import json
 import math
 import re
 import struct
+import shutil
 import sys
+import warnings
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -1747,6 +1749,158 @@ def _validate_cmd(args: argparse.Namespace) -> None:
         _info("validate ok (v2).")
 
 
+def _is_vec3_list(v: Any) -> bool:
+    """
+    判断一个 JSON 值是否形如 `[x,y,z]` 的 Vector3 列表.
+
+    说明:
+    - 这主要用于兼容某些 exporter 把 Vector3 序列化为 list-of-3 的 legacy 写法.
+    - Unity `JsonUtility` 解析 `Vector3` 时,期望 `{x,y,z}` 形式.
+    """
+    if not isinstance(v, list) or len(v) != 3:
+        return False
+    for x in v:
+        if not isinstance(x, (int, float)):
+            return False
+    return True
+
+
+def _vec3_list_to_obj(v: list[Any]) -> dict[str, float]:
+    """
+    把 `[x,y,z]` 转为 `{"x":x,"y":y,"z":z}`.
+    """
+    return {"x": float(v[0]), "y": float(v[1]), "z": float(v[2])}
+
+
+def _normalize_vec3_array(value: Any) -> tuple[Any, bool]:
+    """
+    规范化 Vector3 数组:
+    - legacy: `[[x,y,z], ...]`
+    - canonical: `[{x,y,z}, ...]`
+    """
+    if not isinstance(value, list) or not value:
+        return value, False
+    if not _is_vec3_list(value[0]):
+        return value, False
+
+    out = [_vec3_list_to_obj(v) for v in value]
+    return out, True
+
+
+def _normalize_meta_dict(meta: Any) -> tuple[dict[str, Any], list[str]]:
+    """
+    把 `.sog4d` 的 meta.json 规范化为本仓库 spec 所期望的形态.
+
+    目标:
+    - 补齐 `format="sog4d"`(若缺失).
+    - 把 Vector3 相关字段从 `[[x,y,z]]` 转成 `[{x,y,z}]`.
+
+    返回:
+    - 规范化后的 meta(dict)
+    - 对修改点的简要描述列表(便于 CLI 输出)
+    """
+    if not isinstance(meta, dict):
+        _die(f"meta.json 不是 JSON object,实际类型: {type(meta)}")
+
+    changed: list[str] = []
+
+    # 1) format
+    fmt = meta.get("format")
+    if fmt is None or (isinstance(fmt, str) and fmt.strip() == ""):
+        meta["format"] = "sog4d"
+        changed.append("补齐 meta.format=sog4d")
+    elif isinstance(fmt, str) and fmt.lower() == "sog4d" and fmt != "sog4d":
+        # 统一大小写,避免出现 "SOG4D" 这种不必要差异.
+        meta["format"] = "sog4d"
+        changed.append("统一 meta.format 大小写为 sog4d")
+
+    # 2) streams.position.rangeMin/rangeMax
+    streams = meta.get("streams")
+    if isinstance(streams, dict):
+        position = streams.get("position")
+        if isinstance(position, dict):
+            for key in ("rangeMin", "rangeMax"):
+                if key in position:
+                    new_val, did = _normalize_vec3_array(position.get(key))
+                    if did:
+                        position[key] = new_val
+                        changed.append(f"规范化 streams.position.{key} 为 Vector3 JSON")
+
+        scale = streams.get("scale")
+        if isinstance(scale, dict) and "codebook" in scale:
+            new_val, did = _normalize_vec3_array(scale.get("codebook"))
+            if did:
+                scale["codebook"] = new_val
+                changed.append("规范化 streams.scale.codebook 为 Vector3 JSON")
+
+    return meta, changed
+
+
+def _normalize_meta_cmd(args: argparse.Namespace) -> None:
+    """
+    修复/规范化 `.sog4d` 的 meta.json.
+
+    典型用途:
+    - 某些 exporter 早期版本缺少 `meta.format`,导致 `validate` 失败.
+    - 某些 exporter 把 Vector3 写成 `[[x,y,z]]`,Unity `JsonUtility` 无法解析为 `Vector3[]`.
+
+    实现策略:
+    - 不重写整个 ZIP(避免 1GB+ 大文件拷贝),而是追加一个新的 `meta.json` entry.
+    - Unity importer/runtime 会按 ZIP update 语义取同名条目的最后一个(见 `BuildEntryMap`).
+    """
+    in_path = Path(str(args.input)).expanduser()
+    if not in_path.exists() or not in_path.is_file():
+        _die(f"输入文件不存在: {in_path}")
+
+    out_path: Optional[Path] = None
+    if args.output is not None:
+        out_path = Path(str(args.output)).expanduser()
+        if out_path.exists():
+            _die(f"输出文件已存在,请先删除或换名: {out_path}")
+
+    target_path = in_path
+    if out_path is not None:
+        _info(f"copy: {in_path} -> {out_path}")
+        shutil.copyfile(in_path, out_path)
+        target_path = out_path
+
+    with zipfile.ZipFile(target_path, "a", compression=zipfile.ZIP_STORED, allowZip64=True) as zf:
+        if "meta.json" not in zf.namelist():
+            _die("bundle 缺少必需文件: meta.json")
+
+        meta_b = zf.read("meta.json")
+        try:
+            meta_text = meta_b.decode("utf-8")
+        except Exception as e:
+            _die(f"meta.json 不是有效 UTF-8: {e}")
+
+        try:
+            meta = json.loads(meta_text)
+        except Exception as e:
+            _die(f"meta.json parse error: {e}")
+
+        meta_norm, changed = _normalize_meta_dict(meta)
+        if not changed:
+            _info("meta.json 已是规范形态,无需修改.")
+            return
+
+        # 追加新的 meta.json(同名).后续读取应当以最后一个为准.
+        meta_out = json.dumps(meta_norm, ensure_ascii=False, indent=2).encode("utf-8")
+        # zipfile 在写入同名 entry 时会发出 UserWarning.
+        # 这里是我们有意为之(兼容 zip update 语义),因此抑制该警告以免误导用户.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Duplicate name: 'meta.json'")
+            zf.writestr("meta.json", meta_out)
+
+    _info("normalize-meta ok:")
+    for c in changed:
+        _info(f"- {c}")
+    _info(f"updated: {target_path}")
+
+    if bool(getattr(args, "validate", False)):
+        _validate_cmd(argparse.Namespace(input=str(target_path), verbose=False))
+
+
 def _build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="ply_sequence_to_sog4d.py")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -1804,6 +1958,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     val.add_argument("--input", required=True, help="输入 .sog4d")
     val.add_argument("--verbose", action="store_true", help="输出更多信息(预留)")
 
+    # normalize-meta
+    norm = sub.add_parser("normalize-meta", help="规范化/修复 .sog4d 的 meta.json(补 format + 修 Vector3 JSON)")
+    norm.add_argument("--input", required=True, help="输入 .sog4d")
+    norm.add_argument("--output", default=None, help="可选: 输出到新文件(默认就地更新)")
+    norm.add_argument("--validate", action="store_true", help="修复后自动执行 validate")
+
     return p
 
 
@@ -1813,6 +1973,8 @@ def main(argv: list[str]) -> None:
         _pack_cmd(args)
     elif args.cmd == "validate":
         _validate_cmd(args)
+    elif args.cmd == "normalize-meta":
+        _normalize_meta_cmd(args)
     else:
         _die(f"未知命令: {args.cmd}")
 

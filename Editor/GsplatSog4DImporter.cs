@@ -1368,9 +1368,10 @@ namespace Gsplat.Editor
                 if (string.IsNullOrEmpty(name))
                     continue;
 
-                // 若出现同名条目,保留第一个即可(重复条目属于异常 bundle,但不在此阶段强制 fail).
-                if (!map.ContainsKey(name))
-                    map.Add(name, entry);
+                // 若出现同名条目,我们选择保留“最后一个”:
+                // - 这更符合 zip 的“更新”语义(通常是追加同名 entry,以最后一个为准).
+                // - 允许用户在不重写整个大文件的情况下,通过追加修复 meta.json 等关键条目.
+                map[name] = entry;
             }
 
             return map;

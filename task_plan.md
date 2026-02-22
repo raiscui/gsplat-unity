@@ -611,3 +611,51 @@ Unity Console 不再出现:
 - 已输出统一规格说明到对话(用于实现 exporter).
 - 已完成四文件收尾:
   - `task_plan.md`/`notes.md`/`WORKLOG.md`/`LATER_PLANS.md` 均已追加本次任务记录.
+
+---
+
+# 任务计划: 修复 FreeTimeGsVanilla 输出 `.sog4d` 导入失败 + 改良 `.splat4d` 默认 VFX 资产查找
+
+## 目标
+1. 让 FreeTimeGsVanilla 导出的 `.sog4d` 能在本包 Unity importer 中成功导入并播放.
+2. 当用户已导入 `Samples~/VFXGraphSample` 时,`.splat4d` 一键导入能自动找到 `SplatSorted.vfx`/`Splat.vfx`,减少误导性 warning.
+
+## 现象
+- Unity Console 出现 warning:
+  - `[Gsplat][VFX] 未找到默认 VFX Graph asset: Packages/wu.yize.gsplat/Samples~/VFXGraphSample/VFX/SplatSorted.vfx 或 Packages/wu.yize.gsplat/Samples~/VFXGraphSample/VFX/Splat.vfx ...`
+  - 堆栈: `Gsplat.Editor.GsplatSplat4DImporter:OnImportAsset`(约 `Editor/GsplatSplat4DImporter.cs:449`)
+- 对 FreeTimeGsVanilla 的 `.sog4d` 做离线自检时失败:
+  - `python3 Tools~/Sog4D/ply_sequence_to_sog4d.py validate --input <file>.sog4d`
+  - 输出: `[sog4d][error] meta.json.format 非法: None`
+- 进一步检查 `.sog4d` 内的 `meta.json`:
+  - 缺少顶层字段 `"format": "sog4d"`
+  - `streams.position.rangeMin/rangeMax` 与 `streams.scale.codebook` 使用 `[[x,y,z]]` 形式,与 Unity `JsonUtility` 期望的 `{x,y,z}` 不一致.
+
+## 方向(二选一)
+- 方向A(推荐,最佳): 兼容与修复并行.
+  - 在 importer/runtime 的 ZIP entry map 中对同名条目采用“保留最后一个”(更符合 zip update 语义).
+  - 在离线工具中提供一个“规范化 meta.json”的命令,把 legacy `.sog4d` 一键修到符合本包 spec.
+  - 优点: 不必重新导出巨大的 `.sog4d`,可快速救火.
+- 方向B(先能用): 只修 exporter 并要求重新导出.
+  - 让 FreeTimeGsVanilla exporter 输出完全符合 spec 的 meta.json.
+  - 优点: 规范更干净; 缺点: 对大文件需要重新导出,成本高.
+
+## 阶段
+- [x] 阶段1: 证据与复现落盘
+- [x] 阶段2: 修复 `.sog4d` ZIP 同名 entry 策略(保留最后一个)
+- [x] 阶段3: 增加 `.sog4d` meta.json 规范化工具
+- [x] 阶段4: 改良 `.splat4d` 默认 VFX 资产查找(支持 `Assets/Samples/...`)
+- [ ] 阶段5: 验证 + 四文件收尾(ERRORFIX/WORKLOG/LATER_PLANS 回溯清理)
+
+## 状态
+**目前在阶段5(等待 Unity 验证)**
+- 时间: 2026-02-22 15:20:43 +0800
+- 已完成:
+  - `.sog4d` importer/runtime: ZIP 同名条目改为“取最后一个”,符合 zip update 语义.
+  - 离线工具新增 `normalize-meta`,可一键补 `meta.format` 并规范化 Vector3 JSON.
+  - `.splat4d` importer: 增加在 `Assets/Samples/**/VFX/` 下搜索默认 `.vfx` 的回退逻辑.
+- 已做离线验证:
+  - `normalize-meta` 在真实 `.sog4d` 上执行后 `validate ok`.
+- 待 Unity 侧确认:
+  - 重新导入该 `.sog4d` 后不再报 meta.json 错误,并能正常播放.
+  - 在已导入 sample 的项目里导入 `.splat4d` 不再报“未找到默认 VFX Graph asset”,并能自动挂 VFX 组件.
