@@ -17,7 +17,10 @@ namespace Gsplat.Editor
     // - 这是 Unity 插件(UPM 包)内的 importer,不能假设宿主 Unity 项目一定安装了 VFX Graph.
     // - 因此该 importer 的基础职责是: 生成可被 Gsplat 主后端渲染的 `GsplatAsset`.
     // - 如需 VFX Graph 的“一键预制体”体验,会在后续任务里通过可选宏隔离实现.
-    [ScriptedImporter(1, "splat4d")]
+    // importer version bump:
+    // - v2: v1 `.splat4d` 在遇到明显非归一化的 time/duration 时,支持自动识别为 gaussian(mu+sigma).
+    // - 目的: 避免旧数据在 Unity 内被错误按 window 语义裁剪,导致观感退化成"薄层/稀疏".
+    [ScriptedImporter(2, "splat4d")]
     public sealed class GsplatSplat4DImporter : ScriptedImporter
     {
         // 与 HLSL 侧 `SH_C0` 保持一致,用于把 baseRgb 还原回 f_dc 系数:
@@ -216,7 +219,11 @@ namespace Gsplat.Editor
                     gsplatAsset.SHBands = 0;
                     gsplatAsset.SHs = null;
 
-                    // v1: 时间核语义固定为 window.
+                    // v1: legacy(无 header),无法明确标注时间核语义.
+                    // - 正常情况下它应当是 window(time0+duration),且 time/duration 都是归一化到 [0,1] 的.
+                    // - 但实践里我们也会遇到 "仍是 v1 layout,但 time/duration 更像 gaussian(mu+sigma)" 的旧数据.
+                    //   若强行按 window 语义渲染,会把可见 splat 压成一个时间切片,看起来就像"薄层/稀疏".
+                    // 因此这里先按 window 假设初始化,稍后会基于统计做一次轻量自动识别.
                     gsplatAsset.TimeModel = 1;
                     gsplatAsset.TemporalGaussianCutoff = 0.01f;
 
@@ -236,7 +243,12 @@ namespace Gsplat.Editor
                     var minDuration = float.PositiveInfinity;
                     var maxDuration = float.NegativeInfinity;
                     var maxSpeed = 0.0f;
-                    var maxDurationClamped = 0.0f;
+
+                    // v1 自动识别辅助统计:
+                    // - 如果 time/duration 大量越界,基本可以判定不是 "window+归一化" 的数据.
+                    // - 这种情况下,把它当 gaussian(mu+sigma) 解析更符合直觉,也更接近常见训练 checkpoint 的时间核定义.
+                    var outOfRangeTimeCount = 0;
+                    var outOfRangeDurationCount = 0;
 
                     for (var i = 0; i < count; i++)
                     {
@@ -292,18 +304,15 @@ namespace Gsplat.Editor
                         minDuration = Mathf.Min(minDuration, dt);
                         maxDuration = Mathf.Max(maxDuration, dt);
 
-                        var t0Clamped = Mathf.Clamp01(t0);
-                        var dtClamped = Mathf.Clamp01(dt);
-                        if (t0Clamped != t0 || dtClamped != dt)
-                            clamped = true;
-
                         gsplatAsset.Velocities[i] = vel;
-                        gsplatAsset.Times[i] = t0Clamped;
-                        gsplatAsset.Durations[i] = dtClamped;
+                        gsplatAsset.Times[i] = t0;
+                        gsplatAsset.Durations[i] = dt;
 
-                        // motion 统计(基于 clamp 后的 duration,更贴近运行时可见时间窗)
                         maxSpeed = Mathf.Max(maxSpeed, vel.magnitude);
-                        maxDurationClamped = Mathf.Max(maxDurationClamped, dtClamped);
+                        if (t0 < 0.0f || t0 > 1.0f)
+                            outOfRangeTimeCount++;
+                        if (dt < 0.0f || dt > 1.0f)
+                            outOfRangeDurationCount++;
 
                         // bounds
                         if (i == 0) bounds = new Bounds(pos, Vector3.zero);
@@ -318,13 +327,76 @@ namespace Gsplat.Editor
 
                     gsplatAsset.Bounds = bounds;
                     gsplatAsset.MaxSpeed = maxSpeed;
-                    gsplatAsset.MaxDuration = maxDurationClamped;
+
+                    // v1 时间核自动识别:
+                    // - 如果越界比例足够高,我们认为该 v1 文件更像 gaussian(mu+sigma).
+                    // - 否则保持 v1 传统 window(time0+duration)语义,并对 time/duration 做 clamp 到 [0,1].
+                    var timeOorRatio = outOfRangeTimeCount / (float)count;
+                    var durationOorRatio = outOfRangeDurationCount / (float)count;
+                    var assumeGaussian = timeOorRatio > 0.01f || durationOorRatio > 0.01f;
+
+                    if (assumeGaussian)
+                    {
+                        gsplatAsset.TimeModel = 2;
+
+                        // gaussian bounds: 用 cutoff 把 sigma 映射成一个“可见半宽”,用于 motion padding.
+                        // halfWidthFactor = sqrt(-2*ln(cutoff))
+                        var cutoff = gsplatAsset.TemporalGaussianCutoff;
+                        if (float.IsNaN(cutoff) || float.IsInfinity(cutoff) || cutoff <= 0.0f || cutoff >= 1.0f)
+                            cutoff = 0.01f;
+                        gsplatAsset.TemporalGaussianCutoff = cutoff;
+                        var halfWidthFactor = Mathf.Sqrt(-2.0f * Mathf.Log(cutoff));
+
+                        var maxDurationForBounds = 0.0f;
+                        for (var i = 0; i < count; i++)
+                        {
+                            var sigma = gsplatAsset.Durations[i];
+                            if (float.IsNaN(sigma) || float.IsInfinity(sigma) || sigma < 1e-6f)
+                            {
+                                sigma = 1e-6f;
+                                clamped = true;
+                            }
+
+                            gsplatAsset.Durations[i] = sigma;
+                            maxDurationForBounds = Mathf.Max(maxDurationForBounds, halfWidthFactor * sigma);
+                        }
+
+                        gsplatAsset.MaxDuration = maxDurationForBounds;
+
+                        if (GsplatSettings.Instance.ShowImportErrors)
+                        {
+                            Debug.LogWarning(
+                                $"{ctx.assetPath} import warning: legacy v1 `.splat4d` looks like gaussian(mu+sigma). " +
+                                $"auto set timeModel=2. " +
+                                $"time(min={minTime}, max={maxTime}), duration(min={minDuration}, max={maxDuration}), " +
+                                $"outOfRangeTimeRatio={timeOorRatio:P2}, outOfRangeDurationRatio={durationOorRatio:P2}");
+                        }
+                    }
+                    else
+                    {
+                        var maxDurationClamped = 0.0f;
+                        for (var i = 0; i < count; i++)
+                        {
+                            var t0 = gsplatAsset.Times[i];
+                            var dt = gsplatAsset.Durations[i];
+                            var t0Clamped = Mathf.Clamp01(t0);
+                            var dtClamped = Mathf.Clamp01(dt);
+                            if (t0Clamped != t0 || dtClamped != dt)
+                                clamped = true;
+
+                            gsplatAsset.Times[i] = t0Clamped;
+                            gsplatAsset.Durations[i] = dtClamped;
+                            maxDurationClamped = Mathf.Max(maxDurationClamped, dtClamped);
+                        }
+
+                        gsplatAsset.MaxDuration = maxDurationClamped;
+                    }
 
                     if (clamped && GsplatSettings.Instance.ShowImportErrors)
                     {
                         Debug.LogWarning(
-                            $"{ctx.assetPath} import warning: clamped time/duration to [0,1]. " +
-                            $"time(min={minTime}, max={maxTime}), duration(min={minDuration}, max={maxDuration})");
+                            $"{ctx.assetPath} import warning: sanitized/clamped values. " +
+                            $"time(min={minTime}, max={maxTime}), duration(min={minDuration}, max={maxDuration}), timeModel={gsplatAsset.TimeModel}");
                     }
 
                     EditorUtility.ClearProgressBar();
