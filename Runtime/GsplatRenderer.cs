@@ -595,7 +595,8 @@ namespace Gsplat
         {
             if (updateCount <= 0)
                 return true;
-            if (!m_shDeltaCS || kernel < 0 || !centroids || m_renderer == null || m_renderer.SHBuffer == null)
+            // 注意: GraphicsBuffer 不是 UnityEngine.Object,不能用 `!buffer` 这种写法做空值判断.
+            if (!m_shDeltaCS || kernel < 0 || centroids == null || m_renderer == null || m_renderer.SHBuffer == null)
                 return false;
 
             EnsureShDeltaUpdatesCapacity(updateCount);
