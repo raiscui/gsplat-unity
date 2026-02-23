@@ -56,6 +56,15 @@ namespace Gsplat
 
         public override void OnCameraPreCull(ScriptableRenderer renderer, in CameraData cameraData)
         {
+            // SRP 下我们统一在 `RenderPipelineManager.beginCameraRendering` 驱动排序.
+            // 如果用户仍然把这个 RendererFeature 挂在 URP RendererData 上,这里必须自动 no-op,
+            // 否则同一相机会被排序两次.
+            if (GsplatSorter.Instance.SortDrivenBySrpCallback)
+            {
+                m_hasGsplats = false;
+                return;
+            }
+
             m_hasGsplats = GsplatSorter.Instance.GatherGsplatsForCamera(cameraData.camera);
 #if !UNITY_6000_0_OR_NEWER
             m_pass.CommandBuffer ??= new CommandBuffer { name = "SortGsplats" };
@@ -65,6 +74,9 @@ namespace Gsplat
 
         public override void AddRenderPasses(ScriptableRenderer renderer, ref RenderingData renderingData)
         {
+            if (GsplatSorter.Instance.SortDrivenBySrpCallback)
+                return;
+
             if (GsplatSorter.Instance.Valid && GsplatSettings.Instance.Valid && m_hasGsplats)
                 renderer.EnqueuePass(m_pass);
         }

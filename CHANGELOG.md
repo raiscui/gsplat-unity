@@ -7,15 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.3] - 2026-02-23
+
 ### Added
 
 - Supports streaming data from RAM to VRAM ([#6](https://github.com/wuyize25/gsplat-unity/issues/6)). An option `Async Upload` is added to `GsplatRenderer` to enable this feature.
 - `.splat4d v2` supports SH delta-v1 at runtime: when `labelsEncoding=delta-v1`, `GsplatRenderer` applies per-frame label updates and uses a compute shader to scatter-write updated SH coefficients into `SHBuffer` (falls back to static frame0 SH when compute is unavailable).
+- Added `GsplatSettings.AllowSceneViewSortingWhenFocusedInPlayMode` to balance Play Mode performance and SceneView correctness.
 
 ### Fixed
 
 - `.sog4d` importer now has a macOS Editor WebP decode fallback (embedded `libwebp`) when `ImageConversion.LoadImage` does not support WebP.
 - Avoids sorter init errors in `-batchmode -nographics` (no graphics device) so EditMode tests can run without unrelated compute shader kernel log errors.
+- SceneView cameras in SRP (URP/HDRP) now trigger GPU sorting via `RenderPipelineManager.beginCameraRendering`, so sorting stays in sync even without configuring HDRP CustomPassVolume or URP RendererFeature.
+- In the Editor, changing `TimeNormalized` forces a SceneView repaint to avoid the "switch to GameView to refresh" workflow.
 
 ## [1.1.2] - 2025-11-20
 
@@ -68,7 +73,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - This is the first release of Gsplat, as a Package.
 
 
-[unreleased]: https://github.com/wuyize25/gsplat-unity/compare/v1.1.2...HEAD
+[unreleased]: https://github.com/wuyize25/gsplat-unity/compare/v1.1.3...HEAD
+[1.1.3]: https://github.com/wuyize25/gsplat-unity/compare/v1.1.2...v1.1.3
 [1.1.2]: https://github.com/wuyize25/gsplat-unity/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/wuyize25/gsplat-unity/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/wuyize25/gsplat-unity/compare/v1.0.3...v1.1.0

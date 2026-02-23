@@ -458,3 +458,24 @@
     - 找不到时的 warning 文案更准确,减少误导.
 - 文档同步:
   - `Tools~/Sog4D/README.md` 增加 `normalize-meta` 用法与典型报错解释.
+
+## 2026-02-23
+- 修复 HDRP/URP 在 Editor 的 SceneView(隐藏相机)下排序与刷新不同步的问题:
+  - `Runtime/GsplatSorter.cs`:
+    - SRP(URP/HDRP)下改为使用 `RenderPipelineManager.beginCameraRendering` 按相机触发 `DispatchSort`,
+      使 SceneView 相机移动/强旋转/转到背后时也能稳定更新排序结果.
+    - BiRP 下仍使用 `Camera.onPreCull`(历史行为),并在回调里用 `GraphicsSettings.currentRenderPipeline` 做门禁.
+  - `Runtime/SRP/GsplatHDRPPass.cs` / `Runtime/SRP/GsplatURPFeature.cs`:
+    - 当 SRP 回调驱动排序时自动 no-op,避免同一相机重复 dispatch sort.
+- Play 模式智能策略(性能与正确性平衡):
+  - `Runtime/GsplatSettings.cs` 新增 `AllowSceneViewSortingWhenFocusedInPlayMode`:
+    - 当 `SkipSceneViewSortingInPlayMode=true` 时,仅在 SceneView 窗口聚焦时才允许 SceneView 相机排序.
+  - `Editor/GsplatSettingsProvider.cs` 在 `Project Settings/Gsplat` 里露出相关开关.
+- 编辑态拖动 `TimeNormalized` 立刻刷新:
+  - `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs` 新增 `OnValidate`:
+    - `QueuePlayerLoopUpdate` + `SceneView.RepaintAll`,
+      避免“必须切到 GameView 再切回来才刷新”的工作流.
+- 文档与版本同步:
+  - `README.md` 更新 Setup: URP/HDRP 不再强依赖添加 RendererFeature/CustomPassVolume.
+  - `Documentation~/Implementation Details.md` 更新排序注入点说明(SRP 回调/ BiRP onPreCull).
+  - bump `package.json` 到 `1.1.3`,并更新 `CHANGELOG.md`.

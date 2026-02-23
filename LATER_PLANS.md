@@ -78,3 +78,17 @@
       - `streams.position.rangeMin/rangeMax` 与 `streams.scale.codebook` 输出为 `{x,y,z}` 数组.
   - 价值:
     - 新产物开箱即用,避免在团队里传播“先导出再修 meta”的隐性流程.
+
+## 2026-02-23
+- 候选改进: 在 SRP(URP/HDRP) 下增加一个高级开关,允许禁用 `beginCameraRendering` 驱动排序.
+  - 动机:
+    - 目前我们把排序统一搬到了 SRP 相机回调,默认不再需要 CustomPass/RendererFeature.
+    - 但某些项目可能希望精确控制“排序发生的注入点”(例如严格卡在 Transparent 前,或与其它自定义 pass 协调).
+  - 方向:
+    - 增加 `GsplatSettings.UseLegacySrpInjector`(或类似命名)并配套文档,开启时让 `GsplatHDRPPass`/`GsplatURPFeature` 恢复生效.
+
+- 候选改进: Play 模式 SceneView 聚焦判断当前使用 `SceneView.lastActiveSceneView`.
+  - 风险:
+    - 多 SceneView 窗口/多显示器时,`lastActiveSceneView` 可能不是正在绘制的那个 camera.
+  - 方向:
+    - 遍历 `SceneView.sceneViews` 找到 `hasFocus` 且 `sceneView.camera == cam` 的那一个,提高判断准确性.

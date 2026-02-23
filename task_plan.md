@@ -659,3 +659,50 @@ Unity Console 不再出现:
 - 待 Unity 侧确认:
   - 重新导入该 `.sog4d` 后不再报 meta.json 错误,并能正常播放.
   - 在已导入 sample 的项目里导入 `.splat4d` 不再报“未找到默认 VFX Graph asset”,并能自动挂 VFX 组件.
+
+---
+
+# 任务计划: 修复 HDRP/SceneView 下 Gsplat 排序与刷新不同步
+
+## 目标
+在 Unity 编辑器的 SceneView(隐藏相机)观察 Gsplat 时:
+1. 相机强烈旋转(尤其转到背后)时,高斯基元显示正确(排序正确).
+2. 拖动 `GsplatRenderer.TimeNormalized` 时,SceneView 立即同步更新,不需要切换到 GameView 再切回来“刷新”.
+3. HDRP/URP 不再强依赖额外的手动注入配置(HDRP 的 CustomPassVolume,URP 的 RendererFeature).
+4. Play 模式下避免无意义的“双相机双排序”性能损耗,但在你聚焦 SceneView 交互时仍保证正确性.
+
+## 现象
+- SceneView 相机强旋转/转到背后时,Gaussians 显示不正确,看起来像没有 sort.
+- 在编辑态拖动 `TimeNormalized` 时,SceneView 画面会“乱飞/不稳定”.
+  - 切到 GameView 再切回 SceneView 后,画面恢复正确.
+
+## 根因(已验证)
+1. HDRP/URP 的排序触发点此前依赖“管线注入点”(HDRP CustomPass/URP Feature),SceneView 相机并非必然覆盖,导致 `_OrderBuffer` 过期.
+2. 编辑态拖动 `TimeNormalized` 时,SceneView 不一定立刻 Repaint,导致你必须“切到 GameView 再切回来”才能看到一次同步后的结果.
+
+## 方向(二选一)
+- 方向A(推荐,最佳): SRP 通用相机回调驱动排序.
+  - 用 `RenderPipelineManager.beginCameraRendering` 在每个 SRP 相机开始渲染时触发 sort.
+  - HDRP/URP 的旧注入点保留但自动跳过,避免重复 sort.
+- 方向B(先能用): 继续依赖 HDRP CustomPassVolume,并要求项目配置覆盖 SceneView.
+  - 缺点: 配置依赖强,容易再次被项目设置/场景变化击穿.
+
+## 阶段
+- [x] 阶段1: 证据收集与代码定位
+- [x] 阶段2: SRP(beginCameraRendering) 驱动排序
+- [x] 阶段3: 旧注入点互斥(避免重复排序)
+- [x] 阶段4: Play 模式 SceneView “聚焦才排序”智能策略
+- [x] 阶段5: 编辑态拖动 TimeNormalized 立刻刷新(SceneView Repaint)
+- [x] 阶段6: 文档与版本更新(Setup 不再强依赖配置)
+- [x] 阶段7: 验证 + 四文件收尾(WORKLOG/ERRORFIX/LATER_PLANS)
+
+## 做出的决定
+- [决定] 选择方向A: SRP 通用相机回调驱动排序.
+  - 理由: SceneView 相机属于隐藏相机,依赖 HDRP CustomPassVolume 覆盖它不稳定,且对使用者不友好.
+- [决定] Play 模式默认仍跳过 SceneView 排序,但允许在 SceneView 聚焦时临时启用排序.
+  - 理由: 兼顾“编辑体验正确性”和“Play 模式性能”.
+
+## 状态
+**已完成**
+- 时间: 2026-02-23
+- 已完成代码改动与文档更新,并已追加 `WORKLOG.md/ERRORFIX.md/LATER_PLANS.md` 收尾记录.

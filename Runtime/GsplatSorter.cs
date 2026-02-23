@@ -80,6 +80,29 @@ namespace Gsplat
 
         public bool Valid => m_sortPass is { Valid: true };
 
+        // --------------------------------------------------------------------
+        // SRP 排序驱动策略:
+        // - 在 SRP(URP/HDRP) 下,我们改为使用 `RenderPipelineManager.beginCameraRendering`
+        //   作为统一的“按相机触发排序”入口,以保证 SceneView(隐藏相机)也能稳定触发 sort.
+        // - 在 BiRP 下,仍使用 `Camera.onPreCull`(历史行为).
+        // --------------------------------------------------------------------
+        public bool SortDrivenBySrpCallback => GraphicsSettings.currentRenderPipeline != null;
+
+#if UNITY_EDITOR
+        static bool IsFocusedSceneViewCamera(Camera cam)
+        {
+            // 说明:
+            // - SceneView 的相机是隐藏相机,不会出现在 Hierarchy.
+            // - 在 Play 模式下,我们希望“只在你聚焦 SceneView 并交互时”才允许为 SceneView 排序,
+            //   以避免无意义的双相机双排序开销.
+            var sceneView = UnityEditor.SceneView.lastActiveSceneView;
+            if (sceneView == null || !sceneView.hasFocus)
+                return false;
+
+            return sceneView.camera == cam;
+        }
+#endif
+
         public void InitSorter(ComputeShader computeShader)
         {
             m_sortPass = computeShader ? new GsplatSortPass(computeShader) : null;
@@ -89,8 +112,11 @@ namespace Gsplat
         {
             if (m_gsplats.Count == 0)
             {
-                if (!GraphicsSettings.currentRenderPipeline)
-                    Camera.onPreCull += OnPreCullCamera;
+                // 说明:
+                // - 我们同时订阅 BiRP 与 SRP 的入口,并在回调里用 currentRenderPipeline 做门禁.
+                // - 这样可以避免“在运行期切换渲染管线/切换项目设置”导致入口不一致.
+                Camera.onPreCull += OnPreCullCamera;
+                RenderPipelineManager.beginCameraRendering += OnBeginCameraRendering;
             }
 
             m_gsplats.Add(gsplat);
@@ -114,6 +140,7 @@ namespace Gsplat
             m_commandBuffer?.Dispose();
             m_commandBuffer = null;
             Camera.onPreCull -= OnPreCullCamera;
+            RenderPipelineManager.beginCameraRendering -= OnBeginCameraRendering;
         }
 
         public bool GatherGsplatsForCamera(Camera cam)
@@ -135,7 +162,18 @@ namespace Gsplat
             if (Application.isPlaying && settings && settings.SkipSceneViewSortingInPlayMode &&
                 cam.cameraType == CameraType.SceneView)
             {
+#if UNITY_EDITOR
+                if (settings.AllowSceneViewSortingWhenFocusedInPlayMode && IsFocusedSceneViewCamera(cam))
+                {
+                    // SceneView 聚焦时允许排序,保证你交互时显示正确.
+                }
+                else
+                {
+                    return false;
+                }
+#else
                 return false;
+#endif
             }
 
             m_activeGsplats.Clear();
@@ -170,11 +208,31 @@ namespace Gsplat
 
         void OnPreCullCamera(Camera camera)
         {
+            // BiRP only.
+            if (GraphicsSettings.currentRenderPipeline)
+                return;
+
             if (!Valid || !GsplatSettings.Instance.Valid || !GatherGsplatsForCamera(camera))
                 return;
 
             InitialClearCmdBuffer(camera);
             DispatchSort(m_commandBuffer, camera);
+        }
+
+        void OnBeginCameraRendering(ScriptableRenderContext context, Camera camera)
+        {
+            // SRP only.
+            if (!GraphicsSettings.currentRenderPipeline)
+                return;
+
+            if (!Valid || !GsplatSettings.Instance.Valid || !GatherGsplatsForCamera(camera))
+                return;
+
+            // SRP 下没有 CameraEvent 注入,这里直接执行 CommandBuffer.
+            InitialClearCmdBuffer(camera);
+            DispatchSort(m_commandBuffer, camera);
+            context.ExecuteCommandBuffer(m_commandBuffer);
+            m_commandBuffer.Clear();
         }
 
         public void DispatchSort(CommandBuffer cmd, Camera camera)

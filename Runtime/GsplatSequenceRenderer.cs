@@ -175,6 +175,26 @@ namespace Gsplat
             DestroyOwnedRuntimeSequenceAssetIfAny();
         }
 
+#if UNITY_EDITOR
+        void OnValidate()
+        {
+            // 编辑态拖动 `TimeNormalized` 时,主动触发 SceneView 刷新,
+            // 避免出现“切到 GameView 才更新”的错觉.
+            if (Application.isPlaying)
+                return;
+
+            var t = TimeNormalized;
+            if (float.IsNaN(t) || float.IsInfinity(t))
+                t = 0.0f;
+            t = Mathf.Clamp01(t);
+
+            m_timeNormalizedThisFrame = t;
+
+            UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
+            UnityEditor.SceneView.RepaintAll();
+        }
+#endif
+
         void Update()
         {
             // ----------------------------------------------------------------

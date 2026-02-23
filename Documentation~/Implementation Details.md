@@ -14,7 +14,10 @@ The following two passes are performed each frame for every active camera.
 
 This pass sorts the splats by their depth to the camera. The sorting is performed entirely on the GPU using `Gsplat.compute`. This compute shader leverages a highly optimized radix sort implementation from `DeviceRadixSort.hlsl`.
 
-*   **Integration**: The sorting is initiated by custom render pipeline hooks: `GsplatURPFeature` for URP, `GsplatHDRPPass` for HDRP, or `GsplatSorter.OnPreCullCamera` for BiRP. These hooks call `GsplatSorter.DispatchSort`.
+*   **Integration**: The sorting is initiated per-camera:
+    - **BiRP**: `Camera.onPreCull` triggers `GsplatSorter.DispatchSort`.
+    - **SRP (URP/HDRP)**: `RenderPipelineManager.beginCameraRendering` triggers `GsplatSorter.DispatchSort`.
+    - Legacy URP/HDRP injectors (`GsplatURPFeature` / `GsplatHDRPPass`) are kept for compatibility but auto-no-op when SRP callbacks are driving sorting (to avoid dispatching sort twice).
 *   **Sorting Steps**:
     1.  **`InitPayload`** (Optional): If the payload buffer (`b_sortPayload`) has not been initialized, fill it with sequential indices (0, 1, 2, ... `SplatCount`-1). 
     2.  **`CalcDistance`**: For each splat, this kernel calculates its view-space depth, and stores them in the `b_sort` buffer which will be used as the sorting key.

@@ -37,6 +37,15 @@ namespace Gsplat.Editor
             EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.AutoDegradeMaxSplatCount)));
             EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.MaxSplatsForVfx)));
 
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Editor Play Mode", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(
+                m_gsplatSettings.FindProperty(nameof(GsplatSettings.SkipSceneViewSortingInPlayMode)));
+            EditorGUILayout.PropertyField(
+                m_gsplatSettings.FindProperty(nameof(GsplatSettings.AllowSceneViewSortingWhenFocusedInPlayMode)));
+            EditorGUILayout.PropertyField(
+                m_gsplatSettings.FindProperty(nameof(GsplatSettings.SkipSceneViewRenderingInPlayMode)));
+
             m_gsplatSettings.ApplyModifiedProperties();
         }
 

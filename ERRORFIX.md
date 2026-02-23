@@ -425,3 +425,55 @@
   - 需要在 Unity 中导入 sample 后验证:
     - 导入 `.splat4d` 不再输出“未找到默认 VFX Graph asset”的 warning.
     - prefab 自动挂上 `VisualEffect` + `GsplatVfxBinder`,并把 `EnableGsplatBackend=false`.
+
+## 2026-02-23: 修复 Editor SceneView 相机下 Gsplat 排序不更新(背面显示错误) + 拖动 TimeNormalized 不刷新
+
+### 现象
+
+1) SceneView(隐藏相机)观察 Gsplat 时:
+- 相机强烈旋转,尤其转到背后时,高斯基元显示不正确,像是没有排序.
+
+2) 编辑态拖动 `GsplatRenderer.TimeNormalized` 时:
+- SceneView 画面会乱/不稳定.
+- 需要切到 GameView 再切回 SceneView 才会“刷新一下”恢复正确.
+
+### 本质(根因)
+
+1) 排序(sort)的触发点此前依赖“管线注入点”:
+- HDRP: `GsplatHDRPPass(CustomPass)` 触发 `DispatchSort`.
+- URP: `GsplatURPFeature(RendererFeature)` 触发 `DispatchSort`.
+- BiRP: `Camera.onPreCull` 触发 `DispatchSort`.
+
+但 SceneView 相机并非必然覆盖 HDRP CustomPass/URP Feature,因此 SceneView 可能渲染了 Gsplat,却使用了旧的 `_OrderBuffer`(排序结果过期),在背面/强旋转时特别明显.
+
+2) 编辑态拖动 `TimeNormalized` 时,SceneView 不一定立即 Repaint,导致“排序/渲染”和“时间参数缓存”在体感上不同步.
+
+### 修复
+
+1) SRP(URP/HDRP)统一改为按相机回调驱动排序:
+- `Runtime/GsplatSorter.cs`:
+  - 在 `RenderPipelineManager.beginCameraRendering` 中对每个 SRP 相机调用 `DispatchSort`.
+  - BiRP 下仍走 `Camera.onPreCull`,并用 `GraphicsSettings.currentRenderPipeline` 做门禁避免互相干扰.
+
+2) 避免重复排序:
+- `Runtime/SRP/GsplatHDRPPass.cs` / `Runtime/SRP/GsplatURPFeature.cs`:
+  - 当 SRP 回调驱动排序时自动 no-op,避免同一相机重复 dispatch sort.
+
+3) Play 模式智能策略(性能与正确性平衡):
+- `Runtime/GsplatSettings.cs` 新增 `AllowSceneViewSortingWhenFocusedInPlayMode`.
+  - 当 `SkipSceneViewSortingInPlayMode=true` 时,仅在 SceneView 聚焦时才允许 SceneView 相机排序.
+
+4) 编辑态拖动 TimeNormalized 立刻刷新:
+- `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs` 新增 `OnValidate`:
+  - `QueuePlayerLoopUpdate` + `SceneView.RepaintAll`.
+
+### 验证(手工)
+
+- HDRP 项目中删除/禁用 `CustomPassVolume` 后:
+  - SceneView 仍应正确显示(不再依赖 CustomPass 才排序).
+  - 强旋转/转背面应稳定正确(排序更新).
+- 编辑态拖动 `TimeNormalized`:
+  - SceneView 应立即更新,不需要切 GameView 刷新.
+- Play 模式:
+  - SceneView 未聚焦时仍会跳过排序(性能优先).
+  - 聚焦 SceneView 并交互时显示应正确(允许排序).

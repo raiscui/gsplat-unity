@@ -1175,6 +1175,32 @@ namespace Gsplat
             m_prevAsset = null;
         }
 
+#if UNITY_EDITOR
+        void OnValidate()
+        {
+            // 编辑态拖动 `TimeNormalized` 时,SceneView 往往不会像 GameView 那样稳定触发“排序+渲染”的完整链路.
+            // 这里的目标是: 你在 Inspector 拖动滑条时,SceneView 立刻 Repaint,并且排序使用最新的时间参数.
+            if (Application.isPlaying)
+                return;
+
+            var t = TimeNormalized;
+            if (float.IsNaN(t) || float.IsInfinity(t))
+                t = 0.0f;
+            t = Mathf.Clamp01(t);
+
+            m_timeNormalizedThisFrame = t;
+
+            // 触发 Editor 的渲染循环:
+            // - QueuePlayerLoopUpdate: 让 ExecuteAlways 的 Update 尽快执行(包括动态 SH(delta)等逻辑).
+            // - RepaintAll: 让 SceneView 相机立刻渲染,从而触发按相机排序(beginCameraRendering).
+            UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
+            UnityEditor.SceneView.RepaintAll();
+
+            // 可选: 如果启用了 `.splat4d` 动态 SH(delta-v1),尽量在编辑态拖动时也同步刷新一次.
+            TryApplyShDeltaForTime(t);
+        }
+#endif
+
         void Update()
         {
             if (!m_disabledDueToError && m_renderer != null && m_pendingSplatCount > 0)

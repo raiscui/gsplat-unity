@@ -95,6 +95,12 @@ namespace Gsplat
         public bool SkipSceneViewSortingInPlayMode = true;
 
         [Tooltip(
+            "当 `SkipSceneViewSortingInPlayMode` 开启时,是否允许在 SceneView 窗口聚焦(你正在操作/查看 SceneView)时临时恢复排序.\n" +
+            "适用场景: 你希望 Play 模式优先保证 GameView 性能,但在你交互 SceneView 时仍保持显示正确.\n" +
+            "注意: 这只影响 Editor 的 SceneView,不影响 Player build.")]
+        public bool AllowSceneViewSortingWhenFocusedInPlayMode = true;
+
+        [Tooltip(
             "在 Unity Editor 的 Play 模式下,SceneView 额外渲染会带来额外 draw cost.\n" +
             "开启后会在 Play 模式仅对 Game/VR 相机提交 Gsplat draw call,从而让 SceneView 不再渲染 Gsplat.\n" +
             "注意: 这只影响 Editor 的 SceneView,不影响 Player build.")]

@@ -56,10 +56,9 @@ Note that for Android, you also need to uncheck `Apply display rotation during r
 The next steps depend on the Render Pipeline you are using:
 
 - BiRP: Does not need any extra setup.
-- URP: Add `Gsplat URP Feature` to the URP renderer settings.
-  - Find the `Universal Renderer Data` your project is using, click the `Add Renderer Feature` button, and choose `Gsplat URP Feature.`
-  - If you are using Unity 6 or later, the Render Graph "Compatibility Mode" in URP settings must be turned off!
-- HDRP: Add `Custom Pass` volume object in your scene and a `Gsplat HDRP Pass` entry to it. The injection Point should be set to `Before Transparent`.
+- URP/HDRP: No extra setup is required.
+  - Sorting is automatically dispatched per-camera via SRP callbacks, so both GameView and SceneView cameras stay in sync.
+  - If you previously added `Gsplat URP Feature` or a `Gsplat HDRP Pass` CustomPass, you can keep them; they will auto-no-op to avoid duplicate sorting.
 
 ### Import Assets
 
@@ -185,6 +184,7 @@ Editor note:
   Since sorting is dispatched per camera, this can run the GPU sort twice per frame and reduce FPS.
 - If you only care about GameView smoothness while playing:
   - Keep `GsplatSettings.SkipSceneViewSortingInPlayMode` enabled (default: `true`).
+  - Keep `GsplatSettings.AllowSceneViewSortingWhenFocusedInPlayMode` enabled (default: `true`) to sort only when you are actively focusing the SceneView.
   - Optionally enable `GsplatSettings.SkipSceneViewRenderingInPlayMode` (default: `true`) to avoid SceneView draw cost.
 
 ### VFX Graph backend (optional)

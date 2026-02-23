@@ -781,3 +781,44 @@
 
 1. FreeTimeGsVanilla exporter 产物的 `meta.json` 缺少必需字段,且 Vector3 序列化形态不符合本包约定,因此 Unity 侧必然导入失败.
 2. `.splat4d` importer 对 VFX sample 的资产查找只覆盖了包内路径,未覆盖 Unity 实际导入后的 `Assets/Samples/...` 路径.
+
+---
+
+## 2026-02-23: HDRP/SceneView 下 Gsplat 排序与刷新不同步(根因与方案)
+
+### 现象(用户反馈)
+
+- SceneView(隐藏相机)观察 Gsplat 时:
+  - 相机强旋转,尤其转到背后时,高斯基元显示不正确,像是没有排序.
+  - 编辑态拖动 `GsplatRenderer.TimeNormalized` 时,SceneView 画面会乱/不稳定.
+    - 需要切到 GameView 再切回来才恢复正确.
+
+### 代码事实(当前实现)
+
+- GPU 排序的触发点是“按相机触发”的:
+  - BiRP: `Runtime/GsplatSorter.cs` 走 `Camera.onPreCull`.
+  - URP: `Runtime/SRP/GsplatURPFeature.cs` 在 renderer pass 中调用 `DispatchSort`.
+  - HDRP: `Runtime/SRP/GsplatHDRPPass.cs` 在 `CustomPass.Execute` 中调用 `DispatchSort`.
+- 关键点: HDRP 的这条路径依赖场景里存在 `CustomPassVolume`,且该 volume 的设置要覆盖到 SceneView 相机的渲染.
+  - 如果 SceneView 相机没有跑到这个 CustomPass,那么它就不会触发 sort.
+  - SceneView 仍可能渲染 Gsplat(由 `Graphics.RenderMeshPrimitives` 提交 draw),从而出现“渲染了,但用的是旧 `_OrderBuffer`”的错乱显示.
+
+### 根因(本质层)
+
+1. “排序驱动”与“相机渲染”之间缺少一个对 SceneView 稳定成立的触发点.
+   - 目前 HDRP 通过 CustomPass 触发,但 SceneView 并非必然被 CustomPass 覆盖.
+2. 编辑态拖动 `TimeNormalized` 时,SceneView 不一定立即 Repaint,导致你看到“切 GameView 才刷新”的假象.
+
+### 方案(决定)
+
+- 采用 SRP 通用回调驱动排序:
+  - 在 `RenderPipelineManager.beginCameraRendering` 里对每个 SRP 相机触发 `DispatchSort`.
+  - 这样 HDRP/URP 都不再强依赖额外配置,SceneView 也一定会触发 sort.
+- 为避免重复计算:
+  - 当 SRP 回调启用时,`GsplatHDRPPass` 与 `GsplatURPFeature` 自动跳过 `DispatchSort`.
+- 为 Play 模式兼顾性能:
+  - 保留 `SkipSceneViewSortingInPlayMode=true` 的默认策略.
+  - 新增“SceneView 聚焦时允许排序”的开关,仅在你交互 SceneView 时保证正确性.
+- 为编辑态拖动体验:
+  - 在 `GsplatRenderer.OnValidate()` 中触发 `SceneView.RepaintAll()` + `QueuePlayerLoopUpdate()`,
+    并同步 `m_timeNormalizedThisFrame`,让排序与渲染用到的 `t` 在当帧一致.
