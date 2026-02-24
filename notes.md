@@ -185,3 +185,42 @@
 3. 在 `GsplatRenderer` 侧检测 non-overlap keyframe segments:
    - 满足条件时,每帧只对当前 segment 做 sort+draw.
    - 不满足条件时保持旧行为(全量排序+shader 硬裁剪).
+
+---
+
+## 2026-02-24 15:32:37 +0800: 四文件摘要(continuous-learning)
+
+## 四文件摘要(用于决定是否提取/更新 skill)
+- 任务目标(task_plan.md):
+  - 修复 Editor(EditMode) 下 ActiveCameraOnly 的“整体闪烁/消失”.
+  - 修复 EditMode 在 GameView 下拖动 `TimeNormalized` 时“全消失”.
+  - 优化 PlayMode `TimeNormalized` 拖动/`AutoPlay` 的卡顿(尤其是 keyframe `.splat4d(window)`).
+- 关键决定(task_plan.md):
+  - 采用“相机回调驱动 draw 提交”,不再赌 Update 单次 draw 能覆盖 Editor 的多次 render invocation.
+  - ActiveCameraOnly(EditMode) 采用 viewport hint(最近交互视窗)做“粘性”决策,避免 Inspector 抢焦点导致 ActiveCamera 切走.
+  - keyframe `.splat4d(window)` 走“子范围 sort+draw”优化: baseIndex + segment 检测,只处理当前 segment.
+- 关键发现(notes.md):
+  - Unity Editor(SRP) 下同一 `Time.frameCount` 内可能出现多次 `beginCameraRendering`,Update 只提交一次 draw 会导致 `renderCount > drawCount` 的闪烁模式.
+  - SceneView 内部 camera 可能 `enabled=false` / `isActiveAndEnabled=false` 但仍参与 SRP 回调,因此不能用 `isActiveAndEnabled` 做硬门禁.
+  - keyframe `.splat4d(window)` 常见为多 segment records 叠加,同一时刻只有 1 个 segment 可见,全量 radix sort 是纯浪费.
+- 实际变更(WORKLOG.md):
+  - 新增 `GsplatActiveCameraOverride` 组件,用于显式指定 ActiveCamera(跨窗口稳态).
+  - 新增 `GsplatEditorDiagnostics` 捕获 Metal 跳绘制 warning 并自动 dump ring-buffer 证据.
+  - sorter/render 支持 `SplatBaseIndex` 子范围,compute+shader+渲染侧完整打通.
+  - `GsplatRenderer` 检测 non-overlap segments,window model 下按 segment 做 sort+draw.
+  - `OnValidate` 使用 `InternalEditorUtility.RepaintAllViews()` 同刷 SceneView/GameView.
+- 错误与根因(ERRORFIX.md):
+  - 闪烁本质是“相机渲染调用次数 > draw 提交次数”(时序架构问题),不是简单 UI 信号 bug.
+  - GameView 全消失本质是 EditMode 相机选择依赖 focusedWindow,Inspector 抢焦点后 ActiveCamera 切走导致 gate.
+  - PlayMode 卡顿本质是 keyframe 多 segment 数据仍全量排序,成本随 segment 数线性膨胀.
+- 可复用点候选(1-3 条):
+  1. Editor(SRP) 里不要假设 1 帧只渲染一次相机; draw 要对齐到 camera callback 链路,并避免用 sort guard 去 gate draw.
+  2. ActiveCameraOnly(EditMode) 不要只用 focusedWindow; 用“最近交互视窗”的 sticky hint 才能稳态支持 Inspector 拖动/编辑.
+  3. “多段 records 叠加但同刻只显一段”的数据形态,应尽量把 O(totalRecords) 降到 O(recordsPerSegment)(子范围 sort+draw).
+- 是否需要固化到 docs/specs: 是.
+  - `AGENTS.md`: 补充 Metal 的 "requires a ComputeBuffer ... Skipping draw calls" 识别与处理要点,以及 Editor(SRP) 多次 beginCameraRendering 的注意事项.
+  - `Documentation~/Implementation Details.md`: 补充 keyframe `.splat4d(window)` segment 子范围 sort/draw 的设计与条件.
+- 是否提取/更新 skill: 是.
+  - 更新现有 skill: `self-learning.unity-editor-srp-beginCameraRendering-flicker`(补充 SceneView camera enabled 状态坑位).
+  - 新增 skill 候选:
+    - `self-learning.unity-metal-skip-draw-missing-buffer`: Metal 因 StructuredBuffer 未绑定导致跳绘制的排障与修复.

@@ -6,7 +6,7 @@ description: |
   但 draw 只在 ExecuteAlways.Update 中提交一次,导致部分 render invocation 没有 draw.
   解决思路: 把 draw 提交对齐到 beginCameraRendering(或等价的相机渲染回调)链路,并避免 EditMode 双重渲染.
 author: Claude Code
-version: 1.0.0
+version: 1.0.1
 date: 2026-02-24
 ---
 
@@ -109,6 +109,28 @@ date: 2026-02-24
 
 - sort guard 只影响 “是否需要重新排序”.
 - render 仍应在每次 render invocation 提交(至少在 Editor 的闪烁场景里).
+
+## 常见坑: 用 `isActiveAndEnabled` 门禁 SceneView camera
+在某些 Unity/Editor 状态下,SceneView 的内部 camera 可能出现这种“反直觉组合”:
+
+- `camera.enabled == false`
+- `camera.isActiveAndEnabled == false`
+- 但它仍然会触发 SRP 的 `beginCameraRendering`.
+
+如果你的渲染门禁写成:
+
+- `if (!camera.isActiveAndEnabled) return;`
+
+那么就会出现:
+
+- 相机确实在渲染回调链路里.
+- 但你跳过了 draw 提交.
+- 最终表现为 `renderCount > drawCount`,体感就是“整帧闪烁/消失”.
+
+推荐做法:
+
+- 把 `beginCameraRendering` 回调参数里的 `camera` 视为事实来源.
+- 对 SceneView 相机只做 `null/destroyed` 防御,不要用 `isActiveAndEnabled` 过滤.
 
 ## 验证标准
 修复后,你应该能在日志里看到:

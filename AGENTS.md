@@ -37,9 +37,11 @@ python3 Tools~/Splat4D/ply_sequence_to_splat4d.py --input-dir /path/to/time_*.pl
 - Note: Package Manager samples are copied into the Unity project under `Assets/Samples/...` and do not auto-update when `Samples~/` changes; if a sample fix "doesn't work", check whether you're running the copied sample instead of the package source.
 - When changing sorting/shaders, validate on a subgroup-capable graphics API (D3D12, Metal, or Vulkan).
 - Metal compute caveat: Metal does not support buffer `GetDimensions` queries in HLSLcc. Pass buffer sizes as constants from C# when needed.
+- Metal render caveat: if you see `requires a ComputeBuffer at index (...) ... Skipping draw calls to avoid crashing`, treat it as "a StructuredBuffer binding is missing". Prefer rebinding all StructuredBuffers right before each draw call, and for optional buffers (e.g. 4D buffers) bind a dummy buffer even when the feature is off (Metal can still skip draws if the shader declares the buffer but nothing is bound).
 - When debugging `Kernel at index (...) is invalid`, treat it as "kernel compile failed" as well as "kernel missing". Prefer `ComputeShader.IsSupported` for a stable "can this run" check; `GetKernelThreadGroupSizes` is useful but can throw on some Unity/Metal combinations.
 - For RGBA8 UNorm "data textures" (e.g. `TextureFormat.RGBA32`), prefer reading as `float4` and converting to bytes in HLSL; integer views can be stricter on Metal.
 - When touching VFX backend code, verify compilation both with and without `com.unity.visualeffectgraph` installed.
+- Editor SRP caveat: in Edit Mode, Unity can call `RenderPipelineManager.beginCameraRendering` multiple times within the same `Time.frameCount`. If draw submission happens only once per `ExecuteAlways.Update`, you can get `render invocation count > draw submission count` flicker. Align draw submission to the camera callbacks and do not filter SceneView cameras by `isActiveAndEnabled` (SceneView internal cameras can be disabled but still participate in SRP callbacks).
 
 ## Commit & Pull Request Guidelines
 

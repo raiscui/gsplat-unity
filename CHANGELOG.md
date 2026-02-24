@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fixed Metal draw-skip warnings ("requires a ComputeBuffer ... but none provided") by binding all required `GraphicsBuffer` resources on a per-renderer material instance (and rebinding before each draw call, treating the 4D buffers as always-required bindings, using dummy buffers when needed).
-- Fixed Editor Edit Mode flicker in `ActiveCameraOnly` mode by making SceneView the deterministic default active camera (GameView targeting now requires an explicit active camera override or switching to `AllCameras`).
+- Fixed Editor Edit Mode flicker in `ActiveCameraOnly` mode by making SceneView the deterministic default active camera (GameView selection uses a sticky "last interacted viewport" hint, and you can always force a Game/VR camera via `GsplatActiveCameraOverride`).
 - Fixed Editor Edit Mode flicker in SRP where a camera can trigger multiple `beginCameraRendering` invocations within the same frame, but draw submission was happening only once in `ExecuteAlways.Update` (draw submission is now aligned to the camera callbacks in Edit Mode `ActiveCameraOnly`).
 - Fixed splats disappearing in the GameView (Edit Mode) while dragging `TimeNormalized` in the Inspector (GameView stays "sticky" as the active viewport even when Inspector takes focus).
 - Fixed very slow keyframe `.splat4d(window)` playback by sorting and rendering only the active time segment (sub-range sort/draw) when the asset matches the non-overlapping segment pattern.

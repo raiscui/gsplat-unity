@@ -64,9 +64,10 @@ Camera selection note:
 
 - By default, `GsplatSettings.CameraMode` is `ActiveCameraOnly` (performance mode).
   - Play Mode / Player: only one active Game/VR camera is sorted and rendered each frame (prefers `Camera.main`).
-  - Editor (Edit Mode): SceneView stays visible and stays sorted even while you interact with other Editor UI (Inspector/Hierarchy).
-    - Sorting is driven by the SceneView camera.
-    - Rendering is submitted to SceneView cameras to avoid "visible/invisible" flicker caused by unstable Editor camera instances.
+  - Editor (Edit Mode): camera selection uses a sticky "last interacted viewport" hint.
+    - Interact with SceneView: SceneView is treated as active (stable while you use other Editor UI like Inspector/Hierarchy).
+    - Interact with GameView: the active Game/VR camera is treated as active (and stays active while Inspector takes focus, e.g. when dragging `TimeNormalized`).
+    - Rendering is submitted from camera callbacks to avoid "visible/invisible" flicker caused by unstable Editor camera instances.
   - If `GsplatSorter.Instance.ActiveGameCameraOverride` is set to a valid camera, it always takes precedence in Play Mode / Player.
     - Convenience: add `GsplatActiveCameraOverride` to your main Game/VR camera to manage this automatically.
       - When multiple overrides exist, higher `Priority` wins; ties prefer the last enabled one.

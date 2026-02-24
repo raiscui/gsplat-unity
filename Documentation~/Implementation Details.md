@@ -38,6 +38,8 @@ This pass sorts the splats by their depth to the camera. The sorting is performe
     3.  **`DeviceRadixSort`**: The `Upsweep`, `Scan`, and `Downsweep` kernels execute a device-wide radix sort. It sorts the depth values in the `b_sort` buffer. Crucially, it applies the same reordering operations to the `b_sortPayload` buffer.
 *   **Result**: After the sort, the `b_sortPayload` buffer (which is the `OrderBuffer` from `GsplatRendererImpl`) contains the original splat indices, now sorted from back-to-front based on their depth to the camera.
 
+*   **Optional optimization (keyframe `.splat4d(window)` segments)**: Some `.splat4d` assets are exported as multiple time segments appended into a single buffer (each segment has a constant `time0/duration`, and segments do not overlap). At any given `TimeNormalized`, typically only one segment is visible, so sorting the full `totalRecords` each frame is wasted work. When this non-overlapping segment pattern is detected at runtime, Gsplat can sort and draw only the active sub-range by passing a `BaseIndex` into `Gsplat.compute` (so `CalcDistance` reads `baseIndex + localId`) and a matching `_SplatBaseIndex` into `Gsplat.shader` (so the local order maps back to the absolute splat id).
+
 #### Render Pass
 
 With the splats sorted, they can now be drawn using `Gsplat.shader`.

@@ -100,3 +100,6 @@ InitTestScene*.unity*
 
 /.idea/
 .envrc.private
+
+# Codex local config (machine-specific)
+.codex/config.toml
