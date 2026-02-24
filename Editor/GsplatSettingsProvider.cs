@@ -30,6 +30,10 @@ namespace Gsplat.Editor
             EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.ShowImportErrors)));
 
             EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Camera", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.CameraMode)));
+
+            EditorGUILayout.Space();
             EditorGUILayout.LabelField("Resource Budgeting", EditorStyles.boldLabel);
             EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.VramWarnRatio)));
             EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.AutoDegrade)));
@@ -45,6 +49,10 @@ namespace Gsplat.Editor
                 m_gsplatSettings.FindProperty(nameof(GsplatSettings.AllowSceneViewSortingWhenFocusedInPlayMode)));
             EditorGUILayout.PropertyField(
                 m_gsplatSettings.FindProperty(nameof(GsplatSettings.SkipSceneViewRenderingInPlayMode)));
+
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Diagnostics", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(m_gsplatSettings.FindProperty(nameof(GsplatSettings.EnableEditorDiagnostics)));
 
             m_gsplatSettings.ApplyModifiedProperties();
         }

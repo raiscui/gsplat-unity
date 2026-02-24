@@ -3,6 +3,7 @@
 
 using System;
 using System.Buffers.Binary;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using UnityEngine;
@@ -10,7 +11,7 @@ using UnityEngine;
 namespace Gsplat
 {
     [ExecuteAlways]
-    public class GsplatRenderer : MonoBehaviour, IGsplat
+    public class GsplatRenderer : MonoBehaviour, IGsplat, IGsplatRenderSubmitter
     {
         public GsplatAsset GsplatAsset;
         [Range(0, 3)] public int SHDegree = 3;
@@ -89,6 +90,8 @@ namespace Gsplat
             (RenderBeforeUploadComplete ? SplatCount > 0 : SplatCount == m_effectiveSplatCount);
 
         public uint SplatCount => GsplatAsset ? m_effectiveSplatCount - m_pendingSplatCount : 0;
+        uint IGsplat.SplatCount => m_sortSplatCountThisFrame;
+        uint IGsplat.SplatBaseIndex => m_sortSplatBaseIndexThisFrame;
         public ISorterResource SorterResource => m_renderer.SorterResource;
         public bool Has4D => m_renderer != null && m_renderer.Has4D;
         bool IGsplat.Has4D => m_renderer != null && m_renderer.Has4D;
@@ -98,6 +101,33 @@ namespace Gsplat
         GraphicsBuffer IGsplat.VelocityBuffer => m_renderer != null ? m_renderer.VelocityBuffer : null;
         GraphicsBuffer IGsplat.TimeBuffer => m_renderer != null ? m_renderer.TimeBuffer : null;
         GraphicsBuffer IGsplat.DurationBuffer => m_renderer != null ? m_renderer.DurationBuffer : null;
+
+        void IGsplatRenderSubmitter.SubmitDrawForCamera(Camera camera)
+        {
+            // 说明:
+            // - 该回调由 `GsplatSorter` 在 Editor 相机渲染回调(beginCameraRendering)中触发.
+            // - 目的: 解决 Editor 下“同一帧多次渲染,但 Update 只提交一次 draw”导致的闪烁.
+            // - Play 模式仍走 Update 提交 draw,避免重复渲染.
+            if (Application.isPlaying)
+                return;
+
+            if (!Valid || m_renderer == null || !m_renderer.Valid || !GsplatAsset)
+                return;
+
+            var motionPadding = 0.0f;
+            if (m_renderer.Has4D)
+            {
+                motionPadding = GsplatAsset.MaxSpeed * GsplatAsset.MaxDuration;
+                if (motionPadding < 0.0f || float.IsNaN(motionPadding) || float.IsInfinity(motionPadding))
+                    motionPadding = 0.0f;
+            }
+
+            m_renderer.RenderForCamera(camera, m_sortSplatCountThisFrame, transform, GsplatAsset.Bounds,
+                gameObject.layer, GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding,
+                timeModel: GetEffectiveTimeModel(), temporalCutoff: GetEffectiveTemporalCutoff(),
+                diagTag: "EditMode.CameraCallback",
+                splatBaseIndex: m_sortSplatBaseIndexThisFrame);
+        }
 
         // 公开 GPU buffers,用于可选的 VFX Graph 后端绑定等场景.
         public GraphicsBuffer PositionBuffer => m_renderer != null ? m_renderer.PositionBuffer : null;
@@ -112,10 +142,36 @@ namespace Gsplat
 
         uint m_pendingSplatCount;
         float m_timeNormalizedThisFrame;
+        uint m_sortSplatBaseIndexThisFrame;
+        uint m_sortSplatCountThisFrame;
         uint m_effectiveSplatCount;
         byte m_effectiveSHBands;
         bool m_effectiveHas4D;
         bool m_disabledDueToError;
+        float m_nextRendererRecoveryTime;
+
+        // --------------------------------------------------------------------
+        // keyframe `.splat4d(window)` segment 优化(可选):
+        // - 典型 keyframe 资产会把多个时间段(segment)的 records 依次追加到同一个 arrays/buffers 中.
+        // - 同一时刻往往只有一个 segment 可见.
+        // - 若我们仍对全量 records 做 radix sort,成本会按 segment 数线性膨胀,PlayMode 很容易卡成 PPT.
+        //
+        // 本优化的目标:
+        // - 检测出 "time/duration 常量 + segments 不重叠" 的 keyframe 形态.
+        // - 播放时仅对当前 segment 的子范围 [baseIndex, baseIndex+count) 做 sort+draw.
+        // - 不满足条件时保持旧行为(全量排序 + shader 硬裁剪).
+        // --------------------------------------------------------------------
+        struct TimeSegment
+        {
+            public uint BaseIndex;
+            public uint Count;
+            public float Time0;
+            public float Duration;
+            public float End;
+        }
+
+        bool m_timeSegmentsEnabled;
+        TimeSegment[] m_timeSegments;
 
         static bool Has4DFields(GsplatAsset asset)
         {
@@ -160,6 +216,14 @@ namespace Gsplat
         };
 
         static int DivRoundUp(int x, int d) => (x + d - 1) / d;
+
+        static int FloatBits(float v)
+        {
+            unsafe
+            {
+                return *(int*)&v;
+            }
+        }
 
         void DisposeShDeltaResources()
         {
@@ -1047,6 +1111,198 @@ namespace Gsplat
             }
         }
 
+        void RefreshTimeSegments()
+        {
+            // 默认关闭:
+            // - 只有满足“keyframe 多 segment 且不重叠”的强条件时才开启.
+            m_timeSegmentsEnabled = false;
+            m_timeSegments = null;
+
+            if (!GsplatAsset || !m_effectiveHas4D)
+                return;
+
+            // 仅对 window model 生效:
+            // - gaussian model 的时间核是连续权重,无法简单选出“唯一 segment”.
+            if (GetEffectiveTimeModel() != 1)
+                return;
+
+            var times = GsplatAsset.Times;
+            var durations = GsplatAsset.Durations;
+            if (times == null || durations == null)
+                return;
+
+            var total = checked((int)m_effectiveSplatCount);
+            if (total <= 0 || times.Length < total || durations.Length < total)
+                return;
+
+            var segments = new List<TimeSegment>(16);
+
+            var i = 0;
+            while (i < total)
+            {
+                var t0 = times[i];
+                var dt = durations[i];
+
+                // 防御: 发现非法值则直接放弃优化,避免误判导致范围错误.
+                if (float.IsNaN(t0) || float.IsInfinity(t0) ||
+                    float.IsNaN(dt) || float.IsInfinity(dt) || dt <= 0.0f)
+                {
+                    m_timeSegmentsEnabled = false;
+                    m_timeSegments = null;
+                    return;
+                }
+
+                var tBits = FloatBits(t0);
+                var dtBits = FloatBits(dt);
+
+                var j = i + 1;
+                while (j < total && FloatBits(times[j]) == tBits && FloatBits(durations[j]) == dtBits)
+                    j++;
+
+                segments.Add(new TimeSegment
+                {
+                    BaseIndex = (uint)i,
+                    Count = (uint)(j - i),
+                    Time0 = t0,
+                    Duration = dt,
+                    End = t0 + dt
+                });
+
+                i = j;
+            }
+
+            if (segments.Count <= 1)
+                return;
+
+            // ----------------------------------------------------------------
+            // 启用条件(保守):
+            // - segment 的 time0 单调不减.
+            // - segments 不重叠(prevEnd <= nextTime0).
+            //
+            // 这样在任意时刻 t,最多只有 1 个 segment 需要被渲染,才能安全地用“子范围 sort+draw”优化.
+            // ----------------------------------------------------------------
+            const float k_epsilon = 1e-5f;
+            for (var si = 1; si < segments.Count; si++)
+            {
+                var prev = segments[si - 1];
+                var cur = segments[si];
+
+                if (cur.Count == 0)
+                    return;
+
+                if (cur.Time0 + k_epsilon < prev.Time0)
+                    return;
+
+                if (prev.End > cur.Time0 + k_epsilon)
+                    return;
+            }
+
+            // 兜底校验: 最后一段不能越过 total.
+            var last = segments[segments.Count - 1];
+            if (last.BaseIndex + last.Count > (uint)total)
+                return;
+
+            m_timeSegments = segments.ToArray();
+            m_timeSegmentsEnabled = true;
+
+            var minCount = m_timeSegments[0].Count;
+            var maxCount = minCount;
+            for (var si = 1; si < m_timeSegments.Length; si++)
+            {
+                var c = m_timeSegments[si].Count;
+                if (c < minCount)
+                    minCount = c;
+                if (c > maxCount)
+                    maxCount = c;
+            }
+
+            // 说明:
+            // - 这条 log 只在 asset/recreate 时打印,不会按帧刷屏.
+            // - 便于用户确认“当前 asset 是否命中了 segment 优化”.
+            Debug.Log(
+                $"[Gsplat] 已启用 keyframe segment 子范围 sort/draw 优化: " +
+                $"segments={m_timeSegments.Length}, perSegmentCount={minCount}..{maxCount}, totalRecords={m_effectiveSplatCount}.");
+        }
+
+        int FindTimeSegmentIndex(float t)
+        {
+            if (!m_timeSegmentsEnabled || m_timeSegments == null || m_timeSegments.Length == 0)
+                return -1;
+
+            // 与 shader 保持一致: 归一化时间强制落在 [0,1].
+            t = Mathf.Clamp01(t);
+
+            // 二分: 找到最后一个 Time0 <= t 的 segment.
+            var lo = 0;
+            var hi = m_timeSegments.Length - 1;
+            var candidate = -1;
+            while (lo <= hi)
+            {
+                var mid = (lo + hi) >> 1;
+                if (t < m_timeSegments[mid].Time0)
+                {
+                    hi = mid - 1;
+                }
+                else
+                {
+                    candidate = mid;
+                    lo = mid + 1;
+                }
+            }
+
+            if (candidate < 0)
+                return -1;
+
+            // 覆盖边界误差:
+            // - keyframe 分段常见 dt=1/N,浮点加法可能出现极小的累积误差.
+            // - 用一个小 epsilon 让 t==End 附近仍命中.
+            const float k_epsilon = 1e-5f;
+            return t <= m_timeSegments[candidate].End + k_epsilon ? candidate : -1;
+        }
+
+        void UpdateSortRangeForTime(float t)
+        {
+            // uploadedCount 语义:
+            // - 对于同步上传: uploadedCount==totalRecords.
+            // - 对于异步上传: uploadedCount 是已写入 GPU buffers 的前缀长度[0,uploadedCount).
+            var uploadedCount = SplatCount;
+
+            if (!m_timeSegmentsEnabled || m_timeSegments == null || m_timeSegments.Length == 0)
+            {
+                m_sortSplatBaseIndexThisFrame = 0;
+                m_sortSplatCountThisFrame = uploadedCount;
+                return;
+            }
+
+            var segIndex = FindTimeSegmentIndex(t);
+            if (segIndex < 0)
+            {
+                // 保守兜底: 若无法定位 segment,回退到全量排序/渲染以保证正确性.
+                m_sortSplatBaseIndexThisFrame = 0;
+                m_sortSplatCountThisFrame = uploadedCount;
+                return;
+            }
+
+            var seg = m_timeSegments[segIndex];
+            var baseIndex = seg.BaseIndex;
+            var count = seg.Count;
+
+            // 异步上传兜底: segment 可能尚未完全上传,这里按已上传前缀做 clamp,避免越界读取.
+            if (baseIndex >= uploadedCount)
+            {
+                m_sortSplatBaseIndexThisFrame = baseIndex;
+                m_sortSplatCountThisFrame = 0;
+                return;
+            }
+
+            var available = uploadedCount - baseIndex;
+            if (count > available)
+                count = available;
+
+            m_sortSplatBaseIndexThisFrame = baseIndex;
+            m_sortSplatCountThisFrame = count;
+        }
+
         bool TryCreateOrRecreateRenderer()
         {
             m_disabledDueToError = false;
@@ -1057,12 +1313,15 @@ namespace Gsplat
                 m_effectiveSplatCount = 0;
                 m_effectiveSHBands = 0;
                 m_effectiveHas4D = false;
+                m_timeSegmentsEnabled = false;
+                m_timeSegments = null;
                 m_renderer?.Dispose();
                 m_renderer = null;
                 return false;
             }
 
             RefreshEffectiveConfigAndLog();
+            RefreshTimeSegments();
 
             try
             {
@@ -1164,6 +1423,9 @@ namespace Gsplat
 
             // 避免下一帧 Update 再次重复触发一次重建.
             m_prevAsset = GsplatAsset;
+
+            // 初始化本帧 sort/draw 子范围(可能命中 keyframe segment 优化).
+            UpdateSortRangeForTime(m_timeNormalizedThisFrame);
         }
 
         void OnDisable()
@@ -1189,12 +1451,14 @@ namespace Gsplat
             t = Mathf.Clamp01(t);
 
             m_timeNormalizedThisFrame = t;
+            UpdateSortRangeForTime(t);
 
             // 触发 Editor 的渲染循环:
             // - QueuePlayerLoopUpdate: 让 ExecuteAlways 的 Update 尽快执行(包括动态 SH(delta)等逻辑).
             // - RepaintAll: 让 SceneView 相机立刻渲染,从而触发按相机排序(beginCameraRendering).
             UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
-            UnityEditor.SceneView.RepaintAll();
+            // RepaintAllViews 会同时刷新 SceneView/GameView,避免“拖动 Inspector 滑条时 GameView 不更新/突然消失”的错觉.
+            UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
 
             // 可选: 如果启用了 `.splat4d` 动态 SH(delta-v1),尽量在编辑态拖动时也同步刷新一次.
             TryApplyShDeltaForTime(t);
@@ -1203,6 +1467,37 @@ namespace Gsplat
 
         void Update()
         {
+            // ----------------------------------------------------------------
+            // 稳态恢复: GPU buffer 可能在 Editor/Metal 下因域重载、图形设备切换等原因失效.
+            // - 典型表象: Unity 输出 "requires a ComputeBuffer ... Skipping draw calls" 并导致视口闪烁/消失.
+            // - 仅检查 `!= null` 不够,必须结合 `GraphicsBuffer.IsValid()`.
+            // - 这里做一次节流的自动重建,避免用户必须手动禁用/启用组件.
+            // ----------------------------------------------------------------
+            if (!m_disabledDueToError && m_renderer != null && !m_renderer.Valid && GsplatAsset)
+            {
+                var now = Time.realtimeSinceStartup;
+                if (now >= m_nextRendererRecoveryTime)
+                {
+                    m_nextRendererRecoveryTime = now + 1.0f;
+                    Debug.LogWarning("[Gsplat] 检测到 GraphicsBuffer 已失效,将尝试自动重建 renderer 资源(可能会有一次性卡顿).");
+
+                    if (TryCreateOrRecreateRenderer())
+                    {
+#if UNITY_EDITOR
+                        if (AsyncUpload && Application.isPlaying)
+#else
+                        if (AsyncUpload)
+#endif
+                            SetBufferDataAsync();
+                        else
+                            SetBufferData();
+
+                        // renderer 重建后,delta runtime 也必须重建(它依赖新的 SHBuffer).
+                        TryInitShDeltaRuntime();
+                    }
+                }
+            }
+
             if (!m_disabledDueToError && m_renderer != null && m_pendingSplatCount > 0)
                 UploadData();
 
@@ -1241,6 +1536,12 @@ namespace Gsplat
                 TryInitShDeltaRuntime();
             }
 
+            // 更新本帧 sort/draw 子范围:
+            // - 依赖最新的 TimeNormalized.
+            // - 依赖最新的 upload 进度(异步上传时 SplatCount 会变化).
+            // - asset 变化时 `RefreshTimeSegments` 可能改变 segment 判定,因此这里在 asset-check 之后统一刷新.
+            UpdateSortRangeForTime(m_timeNormalizedThisFrame);
+
             // 在渲染前按 TimeNormalized 应用 delta-v1 updates(仅在帧变化时 dispatch).
             TryApplyShDeltaForTime(m_timeNormalizedThisFrame);
 
@@ -1254,9 +1555,25 @@ namespace Gsplat
                         motionPadding = 0.0f;
                 }
 
-                m_renderer.Render(SplatCount, transform, GsplatAsset.Bounds,
-                    gameObject.layer, GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding,
-                    timeModel: GetEffectiveTimeModel(), temporalCutoff: GetEffectiveTemporalCutoff());
+#if UNITY_EDITOR
+                // Editor 非 Play 模式下,SRP 相机可能在同一帧内触发多次渲染(beginCameraRendering).
+                // 为避免“Update 只提交一次 draw”导致 SceneView/GameView 闪烁,
+                // 我们在 SRP 下改由 `GsplatSorter` 的相机回调驱动 draw 提交.
+                var settings = GsplatSettings.Instance;
+                if (!Application.isPlaying &&
+                    GsplatSorter.Instance.SortDrivenBySrpCallback &&
+                    settings && settings.CameraMode == GsplatCameraMode.ActiveCameraOnly)
+                {
+                    // do nothing: draw submitted via camera callbacks.
+                }
+                else
+#endif
+                {
+                    m_renderer.Render(m_sortSplatCountThisFrame, transform, GsplatAsset.Bounds,
+                        gameObject.layer, GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding,
+                        timeModel: GetEffectiveTimeModel(), temporalCutoff: GetEffectiveTemporalCutoff(),
+                        splatBaseIndex: m_sortSplatBaseIndexThisFrame);
+                }
             }
         }
     }

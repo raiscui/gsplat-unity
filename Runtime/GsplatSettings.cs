@@ -18,6 +18,15 @@ namespace Gsplat
         ReduceSHThenCapSplatCount = 3
     }
 
+    // 相机模式:
+    // - ActiveCameraOnly(默认): 只对“当前激活相机”排序+渲染,避免多相机重复 sort 的线性性能灾难.
+    // - AllCameras: 保持兼容行为,所有相机都能看到 Gsplat(但多相机会带来更高开销).
+    public enum GsplatCameraMode
+    {
+        ActiveCameraOnly = 0,
+        AllCameras = 1
+    }
+
     public class GsplatSettings : ScriptableObject
     {
         const string k_gsplatSettingsResourcesPath = "GsplatSettings";
@@ -86,6 +95,22 @@ namespace Gsplat
         public uint MaxSplatsForVfx = 500000;
 
         // --------------------------------------------------------------------
+        // 相机模式(多相机性能开关)
+        // --------------------------------------------------------------------
+        [Tooltip(
+            "决定 Gsplat 是否对所有相机排序+渲染.\n" +
+            "- ActiveCameraOnly(默认): 性能优先.\n" +
+            "  - Play 模式/Player: 只对 1 个 ActiveCamera 做排序与渲染,用于避免反射/探针/多视口等多相机导致的重复 sort 开销.\n" +
+            "  - Editor 非 Play: 默认保证 SceneView 稳定可见并可排序,以避免 overlay/UIElements 等交互导致“显示/不显示”闪烁.\n" +
+            "    - 当你最近一次交互的是 GameView(点击/聚焦)时,ActiveCamera 会保持为 Game/VR 相机,用于在 EditMode 预览 GameView.\n" +
+            "      - 这样你去 Inspector 拖动 `TimeNormalized` 时,GameView 不会因为焦点转移而突然消失.\n" +
+            "    - 若你希望完全不依赖 Editor 的焦点/鼠标窗口信号(例如复杂相机切换系统),请使用 `GsplatActiveCameraOverride`.\n" +
+            "- AllCameras: 所有相机都能看到 Gsplat(兼容模式),但在 >1M splats 时多相机可能导致性能线性恶化.\n" +
+            "建议: 如果你需要多个相机(例如 portals/反射/探针/辅助相机)都正确看到,请切到 AllCameras.\n" +
+            "否则在 ActiveCameraOnly 下我们只保证“主要编辑视角(SceneView)与主相机(Play/Player)”的体验与性能.")]
+        public GsplatCameraMode CameraMode = GsplatCameraMode.ActiveCameraOnly;
+
+        // --------------------------------------------------------------------
         // Unity Editor Play Mode 性能开关
         // --------------------------------------------------------------------
         [Tooltip(
@@ -105,6 +130,16 @@ namespace Gsplat
             "开启后会在 Play 模式仅对 Game/VR 相机提交 Gsplat draw call,从而让 SceneView 不再渲染 Gsplat.\n" +
             "注意: 这只影响 Editor 的 SceneView,不影响 Player build.")]
         public bool SkipSceneViewRenderingInPlayMode = true;
+
+        // --------------------------------------------------------------------
+        // 调试开关(默认关闭)
+        // --------------------------------------------------------------------
+        [Tooltip(
+            "启用 Editor 诊断日志(用于排查 EditMode 下的闪烁/消失).\n" +
+            "说明:\n" +
+            "- 该开关会输出较多日志,并可能影响编辑器性能.\n" +
+            "- 仅建议在需要定位问题时临时开启,问题定位后请关闭.")]
+        public bool EnableEditorDiagnostics = false;
 
         public Material[] Materials { get; private set; }
         public Mesh Mesh { get; private set; }

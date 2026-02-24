@@ -23,6 +23,7 @@ namespace Gsplat
         static readonly int k_timeModel = Shader.PropertyToID("_TimeModel");
         static readonly int k_temporalCutoff = Shader.PropertyToID("_TemporalCutoff");
         static readonly int k_eNumKeys = Shader.PropertyToID("e_numKeys");
+        static readonly int k_eBaseIndex = Shader.PropertyToID("e_baseIndex");
         static readonly int k_eThreadBlocks = Shader.PropertyToID("e_threadBlocks");
         static readonly int k_bPassHist = Shader.PropertyToID("b_passHist");
         static readonly int k_bGlobalHist = Shader.PropertyToID("b_globalHist");
@@ -47,6 +48,7 @@ namespace Gsplat
         public struct Args
         {
             public uint Count;
+            public uint BaseIndex;
             public Matrix4x4 MatrixMv;
             public GraphicsBuffer PositionBuffer;
             public GraphicsBuffer VelocityBuffer;
@@ -183,6 +185,7 @@ namespace Gsplat
 
             // Setup overall constants
             cmd.SetComputeIntParam(m_CS, k_eNumKeys, (int)numKeys);
+            cmd.SetComputeIntParam(m_CS, k_eBaseIndex, (int)args.BaseIndex);
             cmd.SetComputeIntParam(m_CS, k_eThreadBlocks, (int)threadBlocks);
             cmd.SetComputeMatrixParam(m_CS, k_matrixMv, args.MatrixMv);
             cmd.SetComputeFloatParam(m_CS, k_timeNormalized, Mathf.Clamp01(args.TimeNormalized));

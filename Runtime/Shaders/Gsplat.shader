@@ -29,6 +29,7 @@ Shader "Gsplat/Standard"
             bool _GammaToLinear;
             int _SplatCount;
             int _SplatInstanceSize;
+            uint _SplatBaseIndex;
             int _SHDegree;
             int _Has4D;
             float _TimeNormalized;
@@ -68,7 +69,10 @@ Shader "Gsplat/Standard"
                 if (source.order >= _SplatCount)
                     return false;
 
-                source.id = _OrderBuffer[source.order];
+                // 子范围渲染:
+                // - OrderBuffer 内存的是 local index(0..SplatCount-1).
+                // - 通过 baseIndex 把它映射回全量 buffers 的 absolute splatId.
+                source.id = _SplatBaseIndex + _OrderBuffer[source.order];
                 source.cornerUV = float2(v.vertex.x, v.vertex.y);
                 return true;
             }

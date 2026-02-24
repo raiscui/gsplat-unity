@@ -477,3 +477,436 @@
 - Play 模式:
   - SceneView 未聚焦时仍会跳过排序(性能优先).
   - 聚焦 SceneView 并交互时显示应正确(允许排序).
+
+## 2026-02-23 18:53:24 +0800: 修复 ActiveCameraOnly 在 batchmode 下解析 ActiveCamera 失败 + 回归测试不稳定
+
+### 现象
+
+- Unity `-batchmode -nographics` 跑 `Gsplat.Tests.GsplatActiveCameraOnlyTests` 时:
+  - `TryGetActiveCamera_*` 用例失败.
+  - 初期表现为 `TryGetActiveCamera` 返回 false(无法解析 ActiveCamera).
+  - 修复后又表现为返回项目默认场景的 `Main Camera`,导致断言期望不一致.
+
+### 本质(根因)
+
+1) batchmode/nographics 下的相机枚举不稳定:
+- 在少数环境下,`Camera.allCamerasCount` 可能返回 0,即使场景里确实存在 Camera.
+- 这会导致 `ResolveActiveGameOrVrCamera` 得到空集合,从而 ActiveCamera 解析失败.
+
+2) tests 环境不干净:
+- 测试项目可能默认打开一个包含 `Main Camera` 的场景.
+- 用例里的“单相机/多相机”假设会被污染,导致断言不稳定.
+
+### 修复
+
+- `Runtime/GsplatSorter.cs`:
+  - 当 `Camera.allCamerasCount==0` 时,用 FindObjects 系列做一次兜底枚举.
+  - batchmode 下禁用“按帧缓存”,并避免命中 `null` 缓存导致后续一直返回 false.
+- `Tests/Editor/GsplatActiveCameraOnlyTests.cs`:
+  - `[SetUp]` 时创建 `EmptyScene`,让相机集合完全由用例控制.
+
+### 验证
+
+- Unity 6000.3.8f1,`-batchmode -nographics`:
+  - `-testFilter Gsplat.Tests.GsplatActiveCameraOnlyTests`: passed(4/4)
+  - `-testFilter Gsplat.Tests`: passed(21), skipped(1), failed(0)
+
+## 2026-02-23 19:34:58 +0800: 修复 Editor UI 交互导致 SceneView 中 Gsplat 闪烁(ActiveCameraOnly)
+
+### 现象
+- Editor 非 Play 模式下,当你在 Inspector/Hierarchy 等 UI 中交互时:
+  - SceneView 里的 Gsplat 整体会出现“显示/不显示”闪烁.
+  - 该现象在引入 `CameraMode=ActiveCameraOnly` 之前不存在.
+
+### 本质(根因)
+- `ActiveCameraOnly` 把 sort/render 都门禁到 ActiveCamera.
+- 旧 EditMode ActiveCamera 选择策略过度依赖 `SceneView.hasFocus`:
+  - SceneView 失焦时(例如你在 Inspector 拖滑条),ActiveCamera 会被解析为 Game/VR 相机或上一帧缓存.
+- 结果:
+  - SceneView repaint 时不一定是 ActiveCamera.
+  - 因为渲染只提交给 ActiveCamera,所以 SceneView 就会出现整体闪烁.
+
+### 修复
+- `Runtime/GsplatSorter.cs`:
+  - 新增 `TryGetAnySceneViewCamera()`:
+    - 不要求 SceneView.hasFocus,只要能拿到一个 SceneView.camera 就返回.
+  - EditMode 下的 ActiveCamera 规则调整为:
+    - GameView 聚焦 -> 选 Game/VR 相机.
+    - 否则只要 SceneView 存在 -> 选 SceneView 相机.
+    - 若无 SceneView(例如 batchmode) -> 兜底为上一帧或 Game/VR 规则.
+- 同步文档与 OpenSpec:
+  - `README.md`
+  - `Documentation~/Implementation Details.md`
+  - `openspec/changes/active-camera-only/design.md`
+  - `openspec/changes/active-camera-only/specs/gsplat-camera-selection/spec.md`
+
+### 验证
+- `openspec validate --all --strict`: 9 passed, 0 failed
+- Unity 6000.3.8f1,`-batchmode -nographics`:
+  - `-testFilter Gsplat.Tests.GsplatActiveCameraOnlyTests`: passed(4/4)
+  - `-testFilter Gsplat.Tests`: passed(21), skipped(1), failed(0)
+
+## 2026-02-23 21:17:00 +0800: 修复 ActiveCameraOnly 在 Editor UI 交互时仍闪烁(视口信号不稳态)
+
+### 现象
+- 用户确认: 只有在 `GsplatSettings.CameraMode=ActiveCameraOnly` 时,与 Editor UI(Inspector/Hierarchy 等)交互会导致视口中的 Gsplat 整体“显示/不显示”闪烁.
+- 切到 `CameraMode=AllCameras` 后不闪烁.
+
+### 本质(根因)
+- `ActiveCameraOnly` 会把 sort/render 都门禁到 ActiveCamera.
+- EditMode 下如果用 `EditorWindow.focusedWindow` 这类“键盘焦点信号”去判断当前在看哪个视口:
+  - 在拖动 Inspector 控件或其它 UI 交互时,`focusedWindow` 可能保持在 GameView/SceneView,或在多个窗口间抖动.
+  - ActiveCamera 因此会在 SceneView/GameView 间来回切换.
+  - 因为渲染只提交给 ActiveCamera,所以你在某个视口里看到的就是整体“显示/不显示”的闪烁.
+
+### 修复
+- `Runtime/GsplatSorter.cs`:
+  - EditMode 引入更稳态的“视口 hint”(SceneView/GameView)缓存:
+    - 优先读取 `EditorWindow.mouseOverWindow`:
+      - 鼠标悬停在 SceneView -> hint=SceneView,并缓存该 SceneView.camera.
+      - 鼠标悬停在 GameView -> hint=GameView.
+    - 鼠标悬停在 Inspector/Hierarchy 等非视口窗口 -> 保持上一帧 hint 不变,避免抖动导致闪烁.
+    - 仅在 `mouseOverWindow==null` 时才回退使用 `focusedWindow`.
+  - 明确 override 优先级:
+    - 当 `ActiveGameCameraOverride` 有效时,`TryGetActiveCamera` 直接返回 override(符合 spec 的 "override MUST win").
+- 同步文档与 OpenSpec:
+  - `README.md` / `Documentation~/Implementation Details.md` / `CHANGELOG.md`
+  - `openspec/changes/active-camera-only/design.md`
+  - `openspec/changes/active-camera-only/specs/gsplat-camera-selection/spec.md`
+
+### 验证(证据型)
+- OpenSpec:
+  - `openspec validate --all --strict`: 9 passed, 0 failed
+- Unity 6000.3.8f1(运行中实例,通过 Unity MCP):
+  - `Gsplat.Tests.Editor`: passed=22, failed=0, skipped=0
+
+## 2026-02-24 06:18:43 +0800: 修复 SceneView UI 滑动仍闪烁 + Metal 缓冲区未绑定导致跳绘制
+
+### 现象(用户反馈)
+- 仍然闪烁:
+  - 鼠标在 "场景(SceneView)" 窗口的 UI 上滑动时,仍会出现整体“显示/不显示”闪烁.
+  - 同时 GameView 也可能出现“突然消失/又出现”(体感像随机).
+- Console warning(Metal):
+  - `Metal: Vertex or Fragment Shader "Gsplat/Standard" requires a ComputeBuffer at index ... to be bound, but none provided. Skipping draw calls to avoid crashing.`
+
+### 本质(根因)
+1) Metal 的 warning 是硬错误:
+   - shader 需要的 StructuredBuffer 未绑定时,Unity 为避免崩溃会直接跳过 draw call.
+   - 这会让任何视口(GameView/SceneView)都可能“偶发整体消失”,并把问题伪装成相机切换闪烁.
+2) EditMode 的视口 hint 更新不足:
+   - 在某些交互链路里,`EditorWindow.focusedWindow` 可能不是 SceneView,
+     但 `mouseOverWindow` 仍然是 SceneView(或事件只在 SceneView GUI 中可见).
+   - 如果 hint 不及时切回 SceneView,ActiveCameraOnly 会把渲染提交给 Game/VR 相机,导致 SceneView “看起来闪烁”.
+
+### 修复
+- `Runtime/GsplatRendererImpl.cs`:
+  - 在每次 `Render()` 提交 draw call 前重新 `SetBuffer` 绑定所有 StructuredBuffers,提升 Metal 绑定稳态.
+  - `Valid` 逻辑把 `OrderBuffer` 与 4D buffers(Velocity/Time/Duration,含 dummy)视为必需资源,避免漏绑.
+  - EditMode 下渲染相机选择跟随 `TryGetActiveCamera`:
+    - ActiveCamera=SceneView 时,对所有 SceneView cameras 提交 draw(规避内部 camera 实例抖动).
+    - ActiveCamera=Game/VR 时,只对 ActiveCamera 提交 draw(保证 GameView 稳定).
+- `Runtime/GsplatSorter.cs`:
+  - `SceneView.duringSceneGui` 增加 `MouseMove` 作为“SceneView 交互锁定”信号,让鼠标在 SceneView UI 上滑动时也能稳定 hint=SceneView.
+  - 当鼠标悬停在 SceneView 时,无条件更新 hint=SceneView(不再要求 `over==focused`).
+  - SceneView 排序门禁补强:
+    - 如果 ActiveCamera 被 override 到 Game/VR,SceneView 不再抢排序,避免把 OrderBuffer 刷成 SceneView 视角.
+- 新增 `Runtime/GsplatActiveCameraOverride.cs`:
+  - 挂在 Game/VR Camera 上自动写入 `GsplatSorter.ActiveGameCameraOverride`.
+  - 支持 `Priority`,同优先级下“最后启用者 wins”.
+
+### 验证(证据型)
+- OpenSpec:
+  - `openspec validate active-camera-only --type change --strict`: passed
+  - `openspec validate --all --strict`: 9 passed, 0 failed
+- Unity 命令行(独立最小工程,避免主项目被 Unity 锁):
+  - project: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests`
+  - `Gsplat.Tests`(EditMode): total=22, passed=21, failed=0, skipped=1(VFX Graph 未安装导致 Ignore)
+
+### 补充验证(回归锁定 override 组件行为)
+- 新增 tests:
+  - `Tests/Editor/GsplatActiveCameraOverrideComponentTests.cs`
+- Unity 命令行(同一最小工程):
+  - `Gsplat.Tests`(EditMode): total=25, passed=24, failed=0, skipped=1(VFX Graph 未安装导致 Ignore)
+
+## 2026-02-24: 修复 SceneView UI(overlay/UIElements)区域 `mouseOverWindow` 不可靠导致的闪烁
+
+### 现象
+- 用户反馈: 鼠标滑动在 "场景(SceneView)" 窗口的 UI 上,仍会出现整体“显示/不显示”闪烁.
+
+### 本质(根因)
+- 在部分 Unity/Editor UI 组合下:
+  - `UnityEditor.EditorWindow.mouseOverWindow` 在 SceneView 的 overlay/UIElements 区域可能返回 `null`,
+    或返回“非 SceneView 的内部窗口”.
+- 我们的 ActiveCameraOnly(EditMode) 在 `mouseOverWindow==null` 时会沿用缓存 hint.
+  - 当缓存 hint 恰好是 GameView 时,ActiveCamera 会被解析为 Game/VR 相机,
+    SceneView 那一帧就不会提交 draw,表现为闪烁.
+
+### 修复
+- `Runtime/GsplatSorter.cs`:
+  - 通过反射可选读取 `UnityEditor.SceneView.mouseOverWindow`(若存在),作为 `EditorWindow.mouseOverWindow` 的补强信号.
+  - 并把该补强判定放在 “over==null -> 沿用缓存 hint” 之前,优先确保 SceneView 的 hint 稳定.
+- `Runtime/GsplatRendererImpl.cs`:
+  - EditMode + ActiveCamera=SceneView 时,渲染目标相机改为遍历 `UnityEditor.SceneView.sceneViews` 的 cameras.
+  - 避免 `Camera.GetAllCameras` 在 Editor 下枚举不到隐藏 SceneView camera 时,退化为“只画某一个实例”导致闪烁.
+
+### 验证(证据型)
+- Unity 6000.3.8f1,`-batchmode -nographics`(最小工程 `_tmp_gsplat_pkgtests`):
+  - `Gsplat.Tests`(EditMode): total=25, passed=24, failed=0, skipped=1
+  - 结果文件: `_tmp_gsplat_pkgtests/Logs/TestResults_gsplat.xml`
+
+## 2026-02-24: 架构级修复 - EditMode 停止 SceneView/GameView 自动切换(消灭闪烁根源路径)
+
+### 现象
+- 用户反馈: 即使补强 `mouseOverWindow` 与 SceneView 交互锁定,在 SceneView 的 overlay/UIElements 区域仍可能出现闪烁.
+
+### 本质(根因)
+- EditMode 下 “ActiveCameraOnly 依赖 Editor UI 信号做 SceneView/GameView 自动切换” 这个架构本身不可靠:
+  - UI 信号在不同 Unity 版本/不同 UI 形态(overlay/UIElements)下不可控.
+  - 任何一次误判都会让 ActiveCameraOnly 当帧把 draw 提交给错误相机,从而出现整体“显示/不显示”闪烁.
+
+### 修复(策略变更)
+- `Runtime/GsplatSorter.cs`:
+  - 当 `Application.isPlaying==false` 且 `CameraMode=ActiveCameraOnly` 时:
+    - 默认始终选择 SceneView(若存在)作为 ActiveCamera.
+    - 不再基于 Editor UI 信号自动切换到 GameView.
+    - 若需要在 EditMode 以 GameView 为主,通过显式 override(`GsplatActiveCameraOverride`)或切到 `AllCameras`.
+- 同步更新 OpenSpec 文档,保证“契约与实现一致”:
+  - `openspec/changes/active-camera-only/specs/gsplat-camera-selection/spec.md`
+  - `openspec/changes/active-camera-only/design.md`
+
+### 验证(证据型)
+- OpenSpec:
+  - `openspec validate --all --strict`: passed
+- Unity 6000.3.8f1,`-batchmode -nographics`(最小工程 `_tmp_gsplat_pkgtests`):
+  - `Gsplat.Tests`(EditMode): total=25, passed=24, failed=0, skipped=1
+  - 结果文件: `_tmp_gsplat_pkgtests/Logs/TestResults_gsplat2.xml`
+
+## 2026-02-24: 增加可控的诊断采集链路(为定位“仍闪烁”提供证据)
+
+### 现象
+- 用户反馈: 仍然闪烁,并且“没有任何相关 log”,无法判断是:
+  - draw 根本没提交,
+  - 提交到了错误相机实例,
+  - 还是提交了但被 Metal 跳绘制.
+
+### 决策(先证据,再修复)
+- 遵循 systematic-debugging:
+  - 在没有根因证据之前,不再继续追加“猜测式修复”.
+  - 先把观测点打通,让闪烁发生时可以自动产出可分析的证据块.
+
+### 实现
+- `Runtime/GsplatSettings.cs`:
+  - 新增 `EnableEditorDiagnostics`(默认 false).
+- `Editor/GsplatSettingsProvider.cs`:
+  - 在 Project Settings/Gsplat 增加 `Diagnostics` UI,无需改宏即可开关.
+- `Runtime/GsplatEditorDiagnostics.cs`:
+  - 环形缓冲记录近 512 条事件.
+  - 当检测到 “SceneView 相机触发渲染回调,但当帧没有提交 draw” 时自动 dump(`[GsplatDiag]`),用于定位时序/相机实例不一致问题.
+- 接入点:
+  - `Runtime/GsplatSorter.cs`: 记录相机渲染回调 + sort skip/dispatch.
+  - `Runtime/GsplatRendererImpl.cs`: 记录 render skip 原因 + 每次提交 draw 的 camera 目标.
+
+### 验证(证据型)
+- Unity 6000.3.8f1,`-batchmode -nographics`(最小工程 `_tmp_gsplat_pkgtests`):
+  - `Gsplat.Tests`(EditMode): total=25, passed=24, failed=0, skipped=1
+  - 结果文件: `_tmp_gsplat_pkgtests/Logs/TestResults_gsplat3.xml`
+
+## 2026-02-24: Metal 下因 StructuredBuffer 绑定不稳导致的跳绘制(闪烁/消失)
+
+### 现象
+- macOS/Metal 下,视口(SceneView/GameView)出现整体"消失/闪烁".
+- Console/Editor.log 里出现(或只出现一次后静默):
+  - `Metal: Vertex or Fragment Shader "Gsplat/Standard" requires a ComputeBuffer at index 3 to be bound, but none provided. Skipping draw calls to avoid crashing.`
+
+### 根因
+- Metal 下只要任意一个 shader 需要的 StructuredBuffer 未绑定,Unity 会直接跳过 draw call 防止崩溃.
+- 该 warning 可能只打印一次,导致用户体感为"没 log"但仍然闪烁.
+- 仅依赖 `MaterialPropertyBlock.SetBuffer` 在某些 Editor/Metal 场景下可能不够稳态.
+
+### 修复
+- `Runtime/GsplatRendererImpl.cs`
+  - 为每个 renderer 创建一个 per-renderer `Material` 实例.
+  - 每帧 draw 前把所有 StructuredBuffers 同时绑定到:
+    - `MaterialPropertyBlock`(原有路径)
+    - per-renderer `Material` 实例(稳态兜底)
+  - `Valid` 强化: 使用 `GraphicsBuffer.IsValid()` 识别已失效 buffer.
+- `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+  - 检测到 `!m_renderer.Valid` 时,节流(1s)自动重建 renderer(以及 sequence decoder),避免长期黑屏.
+- `Runtime/GsplatEditorDiagnostics.cs`
+  - 捕获 Metal 跳绘制 warning 时自动 dump,并输出 "ComputeBuffer index -> shader 属性名" 映射.
+- 新增回归测试:
+  - `Tests/Editor/GsplatMetalBufferBindingTests.cs`
+
+### 验证(证据型)
+- Unity 命令行(有图形设备,Metal),最小工程 `_tmp_gsplat_pkgtests`:
+  - `GsplatMetalBufferBindingTests`: passed(1/1)
+  - `Gsplat.Tests`: total=26, passed=25, failed=0, skipped=1
+  - 关键点: 日志中未再出现 "requires a ComputeBuffer ... Skipping draw calls".
+
+## 2026-02-24 11:15:00 +0800: 修复 Editor 下“SceneView UI 上滑动仍闪烁”(SRP 多次 BeginCameraRendering vs Update 单次 draw)
+
+### 现象
+- Unity Editor 非 Play 模式:
+  - 鼠标在 SceneView 的 UI(overlay/toolbar/tab)区域滑动时,Gsplat 会整体“显示/不显示”闪烁.
+  - 有时 GameView 也会出现“偶发整帧消失”.
+- Console 未必有可用 error/warning,导致排查困难.
+
+### 本质(根因)
+- 证据来自 `[GsplatDiag]` ring-buffer:
+  - 同一 `Time.frameCount` 内,同一个 SceneView camera 会多次触发:
+    - `RenderPipelineManager.beginCameraRendering`(即 `[CAM_RENDER] phase=BeginCameraRendering`)
+  - 但 draw 的提交主要来自 `ExecuteAlways.Update()` 内的 `m_renderer.Render(...)`:
+    - 每次 Update 通常只提交一次 draw.
+- 因此在 Editor 的“同帧多次渲染调用”场景下会出现:
+  - `render invocation 次数 > draw 提交次数`
+  - 部分 render invocation 没有 splats,最终显示出来的那一次恰好没 draw 时,体感就是闪烁/消失.
+
+### 修复
+1) EditMode 下把 draw 提交对齐到 SRP 相机回调链路
+- `Runtime/GsplatSorter.cs`
+  - 在 `OnBeginCameraRendering` 排序逻辑之后调用 `SubmitEditModeDrawForCamera(camera)`.
+  - 仅在 `CameraMode=ActiveCameraOnly` 且 `!Application.isPlaying` 时启用,避免 Play 模式重复渲染.
+  - 渲染门禁(不包含 sort 的 per-frame guard):
+    - Active=SceneView: 允许所有 SceneView camera 渲染(规避实例抖动/多窗口).
+    - Active=Game/VR: 只允许 ActiveCamera 渲染(override MUST win).
+
+2) renderer 增加“按指定 camera 渲染”的入口
+- `Runtime/GsplatRendererImpl.cs`
+  - 新增 `RenderForCamera(Camera camera, ...)`.
+  - 新增 `TryPrepareRender(...)` 统一渲染准备:
+    - 校验 settings/sorter/buffers.
+    - 填充 property block(含 time model).
+    - 重新绑定 StructuredBuffers(Metal 稳态).
+    - 构建 `RenderParams` + `instanceCount`.
+
+3) 避免 EditMode 双重提交 draw
+- `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+  - 在 `!Application.isPlaying && SortDrivenBySrpCallback && CameraMode==ActiveCameraOnly` 时:
+    - Update 仍负责 upload/decode/time 缓存等状态更新.
+    - 但不再从 Update 调用 `m_renderer.Render(...)`.
+    - draw 由 sorter 的相机回调统一提交.
+
+4) 诊断增强(更贴合本根因)
+- `Runtime/GsplatEditorDiagnostics.cs`
+  - 增加 `sceneView.renderCounts/drawCounts`(按 camera instanceId 计数).
+  - 增加 `rs(render serial)` 关联每次 `[CAM_RENDER]` 与 `[DRAW]`.
+  - 自动 dump 触发条件从 “rendered but no draw” 扩展为:
+    - `renderCount > drawCount`.
+
+5) 排序 skip reason 细分
+- `Runtime/GsplatSorter.cs`
+  - 新增 overload: `GatherGsplatsForCamera(Camera cam, out string skipReason)`.
+  - 在 `SORT_SKIP` 日志中输出更具体的 skipReason(例如 per-frame guard 命中).
+
+### 验证(证据)
+- Unity 6000.3.8f1,最小工程 `_tmp_gsplat_pkgtests`:
+  - `-batchmode -nographics`
+  - `-testFilter Gsplat.Tests`
+  - 结果文件: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_flickerfix.xml`
+  - 汇总: total=26, passed=24, failed=0, skipped=2
+
+## 2026-02-24 12:40:00 +0800: 仍闪烁(补强) - SceneView camera 可能 `enabled/isActiveAndEnabled=false`
+
+### 现象
+- 用户反馈仍然闪烁.
+- `[GsplatDiag]` auto-detect 触发:
+  - `DETECTED: SceneView renderCount > drawCount`.
+  - ring-buffer 中可见 `RenderForCamera` 被跳过,原因指向 camera "null/disabled".
+
+### 根因(补充)
+- Unity Editor 下的 SceneView 内部 camera 在某些时序/交互链路中可能:
+  - `enabled=false` 或 `isActiveAndEnabled=false`,
+  但仍然会参与 SRP 的渲染回调(beginCameraRendering).
+- 因此,任何把 `isActiveAndEnabled` 当作 SceneView 渲染门禁的代码,都会出现:
+  - “相机在渲染,但我们不提交 draw” -> `renderCount > drawCount` -> 体感为“整帧闪”.
+
+### 修复
+- `Runtime/GsplatRendererImpl.cs`
+  - 遍历 `SceneView.sceneViews` 时,移除 `cam.isActiveAndEnabled` 过滤(仅保留 null/destroyed 防御).
+- `Runtime/GsplatEditorDiagnostics.cs`
+  - `DescribeCamera` 输出 `en/act`,在 dump 中直接看到 camera enabled 状态,避免再猜.
+
+### 验证(待补)
+- 需要在用户真实复现步骤下确认:
+  - dump 不再出现 `renderCount > drawCount`,
+  - SceneView 不再出现“显示/不显示”的整体闪烁.
+
+### 验证(补充)
+- 2026-02-24 13:02:53 +0800: 用户已确认“不闪了”.
+
+## 2026-02-24 13:10:00 +0800: EditMode 切到 GameView 不显示(回归修复)
+
+### 现象
+- 非 Play 模式,切换/聚焦到 GameView 后,高斯基元不显示.
+
+### 根因
+- 为了避免 overlay/UIElements 噪声导致闪烁,EditMode 下 `ActiveCameraOnly` 曾固定选择 SceneView 作为 ActiveCamera.
+- 这会让 Game camera 永远不是 ActiveCamera,从而:
+  - 排序门禁跳过 Game camera.
+  - SRP 相机回调驱动的 draw 门禁也拒绝对 Game camera 提交 draw.
+
+### 修复
+- `Runtime/GsplatSorter.cs`
+  - EditMode 下: 当 GameView 窗口聚焦时,ActiveCamera 解析为 Game/VR 相机.
+  - 其它窗口聚焦时仍默认 SceneView,保持闪烁修复不回归.
+- `Runtime/GsplatSettings.cs`
+  - tooltip 同步更新,避免用户误解“为何 GameView 看不到”.
+
+### 验证(证据)
+- Unity 6000.3.8f1,最小工程 `_tmp_gsplat_pkgtests`:
+  - `-batchmode -nographics -runTests -testFilter Gsplat.Tests`
+  - 结果文件: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_2026-02-24_1310.xml`
+  - 汇总: total=26, passed=24, failed=0, skipped=2
+
+## 2026-02-24 13:12:00 +0800: Codex skill 加载失败(名称超长)
+
+### 现象
+- Codex 提示:
+  - `Skipped loading 1 skill(s) due to invalid SKILL.md files.`
+  - `invalid name: exceeds maximum length of 64 characters`
+
+### 根因
+- `.codex/skills/**/SKILL.md` 的 front-matter 里 `name` 字段超过 64 字符,被校验器拒绝加载.
+
+### 修复
+- 缩短 skill name:
+  - from: `self-learning.unity-editor-srp-multi-beginCameraRendering-flicker`
+  - to: `self-learning.unity-editor-srp-beginCameraRendering-flicker`
+
+## 2026-02-24 14:54:19 +0800: GameView 拖动 TimeNormalized 消失 + PlayMode 播放卡顿(自动优化)
+
+### 现象
+- EditMode:
+  - SceneView 下拖动 `TimeNormalized`,正常且很顺.
+  - GameView 下拖动 `TimeNormalized`,高斯基元会“全消失”.
+- PlayMode:
+  - `TimeNormalized` 拖动/`AutoPlay` 都非常卡.
+
+### 根因
+1. (消失) ActiveCameraOnly(EditMode) 之前只在 `focusedWindow==GameView` 时选择 Game/VR camera.
+   - 用户一拖动 Inspector 滑条,焦点落到 Inspector,ActiveCamera 立刻切回 SceneView.
+   - 于是 Game camera 的 sort/draw 直接被 gate.
+
+2. (卡顿) keyframe `.splat4d(window)` 常见是“多 segment records 堆在同一个 asset/buffers 中”.
+   - 同一时刻只有 1 个 segment 真正可见.
+   - 旧版仍对全量 records 做 GPU radix sort,成本随 segment 数线性膨胀.
+
+### 修复
+- ActiveCameraOnly(EditMode):
+  - `Runtime/GsplatSorter.cs`: ActiveCamera 决策改用 viewport hint(最近交互视窗),而不是仅靠 focusedWindow.
+  - `Runtime/GsplatRenderer.cs`/`Runtime/GsplatSequenceRenderer.cs`: OnValidate 改为 `InternalEditorUtility.RepaintAllViews()`,
+    确保拖动 Inspector 滑条时 SceneView/GameView 都会立即刷新.
+  - `Runtime/GsplatSettings.cs`: tooltip 文案同步更新.
+
+- keyframe segment 性能优化(自动启用,不改格式):
+  - `Runtime/GsplatSorter.cs`: `IGsplat.SplatBaseIndex` + sortCount 变化时重置 payload,支持对子范围排序.
+  - `Runtime/GsplatSortPass.cs`/`Runtime/Shaders/Gsplat.compute`: 新增 `e_baseIndex`,排序只读子范围数据.
+  - `Runtime/GsplatRendererImpl.cs`/`Runtime/Shaders/Gsplat.shader`: 新增 `_SplatBaseIndex`,渲染把 local index 映射为 absolute splatId.
+  - `Runtime/GsplatRenderer.cs`: 检测 "time/duration 常量且 segments 不重叠" 的 keyframe 资产形态,
+    播放时仅对当前 segment 做 sort+draw.
+
+### 验证(证据)
+- Unity 6000.3.8f1,最小工程 `_tmp_gsplat_pkgtests`:
+  - `-batchmode -nographics -runTests -testFilter Gsplat.Tests`
+  - 结果文件: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_timeNormalized_fix_2026-02-24_1453.xml`
+  - 汇总: total=26, passed=24, failed=0, skipped=2

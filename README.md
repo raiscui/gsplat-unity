@@ -1,6 +1,6 @@
 # Gsplat
 
-[![Changelog](https://img.shields.io/badge/changelog-f15d30.svg)](./CHANGELOG.md) [![Version](https://img.shields.io/badge/version-v1.1.2-blue.svg)](https://github.com/wuyize25/gsplat-unity/releases/tag/v1.1.2) [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE.md)
+[![Changelog](https://img.shields.io/badge/changelog-f15d30.svg)](./CHANGELOG.md) [![Version](https://img.shields.io/badge/version-v1.1.4-blue.svg)](./CHANGELOG.md) [![License](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE.md)
 
 A Unity package for rendering [3D Gaussian Splatting](https://repo-sam.inria.fr/fungraph/3d-gaussian-splatting/) (3DGS). Supports Unity 2021 and later. 
 
@@ -59,6 +59,24 @@ The next steps depend on the Render Pipeline you are using:
 - URP/HDRP: No extra setup is required.
   - Sorting is automatically dispatched per-camera via SRP callbacks, so both GameView and SceneView cameras stay in sync.
   - If you previously added `Gsplat URP Feature` or a `Gsplat HDRP Pass` CustomPass, you can keep them; they will auto-no-op to avoid duplicate sorting.
+
+Camera selection note:
+
+- By default, `GsplatSettings.CameraMode` is `ActiveCameraOnly` (performance mode).
+  - Play Mode / Player: only one active Game/VR camera is sorted and rendered each frame (prefers `Camera.main`).
+  - Editor (Edit Mode): SceneView stays visible and stays sorted even while you interact with other Editor UI (Inspector/Hierarchy).
+    - Sorting is driven by the SceneView camera.
+    - Rendering is submitted to SceneView cameras to avoid "visible/invisible" flicker caused by unstable Editor camera instances.
+  - If `GsplatSorter.Instance.ActiveGameCameraOverride` is set to a valid camera, it always takes precedence in Play Mode / Player.
+    - Convenience: add `GsplatActiveCameraOverride` to your main Game/VR camera to manage this automatically.
+      - When multiple overrides exist, higher `Priority` wins; ties prefer the last enabled one.
+- If you need every camera (reflection / portals / probes) to see Gsplat, set `CameraMode = AllCameras` in `Project Settings > Gsplat`.
+
+Diagnostics note (Editor):
+
+- If splats occasionally disappear or flicker in the Editor (especially on macOS/Metal), enable `EnableEditorDiagnostics` in `Project Settings > Gsplat`.
+  - When a Metal draw-skip warning is detected, Gsplat will auto-dump a `[GsplatDiag]` block to the Console / `Editor.log` with recent camera/sort/draw events and shader buffer indices.
+  - You can also manually dump it via `Tools > Gsplat > Dump Editor Diagnostics`.
 
 ### Import Assets
 
@@ -180,12 +198,16 @@ Sorting (compute) and rendering (shader) use the same cached `TimeNormalized` va
 
 Editor note:
 
-- In the Unity Editor, Play Mode often renders both the GameView and the SceneView.
-  Since sorting is dispatched per camera, this can run the GPU sort twice per frame and reduce FPS.
-- If you only care about GameView smoothness while playing:
-  - Keep `GsplatSettings.SkipSceneViewSortingInPlayMode` enabled (default: `true`).
-  - Keep `GsplatSettings.AllowSceneViewSortingWhenFocusedInPlayMode` enabled (default: `true`) to sort only when you are actively focusing the SceneView.
-  - Optionally enable `GsplatSettings.SkipSceneViewRenderingInPlayMode` (default: `true`) to avoid SceneView draw cost.
+- If `GsplatSettings.CameraMode = ActiveCameraOnly` (default):
+  - In Play Mode, only the active Game/VR camera sorts and renders.
+  - SceneView focus will not trigger an extra sort, so the "double sorting" issue is avoided by design.
+- If you switch to `AllCameras`:
+  - Play Mode often renders both the GameView and the SceneView.
+  - Sorting may run multiple times per frame (once per camera) and reduce FPS.
+  - Use these Editor-only toggles to prioritize GameView performance:
+    - `GsplatSettings.SkipSceneViewSortingInPlayMode` (default: `true`)
+    - `GsplatSettings.AllowSceneViewSortingWhenFocusedInPlayMode` (default: `true`)
+    - `GsplatSettings.SkipSceneViewRenderingInPlayMode` (default: `true`)
 
 ### VFX Graph backend (optional)
 

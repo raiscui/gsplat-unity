@@ -8,7 +8,17 @@
 
 ### Rendering Pipeline
 
-The following two passes are performed each frame for every active camera.
+The following two passes are performed each frame. The camera(s) that actually trigger sorting and rendering depend on `GsplatSettings.CameraMode`:
+
+- `ActiveCameraOnly` (default): Performance-first mode.
+  - This avoids the linear performance drop caused by multiple cameras (reflection / probes / helper cameras) triggering GPU sort repeatedly.
+  - Play Mode / Player: only a single "active" Game/VR camera is allowed to sort and render each frame (prefers `Camera.main`, or `GsplatSorter.ActiveGameCameraOverride` / `GsplatActiveCameraOverride` if set).
+  - Editor Edit Mode: SceneView is kept stable (no visible/invisible flicker while interacting with other Editor UI).
+    - Sorting is allowed to be driven by the SceneView camera even when Unity's internal SceneView camera instances are unstable.
+    - Rendering is submitted to SceneView cameras in Edit Mode, so SceneView stays visible even when it's not the focused window.
+    - Note (SRP/EditMode): Unity can trigger multiple `beginCameraRendering` calls within the same `Time.frameCount`. To avoid "render invocation count > draw submission count" flicker, draw submissions are aligned to the camera callbacks instead of relying on `ExecuteAlways.Update()` submitting exactly once per frame.
+- `AllCameras`: Sorting and rendering are performed for every camera (legacy/compatibility mode).
+  - This is required if you want non-main cameras (portals / probes) to also see the splats.
 
 #### Sorting Pass
 
@@ -18,6 +28,7 @@ This pass sorts the splats by their depth to the camera. The sorting is performe
     - **BiRP**: `Camera.onPreCull` triggers `GsplatSorter.DispatchSort`.
     - **SRP (URP/HDRP)**: `RenderPipelineManager.beginCameraRendering` triggers `GsplatSorter.DispatchSort`.
     - Legacy URP/HDRP injectors (`GsplatURPFeature` / `GsplatHDRPPass`) are kept for compatibility but auto-no-op when SRP callbacks are driving sorting (to avoid dispatching sort twice).
+    - When `CameraMode = ActiveCameraOnly`, `GsplatSorter.GatherGsplatsForCamera` gates non-active cameras early, so sort dispatch happens at most once per frame (Play Mode / Player), while allowing SceneView to stay correct in Editor Edit Mode.
 *   **Sorting Steps**:
     1.  **`InitPayload`** (Optional): If the payload buffer (`b_sortPayload`) has not been initialized, fill it with sequential indices (0, 1, 2, ... `SplatCount`-1). 
     2.  **`CalcDistance`**: For each splat, this kernel calculates its view-space depth, and stores them in the `b_sort` buffer which will be used as the sorting key.
@@ -31,7 +42,11 @@ This pass sorts the splats by their depth to the camera. The sorting is performe
 
 With the splats sorted, they can now be drawn using `Gsplat.shader`.
 
-*   **Draw Call**: The `GsplatRendererImpl.Render` method issues a single draw call via `Graphics.RenderMeshPrimitives`. It uses GPU instancing to render multiple instances of the procedurally generated quad mesh, and a material is selected based on the desired `SHBands`. All necessary buffers (`OrderBuffer`, `PositionBuffer`, etc.) and parameters (`_MATRIX_M`, `_SplatCount`, etc.) are passed to the shader via a `MaterialPropertyBlock`.
+*   **Draw Call**: The `GsplatRendererImpl.Render` (or `RenderForCamera`) method issues a draw call via `Graphics.RenderMeshPrimitives`. It uses GPU instancing to render multiple instances of the procedurally generated quad mesh, and a material is selected based on the desired `SHBands`. All necessary buffers (`OrderBuffer`, `PositionBuffer`, etc.) and parameters (`_MATRIX_M`, `_SplatCount`, etc.) are passed to the shader via a `MaterialPropertyBlock`.
+    - Note (Metal): buffers are rebound right before each draw call to avoid Unity skipping draws when a `StructuredBuffer` binding goes missing.
+    - When `CameraMode = ActiveCameraOnly`:
+      - Play Mode / Player: `RenderParams.camera` is set to the resolved active Game/VR camera.
+      - Editor Edit Mode: draw calls are submitted per-camera from the SRP camera callbacks (so each render invocation gets a draw), and SceneView stays stable even when Editor focus signals and internal camera instances are noisy.
 *   **Vertex Shader**: 
     1.  **Index Calculation**: It determines the final splat `order` to render by combining the `instanceID` with the intra-instance index stored in the vertex's z-component.
     2.  **Fetch Sorted ID**: It uses this `order` to look up the actual splat `id` from the `_OrderBuffer`. This `id` corresponds to the correct, depth-sorted splat.

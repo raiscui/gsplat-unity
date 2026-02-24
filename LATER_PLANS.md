@@ -92,3 +92,25 @@
     - 多 SceneView 窗口/多显示器时,`lastActiveSceneView` 可能不是正在绘制的那个 camera.
   - 方向:
     - 遍历 `SceneView.sceneViews` 找到 `hasFocus` 且 `sceneView.camera == cam` 的那一个,提高判断准确性.
+
+## 2026-02-24
+- 候选补强: 把“EditMode 相机回调驱动 draw 提交”也扩展到 BiRP(`Camera.onPreCull`)路径.
+  - 背景:
+    - 目前闪烁修复主要覆盖 SRP(beginCameraRendering).
+    - 若项目使用 Built-in Render Pipeline,仍可能遇到同类“同帧多次渲染但 Update 单次 draw”问题.
+  - 方向:
+    - 在 `GsplatSorter.OnPreCullCamera` 里做同样的 EditMode draw 补交(并注意避免 Play 模式重复渲染).
+
+- 候选优化: keyframe `.splat4d(window)` 的 sort 资源按“每段最大可见 count”分配,降低 VRAM 峰值.
+  - 背景:
+    - 本轮已支持 baseIndex 子范围 sort+draw,播放时只需要排序当前 segment 的 records.
+    - 但 sorter 的 scratch buffers 仍按 totalRecords 分配,当 segment 数很多时会浪费 VRAM.
+  - 方向:
+    - 让 IGsplat 提供一个 `SorterCapacity`(或在 `GsplatRendererImpl` 创建 SorterResource 时传入 maxVisibleCount),
+      使 `InputKeys/SupportResources` 只按“最大子范围 count”创建.
+    - 需要同时保证 fallback 到全量排序时仍正确(可能需要重建 sorter resource 或禁用优化).
+
+- 候选优化: 若非 keyframe segment 形态(无法命中子范围优化)仍卡,考虑引入“排序降采样/预算器”.
+  - 方向:
+    - 按帧跳过部分排序(例如每 N 帧排序一次),或基于相机运动/时间变化幅度做自适应.
+    - 作为高级开关,默认保持全量排序的正确性.

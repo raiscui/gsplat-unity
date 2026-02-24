@@ -37,6 +37,7 @@ float _TimeNormalized;
 int _Has4D;
 int _TimeModel; // 1=window(time0+duration), 2=gaussian(mu+sigma)
 float _TemporalCutoff; // gaussian cutoff,例如 0.01
+uint e_baseIndex;
 
 [numthreads(GROUP_SIZE,1,1)]
 void InitPayload(uint3 id : SV_DispatchThreadID)
@@ -55,7 +56,8 @@ void CalcDistance(uint3 id : SV_DispatchThreadID)
     if (idx >= e_numKeys)
         return;
 
-    uint splatId = b_sortPayload[idx];
+    uint splatLocalId = b_sortPayload[idx];
+    uint splatId = splatLocalId + e_baseIndex;
     float3 pos = _PositionBuffer[splatId];
     if (_Has4D != 0)
     {

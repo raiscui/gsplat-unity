@@ -16,7 +16,7 @@ namespace Gsplat
     /// - 复用现有 GsplatSorter + GsplatRendererImpl 的排序与渲染路径.
     /// </summary>
     [ExecuteAlways]
-    public sealed class GsplatSequenceRenderer : MonoBehaviour, IGsplat
+    public sealed class GsplatSequenceRenderer : MonoBehaviour, IGsplat, IGsplatRenderSubmitter
     {
         public GsplatSequenceAsset SequenceAsset;
 
@@ -68,6 +68,7 @@ namespace Gsplat
         GsplatRendererImpl m_renderer;
         bool m_disabledDueToError;
         float m_timeNormalizedThisFrame;
+        float m_nextRendererRecoveryTime;
 
         // --------------------------------------------------------------------
         // Runtime bundle state(可选)
@@ -112,6 +113,7 @@ namespace Gsplat
             m_decodeCS != null;
 
         public uint SplatCount => SequenceAsset ? m_effectiveSplatCount : 0;
+        uint IGsplat.SplatBaseIndex => 0;
 
         public ISorterResource SorterResource => m_renderer != null ? m_renderer.SorterResource : null;
 
@@ -123,6 +125,23 @@ namespace Gsplat
         GraphicsBuffer IGsplat.VelocityBuffer => m_renderer != null ? m_renderer.VelocityBuffer : null;
         GraphicsBuffer IGsplat.TimeBuffer => m_renderer != null ? m_renderer.TimeBuffer : null;
         GraphicsBuffer IGsplat.DurationBuffer => m_renderer != null ? m_renderer.DurationBuffer : null;
+
+        void IGsplatRenderSubmitter.SubmitDrawForCamera(Camera camera)
+        {
+            // 说明:
+            // - 与 `GsplatRenderer` 一致,该回调仅用于 Editor 非 Play 模式的“相机回调驱动渲染”.
+            // - 序列后端的 decode 仍在 Update 中执行,这里仅提交 draw(避免重复解码与重复渲染).
+            if (Application.isPlaying)
+                return;
+
+            if (!Valid || m_renderer == null || !m_renderer.Valid || !SequenceAsset)
+                return;
+
+            m_renderer.RenderForCamera(camera, SplatCount, transform, SequenceAsset.UnionBounds, gameObject.layer,
+                GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
+                timeModel: 1, temporalCutoff: 0.01f,
+                diagTag: "EditMode.CameraCallback");
+        }
 
         // 公开 GPU buffers,用于调试/扩展后端(例如 VFX)绑定等场景.
         public GraphicsBuffer PositionBuffer => m_renderer != null ? m_renderer.PositionBuffer : null;
@@ -191,12 +210,35 @@ namespace Gsplat
             m_timeNormalizedThisFrame = t;
 
             UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
-            UnityEditor.SceneView.RepaintAll();
+            // RepaintAllViews 会同时刷新 SceneView/GameView,避免“拖动 Inspector 滑条时 GameView 不更新”的错觉.
+            UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
         }
 #endif
 
         void Update()
         {
+            // ----------------------------------------------------------------
+            // 稳态恢复: 与 GsplatRenderer 一致,在 Editor/Metal 下 buffer 可能会失效.
+            // - 这里做一次节流的自动重建,避免序列后端出现“突然消失且无法自愈”.
+            // ----------------------------------------------------------------
+            if (!m_disabledDueToError && m_renderer != null && !m_renderer.Valid && SequenceAsset)
+            {
+                var now = Time.realtimeSinceStartup;
+                if (now >= m_nextRendererRecoveryTime)
+                {
+                    m_nextRendererRecoveryTime = now + 1.0f;
+                    Debug.LogWarning("[Gsplat][Sequence] 检测到 GraphicsBuffer 已失效,将尝试自动重建 renderer/decoder 资源(可能会有一次性卡顿).");
+
+                    if (!TryCreateOrRecreateRenderer())
+                        return;
+
+                    // renderer 变化时,旧的 decode 资源不再安全,必须重建.
+                    DisposeDecodeResources();
+                    if (!TryCreateOrRecreateDecodeResources())
+                        return;
+                }
+            }
+
             // ----------------------------------------------------------------
             // 播放控制: TimeNormalized / AutoPlay / Speed / Loop
             // - 与 GsplatRenderer 保持一致: 缓存 this-frame time,确保同帧排序与渲染一致.
@@ -245,9 +287,21 @@ namespace Gsplat
             if (!TryDecodeThisFrame())
                 return;
 
-            m_renderer.Render(SplatCount, transform, SequenceAsset.UnionBounds, gameObject.layer,
-                GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
-                timeModel: 1, temporalCutoff: 0.01f);
+#if UNITY_EDITOR
+            var settings = GsplatSettings.Instance;
+            if (!Application.isPlaying &&
+                GsplatSorter.Instance.SortDrivenBySrpCallback &&
+                settings && settings.CameraMode == GsplatCameraMode.ActiveCameraOnly)
+            {
+                // do nothing: draw submitted via camera callbacks.
+            }
+            else
+#endif
+            {
+                m_renderer.Render(SplatCount, transform, SequenceAsset.UnionBounds, gameObject.layer,
+                    GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
+                    timeModel: 1, temporalCutoff: 0.01f);
+            }
         }
 
         bool TryCreateOrRecreateRenderer()
