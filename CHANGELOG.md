@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `GsplatActiveCameraOverride` component to explicitly pick a Game/VR camera as the active camera in `ActiveCameraOnly` mode (supports priority + last-enabled tie-break).
 - Added optional Editor diagnostics (`GsplatSettings.EnableEditorDiagnostics`) to collect camera/sort/draw traces and auto-dump context when Metal skips draw calls due to missing buffer bindings.
 - Added optional burn-ring visibility animation (Show/Hide) for `GsplatRenderer` and `GsplatSequenceRenderer` (easeInOutQuad ring expansion, smoke-like noise, configurable center, separate show/hide ring+trail widths, per-splat grow/shrink + position warp distortion, adjustable `WarpStrength`, and Inspector buttons). Disabled by default to keep legacy behavior.
+- Added `VisibilityNoiseMode` dropdown for the burn-ring visibility animation to switch between `ValueSmoke` (default), `CurlSmoke` (curl-like warp field), and `HashLegacy` (legacy comparison).
+- Added `ShowGlowStartBoost` for the burn-ring visibility animation, and tuned show/hide glow so the burn front ring stays on the outer side and brighter (boost), with an inward-decaying afterglow tail (brighter interior, less abrupt outer rim).
+- Added `ShowGlowSparkleStrength` to modulate the show ring glow with curl-noise sparkle/twinkle ("embers" flicker).
+- Tuned hide splat size shrink to follow a faster-then-slower (easeOutCirc-like) curve, keeping a non-zero minimum size to avoid "disappearing too fast" during the burn tail.
+
+### Changed
+
+- Changed default show widths for the burn-ring visibility animation (new components / Reset only): `ShowRingWidthNormalized` `0.06 -> 0.066`, `ShowTrailWidthNormalized` `0.12 -> 0.048`.
 
 ### Fixed
 
@@ -21,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed splats disappearing in the GameView (Edit Mode) while dragging `TimeNormalized` in the Inspector (GameView stays "sticky" as the active viewport even when Inspector takes focus).
 - Fixed very slow keyframe `.splat4d(window)` playback by sorting and rendering only the active time segment (sub-range sort/draw) when the asset matches the non-overlapping segment pattern.
 - Fixed burn-ring visibility animation (Show/Hide) in Editor Edit Mode appearing to "not play" unless the viewport repaints (e.g., mouse movement), by requesting Editor repaints while the animation is in progress.
+- Fixed the burn-ring hide animation sometimes leaving a few splats lingering near the end due to outward edge jitter, by making fade/shrink use a more stable edge distance (ring/glow still jitters).
 
 ## [1.1.4] - 2026-02-23
 

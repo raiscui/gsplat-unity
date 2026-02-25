@@ -218,6 +218,7 @@
   2. ActiveCameraOnly(EditMode) 不要只用 focusedWindow; 用“最近交互视窗”的 sticky hint 才能稳态支持 Inspector 拖动/编辑.
   3. “多段 records 叠加但同刻只显一段”的数据形态,应尽量把 O(totalRecords) 降到 O(recordsPerSegment)(子范围 sort+draw).
 - 是否需要固化到 docs/specs: 是.
+
   - `AGENTS.md`: 补充 Metal 的 "requires a ComputeBuffer ... Skipping draw calls" 识别与处理要点,以及 Editor(SRP) 多次 beginCameraRendering 的注意事项.
   - `Documentation~/Implementation Details.md`: 补充 keyframe `.splat4d(window)` segment 子范围 sort/draw 的设计与条件.
 - 是否提取/更新 skill: 是.
@@ -455,3 +456,222 @@
 - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_easeOutCirc_2026-02-25.xml`
   - 汇总: total=28, passed=26, failed=0, skipped=2
+
+---
+
+## 2026-02-25 17:25:00 +0800: 燃烧环扩散速度曲线改为 easeInOutQuad
+
+### 用户需求
+- 将 show/hide 的燃烧环扩散速度曲线改为 `easeInOutQuad`.
+
+### 落地方式
+- `Runtime/Shaders/Gsplat.shader`:
+  - 使用 `EaseInOutQuad(progress)` 生成 `progressExpand`,用于:
+    - `radius = progressExpand * (maxRadius + trailWidth)`
+    - hide glow 衰减、globalWarp、globalShrink 与扩散节奏保持一致(避免脱钩).
+- `openspec/changes/burn-reveal-visibility/`:
+  - 修正 spec/tasks 中仍残留的 `easeOutCirc` 文案,与当前实现对齐.
+
+### 回归(证据)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=28, passed=26, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_easeInOutQuad_rerun_2026-02-25.xml`
+
+### 额外发现(本机/本版本)
+- Unity `-runTests` CLI 在本机 Unity 6000.3.8f1 下实测:
+  - 当 `-quit` 放在参数前部时,可能出现“进程正常退出,但没有真正跑测试,也不生成 results.xml”的情况.
+  - 更稳态的做法:
+    - 不传 `-quit`(tests 完成后仍会自动退出),或
+    - 把 `-quit` 放到参数末尾.
+
+---
+
+## 2026-02-25 17:55:00 +0800: continuous-learning 四文件摘要(归档 WORKLOG 超 1000 行)
+
+## 四文件摘要(用于决定是否提取 skill)
+- 任务目标(task_plan.md):
+  - 将 burn reveal(show/hide)的燃烧环扩散速度曲线切换为 `easeInOutQuad`,并保证 OpenSpec artifacts 与实现一致.
+  - 在 Unity 命令行下跑 EditMode tests 作为回归证据.
+- 关键决定(task_plan.md):
+  - 以 shader 内的 `progressExpand` 作为单一节奏源,扩散半径与全局效果共用同一 easing.
+  - OpenSpec 的 spec/tasks 若出现漂移,优先同步修正,避免“实现对了但规格旧了”.
+- 关键发现(notes.md):
+  - Unity `-runTests` 在本机/本版本下,`-quit` 放在参数前部可能导致不跑测试且不生成 `-testResults`.
+  - 更稳态的跑法是移除 `-quit` 或把 `-quit` 放到参数末尾.
+- 实际变更(WORKLOG.md):
+  - 归档旧 `WORKLOG.md` 到 `archive/WORKLOG_2026-02-25_174051.md`(因超过 1000 行),并新建当前 `WORKLOG.md`.
+  - 同步修正 OpenSpec change `burn-reveal-visibility` 的 spec/tasks,与实现对齐.
+- 错误与根因(ERRORFIX.md,本次无新增):
+  - 本次属于调参与文档同步,无新增 bugfix 条目.
+- 可复用点候选(1-3 条):
+  1. Unity CLI 跑 tests 时,若出现“不生成 results.xml”,优先怀疑 `-quit` 参数位置/使用方式.
+  2. OpenSpec artifacts 需要持续对齐实现,否则会出现“规格/实现漂移”的维护风险.
+- 是否需要固化到 docs/specs: 是.
+  - 已把 Unity CLI tests 的 `-quit` 小坑补充到 `AGENTS.md` 的 Testing Guidelines.
+- 是否提取/更新 skill: 否.
+  - 理由: 该踩坑点已在历史 notes 中出现过,本次仅做再次确认与固化到项目文档.
+
+---
+
+## 2026-02-25 18:30:00 +0800: 显隐动画 warp 噪声升级(ValueSmoke/CurlSmoke)与可切换下拉
+
+### 用户目标
+- warp 的位移噪声更平滑,更像烟雾/流体的连续流动.
+- 需要一个下拉选项,能在“当前效果”和“新效果”之间快速切换对照.
+
+### 设计要点
+- 默认值必须保持现有观感,避免升级后旧项目被意外改动.
+- CurlSmoke 允许更贵一点,因为它只在 show/hide 动画期间启用(平时 `_VisibilityMode=0` 直接走旧路径).
+
+### 实现策略(核心)
+1. 增加 `VisibilityNoiseMode` 枚举字段(Inspector 下拉).
+   - `ValueSmoke`(默认): 平滑 value noise + domain warp,更像烟雾波动.
+   - `CurlSmoke`: curl-like 向量场,更像旋涡/流动(主要用于 position warp).
+   - `HashLegacy`: 旧版对照,更碎更抖(调试/性能基线).
+2. shader 新增 `_VisibilityNoiseMode` uniform,每帧由 `GsplatRendererImpl.SetVisibilityUniforms(...)` 写入 MPB.
+3. Curl-like 计算方式:
+   - 在 HLSL 中实现 value noise 的梯度计算(仍然只做 8 个 corner hash,同时求 trilinear+fade 的偏导).
+   - 用 3 份独立 noise 作为 vector potential A(p)=(Ax,Ay,Az),计算 `curl(A)=∇×A` 得到更连续的旋涡向量场.
+   - 在 vertex shader 中把 curlVec 投影到切向(去掉 radial 分量),再叠加少量 radial 分量保持“空间被拉扯”的感觉.
+
+### 风险与取舍
+- CurlSmoke 计算量更大(需要额外的 noise+gradient 采样).
+  - 通过“只在 show/hide 动画期间启用 + 默认 ValueSmoke”来控制整体成本与回归风险.
+
+---
+
+## 2026-02-25 19:20:00 +0800: glow/size 调优(hide 更早变小 + show 增加 StartBoost + hide glow 尾巴朝内)
+
+### 用户反馈要点
+1. hide: glow 阶段 splat 仍偏大,希望进入 glow 时已经更小.
+2. show: 也需要 `GlowStartBoost`,让“点燃瞬间”更亮.
+3. hide: 当前 glow 的“逐渐变弱”体感朝外,导致外围突兀;期望朝内衰减,更符合“中心先烧掉”的语义.
+
+### 对应实现策略
+- show:
+  - 增加 `ShowGlowStartBoost`,并在 shader 中用 eased progress 做轻量衰减,避免全程过曝.
+- hide:
+  - glow 改为两段:
+    - 前沿 ring 使用 `HideGlowStartBoost` 作为 boost,且不随扩散向外整体变暗(减少外围突兀).
+    - 内侧增加 afterglow tail,并让其朝内逐渐衰减(中心方向),衰减方向更符合语义.
+  - size shrink 提前:
+    - 为 size 单独引入 `passedForSize`(向外提前半个 ringWidth),
+      让 ring(glow)出现时 splat 已明显变小.
+
+---
+
+## 2026-02-25 20:15:00 +0800: hide size 节奏调优(先快后慢,easeOutCirc-like)
+
+### 用户反馈要点
+- hide 燃烧阶段粒子大小仍偏大,希望迅速先变小.
+- 现状体感: size 变得太小导致“看起来消失太快”.
+
+### 调整思路
+- 把 hide 的 shrink 从“强依赖 passed 并压到接近 0”改为两点:
+  1) 在燃烧前沿附近快速 shrink 到一个非 0 的 minScaleHide(较小但仍可见).
+  2) 后续主要依赖 alpha trail 慢慢消失,避免 size 过早接近 0.
+- shrink 曲线使用 `easeOutCirc` 风格,实现“先快后慢”的节奏.
+
+### 回归(证据)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=28, passed=26, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_hide_size_easeOutCirc_2026-02-25.xml`
+
+---
+
+## 2026-02-25 20:10:00 +0800: show/hide 的 ring/tail 语义统一(前沿在外侧,内侧更亮)
+
+### 现象(用户反馈)
+- 怀疑 show 的 `ShowTrailWidthNormalized` 体感像跑到外侧,导致“内部不够亮”.
+- 期望明确语义:
+  - 前沿 ring 永远更亮(Boost),并且先到.
+  - 内侧 afterglow/tail 朝内(中心方向)衰减.
+
+### 本质(根因判断)
+- show 原先 ring 在边界两侧都发光时,很容易在视觉上把“前沿”和“内侧余辉/拖尾”混在一起,
+  产生“trail 跑到外面”的错觉.
+- 同时本 shader 使用 premul alpha 输出,如果内侧余辉区域 alpha 很低,即使加了 glow 也会被 alpha 乘没,
+  体感就会变成“外侧亮,内部发暗”.
+
+### 处理(落地策略)
+- ring 统一为“只在外侧(edgeDist>=0)出现”的燃烧前沿,show/hide 共用这条语义.
+- afterglow/tail 统一为“只在内侧(edgeDist<=0),并朝内衰减”,且被 (1-ring) 抑制以保证前沿永远更亮.
+- show: 为了避免 premul alpha 把内侧 afterglow 吃掉,允许 tail 提供一个受限的 alpha 下限,确保内部余辉肉眼可见.
+
+### 回归(证据)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=28, passed=26, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_show_trail_glow_semantics_2026-02-25_200342.xml`
+
+### 小坑记录(避免重复踩)
+- Unity 命令行跑 tests 时,不要额外加 `-quit`.
+  - 观察到加了 `-quit` 会在 TestRunner 启动前提前退出,导致不生成 `-testResults` XML.
+
+---
+
+## 2026-02-25 20:20:00 +0800: hide 末尾 lingering 修复(禁止 fade/shrink 被正向边界噪声拖住)
+
+### 现象(用户反馈)
+- hide 最最后会残留一些高斯基元很久才消失.
+
+### 根因(本质)
+- hide 的 passed/visible 如果直接用 `edgeDistNoisy`:
+  - 当噪声为正时,会把边界往外推.
+  - 局部 passed 会长期达不到 1.
+  - 于是末尾会出现少量 splats lingering(半透明残留).
+
+### 处理(落地策略)
+- ring/glow: 仍使用完整的 `edgeDistNoisy`,保留燃烧边界抖动质感.
+- fade/shrink: 改用 `edgeDistForFade`:
+  - 仅允许噪声往内咬(`min(noiseSigned,0)`),不允许往外推.
+  - 这样可以保证最终一定能烧尽,不会在末尾被拖住.
+
+### 回归(证据)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=28, passed=26, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_hide_lingering_fix_2026-02-25_201817.xml`
+
+---
+
+## 2026-02-25 20:35:00 +0800: show ring glow 星火闪烁(curl noise),并提供强度可调
+
+### 需求(用户期望)
+- show 的环状 glow 不要均匀,要像火星/星星闪闪.
+- 希望使用 curl-like noise,并且强度可调.
+
+### 设计要点
+- 只让 ring(前沿)闪烁,不要把 tail 也变成噪点墙.
+- 闪烁由两部分组成:
+  - 稀疏亮点(sparkMask): 用 curl noise 的幅度经过幂次增强得到.
+  - 时间 twinkle: 用随时间变化的噪声相位(复用已有 noise 采样)让亮点闪烁.
+
+### 落地实现
+- C#:
+  - `GsplatRenderer`/`GsplatSequenceRenderer` 新增 `ShowGlowSparkleStrength`(0=关闭).
+  - `GsplatRendererImpl` 新增 `_VisibilityShowGlowSparkleStrength` uniform 下发,并做 NaN/Inf/范围 clamp.
+- Shader:
+  - show 分支对 ringGlow 做乘性调制:
+    - ringGlow *= 1 + Strength * Sparkle * Scale
+  - Sparkle 来自 curl noise + twinkle 相位,且只有 ring>0 时才计算(避免无意义开销).
+
+### 回归(证据)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=28, passed=26, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_show_sparkle_2026-02-25_202927.xml`
+
+---
+
+## 2026-02-25 20:45:00 +0800: 默认参数微调(show ring 更厚,trail 更短)
+
+### 需求(用户调参)
+- `ShowRingWidthNormalized` 大 10%.
+- `ShowTrailWidthNormalized` 乘以 40%(缩短 trail).
+
+### 落地
+- 默认值调整(仅影响新加组件/Reset,不会自动迁移已有 Prefab/场景):
+  - `ShowRingWidthNormalized`: `0.06 -> 0.066`
+  - `ShowTrailWidthNormalized`: `0.12 -> 0.048`
+
+### 预期观感变化
+- ring 更厚: 前沿存在感更强.
+- trail 更短: 前沿扫过后更快稳定为完全可见,内部更快变亮,减少“半透明带太宽”的混浊感.

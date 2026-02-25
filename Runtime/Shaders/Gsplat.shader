@@ -44,6 +44,11 @@ Shader "Gsplat/Standard"
             // - _VisibilityMode=2: hide,从中心向外扩散 burn-out(更亮,噪波更碎屑).
             // ----------------------------------------------------------------
             int _VisibilityMode;
+            // 显隐噪声类型:
+            // - 0: ValueSmoke(默认,更平滑更像烟雾)
+            // - 1: CurlSmoke(更像旋涡/流动,主要用于 position warp)
+            // - 2: HashLegacy(旧版对照,更碎更抖)
+            int _VisibilityNoiseMode;
             float _VisibilityProgress; // 0..1
             float3 _VisibilityCenterModel; // model space
             float _VisibilityMaxRadius; // model space
@@ -51,6 +56,8 @@ Shader "Gsplat/Standard"
             float _VisibilityTrailWidth; // model space
             float4 _VisibilityGlowColor; // rgb used
             float _VisibilityGlowIntensity;
+            float _VisibilityShowGlowStartBoost;
+            float _VisibilityShowGlowSparkleStrength;
             float _VisibilityHideGlowStartBoost;
             float _VisibilityNoiseStrength; // 0..1
             float _VisibilityNoiseScale;
@@ -152,6 +159,21 @@ Shader "Gsplat/Standard"
 
                 float u = -2.0 * t + 2.0;
                 return 1.0 - (u * u) * 0.5;
+            }
+
+            // ----------------------------------------------------------------
+            // Easing: easeOutCirc
+            // - 用于 hide 的 size shrink 节奏:
+            //   先迅速变小,再更慢地收尾.
+            //
+            // 标准定义:
+            // - easeOutCirc(t) = sqrt(1 - (t-1)^2)
+            // ----------------------------------------------------------------
+            float EaseOutCirc(float t)
+            {
+                t = saturate(t);
+                float u = t - 1.0;
+                return sqrt(saturate(1.0 - u * u));
             }
 
             struct v2f
@@ -260,22 +282,36 @@ Shader "Gsplat/Standard"
 
                     float base01;
                     float baseSigned;
-                    GsplatEvalValueNoise01(smokePos, base01, baseSigned);
-
-                    // 轻量 domain warp(用一个噪声去扭曲采样域),更像烟雾的团簇与流动.
-                    float baseSignedZ = (baseSigned + (base01 * 2.0 - 1.0)) * 0.5;
-                    float3 smokeDomainWarp = float3(baseSigned, base01 * 2.0 - 1.0, baseSignedZ) * (_VisibilityNoiseStrength * 0.65);
-                    float3 smokePosWarp = smokePos + smokeDomainWarp;
-
-                    // 使用“warp 后”的噪声作为最终噪声源:
-                    // - jitter/ash/warpVec 都共享同一个连续场,观感更像烟雾而不是随机抖动.
                     float warp01a;
                     float warpSignedA;
-                    GsplatEvalValueNoise01(smokePosWarp + float3(17.13, 31.77, 47.11), warp01a, warpSignedA);
-
                     float warp01b;
                     float warpSignedB;
-                    GsplatEvalValueNoise01(smokePosWarp + float3(53.11, 12.77, 9.71), warp01b, warpSignedB);
+                    float3 smokePosWarp = smokePos;
+
+                    // 噪声类型切换:
+                    // - HashLegacy: 旧版对照,更碎更抖(无 domain warp).
+                    // - ValueSmoke/CurlSmoke: 使用更平滑的 value noise + 轻量 domain warp,更像烟雾团簇与流动.
+                    if (_VisibilityNoiseMode == 2)
+                    {
+                        GsplatEvalHashNoise01(smokePos, base01, baseSigned);
+                        smokePosWarp = smokePos;
+                        GsplatEvalHashNoise01(smokePosWarp + float3(17.13, 31.77, 47.11), warp01a, warpSignedA);
+                        GsplatEvalHashNoise01(smokePosWarp + float3(53.11, 12.77, 9.71), warp01b, warpSignedB);
+                    }
+                    else
+                    {
+                        GsplatEvalValueNoise01(smokePos, base01, baseSigned);
+
+                        // 轻量 domain warp(用一个噪声去扭曲采样域),更像烟雾的团簇与流动.
+                        float baseSignedZ = (baseSigned + (base01 * 2.0 - 1.0)) * 0.5;
+                        float3 smokeDomainWarp = float3(baseSigned, base01 * 2.0 - 1.0, baseSignedZ) * (_VisibilityNoiseStrength * 0.65);
+                        smokePosWarp = smokePos + smokeDomainWarp;
+
+                        // 使用“warp 后”的噪声作为最终噪声源:
+                        // - jitter/ash/warpVec 都共享同一个连续场,观感更像烟雾而不是随机抖动.
+                        GsplatEvalValueNoise01(smokePosWarp + float3(17.13, 31.77, 47.11), warp01a, warpSignedA);
+                        GsplatEvalValueNoise01(smokePosWarp + float3(53.11, 12.77, 9.71), warp01b, warpSignedB);
+                    }
 
                     float noise01 = warp01a;
                     float noiseSigned = warpSignedA;
@@ -288,38 +324,61 @@ Shader "Gsplat/Standard"
                     float jitter = _VisibilityNoiseStrength * trailWidth * 0.75;
                     float edgeDistNoisy = edgeDist + noiseSigned * jitter * noiseWeight0;
 
-                    // 燃烧环(边缘): ring=1 表示正在燃烧边界,0 表示远离边界.
-                    //
-                    // 视觉语义:
-                    // - show: ring 允许在边界两侧都有一点宽度(更像“发光边缘”).
-                    // - hide: ring 更像“燃烧前沿”,应主要出现在未燃烧侧(外侧),
-                    //   这样 trail(渐隐)会更自然地落在内侧(已燃烧区域),避免体感“trail 在外”.
-                    float ring;
+                    // 重要修正(hide 末尾残留):
+                    // - hide 的 fade/shrink 如果完全跟随 edgeDistNoisy,当 noiseSigned 为正时会把边界“往外推”,
+                    //   导致局部 passed 永远达不到 1,于是动画末尾会出现少量 splats lingering(残留很久才消失).
+                    // - 解决思路:
+                    //   - ring/glow 仍然使用 edgeDistNoisy,保留“燃烧边界抖动”的质感.
+                    //   - 但 hide 的 fade/shrink 使用一个更稳态的 edgeDistForFade:
+                    //     只允许噪声把边界往内咬(min(noiseSigned,0)),不允许往外推,确保最终一定能烧尽.
+                    float edgeDistForFade = edgeDistNoisy;
                     if (_VisibilityMode == 2)
                     {
-                        // hide: ring 只在外侧(edgeDistNoisy>=0)出现.
+                        float noiseSignedIn = min(noiseSigned, 0.0);
+                        edgeDistForFade = edgeDist + noiseSignedIn * jitter * noiseWeight0;
+                    }
+
+                    // 燃烧环(边缘): ring=1 表示正在燃烧边界,0 表示远离边界.
+                    //
+                    // 视觉语义(统一为“前沿在外侧,拖尾/余辉在内侧”):
+                    // - show/hide: ring 更像“燃烧前沿”,主要出现在未燃烧侧(外侧,edgeDist>=0).
+                    //   这样:
+                    //   1) 前沿 ring 永远在最外侧先到(更符合“燃烧扩散”的直觉).
+                    //   2) 内侧 afterglow/tail 会朝内衰减,内部更亮,外围不突兀.
+                    float ring;
+                    {
+                        // ring 只在外侧(edgeDistNoisy>=0)出现.
                         float ringOut = 1.0 - saturate(edgeDistNoisy / ringWidth);
                         ringOut *= step(0.0, edgeDistNoisy);
                         ring = smoothstep(0.0, 1.0, ringOut);
                     }
-                    else
-                    {
-                        // show: 边界两侧都可见一点宽度.
-                        ring = 1.0 - saturate(abs(edgeDistNoisy) / ringWidth);
-                        ring = smoothstep(0.0, 1.0, ring);
-                    }
 
                     // passed=1 表示“燃烧环已扫过该 splat”,passed=0 表示“尚未到达”.
-                    float passed = saturate((-edgeDistNoisy) / trailWidth);
+                    float passed = saturate((-edgeDistForFade) / trailWidth);
                     float visible = (_VisibilityMode == 1) ? passed : (1.0 - passed);
                     float noiseWeight = (_VisibilityMode == 1) ? (1.0 - passed) : passed;
+
+                    // 内侧 afterglow/tail:
+                    // - 只出现在边界内侧(edgeDistNoisy<=0),并朝内逐渐衰减.
+                    // - 乘以(1-ring)避免前沿过曝,并保证“前沿 ring 永远更亮”.
+                    float tailInside = (1.0 - passed) * step(0.0, -edgeDistNoisy);
+                    tailInside *= (1.0 - ring);
 
                     // 灰烬颗粒感: hide 后半程更强.
                     float ashMul = saturate(1.0 - _VisibilityNoiseStrength * noiseWeight * (1.0 - noise01));
                     visible *= ashMul;
 
-                    // alphaMask: ring 本身必须可见(发光边缘),因此与 visible 取 max.
+                    // alphaMask:
+                    // - ring 本身必须可见(发光前沿).
+                    // - show: 为了让内侧 afterglow 在刚扫过时“内部更亮”且肉眼可见,
+                    //   允许 tailInside 提供一个受限的 alpha 下限(否则 premul alpha 下 glow 会被 alpha 吃掉).
                     visibilityAlphaMask = max(visible, ring);
+                    if (_VisibilityMode == 1)
+                    {
+                        float tailAlpha = tailInside * tailInside;
+                        tailAlpha *= 0.45;
+                        visibilityAlphaMask = max(visibilityAlphaMask, tailAlpha);
+                    }
 
                     // 全不可见时直接早退,避免后续计算.
                     if (visibilityAlphaMask <= 0.0)
@@ -329,12 +388,69 @@ Shader "Gsplat/Standard"
                     }
 
                     float glowIntensity = _VisibilityGlowIntensity;
-                    if (_VisibilityMode == 2)
+                    float glowFactor = ring;
+                    if (_VisibilityMode == 1)
                     {
-                        // hide: 起始更亮,随后衰减到 1x.
-                        glowIntensity *= lerp(_VisibilityHideGlowStartBoost, 1.0, progressExpand);
+                        // show:
+                        // - 允许在起始阶段更亮(更像“点燃瞬间”).
+                        // - 这里用 eased progress 做一个轻量衰减,避免全程都过曝.
+                        float showBoost = lerp(_VisibilityShowGlowStartBoost, 1.0, progressExpand);
+
+                        // show 内侧 afterglow tail:
+                        // - 用户反馈“内部不够亮”,因此这里在前沿后方(内侧)增加一段更平滑的余辉.
+                        // - tail 只出现在边界内侧(edgeDistNoisy<=0),并朝内逐渐衰减.
+                        // - 设计原则: ring 负责“前沿更亮”,tail 负责“内侧余辉更柔”.
+                        //
+                        // 额外需求(星火闪烁):
+                        // - 用户希望 show 的 ring glow 像火星/星星一样闪闪.
+                        // - 这里用 curl-like 噪声场对 ringGlow 做调制:
+                        //   - 空间上形成“稀疏亮点”
+                        //   - 时间上产生“闪烁/跳动”
+                        // - 该效果只影响 ring(前沿),tail 仍保持更柔和的余辉,避免整体变成噪点墙.
+                        float ringGlow = ring * showBoost;
+                        float sparkleStrength = _VisibilityShowGlowSparkleStrength;
+                        if (sparkleStrength > 0.0 && ring > 1e-4)
+                        {
+                            // sparkPos:
+                            // - smokePos 做了 0.25 降频以避免“很混乱”,但星火需要更细的空间变化.
+                            // - 这里用更高一点的频率(0.85)并把时间加速(×3),产生更明显的闪烁节奏.
+                            float3 sparkPos = modelCenterBase * (_VisibilityNoiseScale * 0.85) + tNoiseVec * 3.0;
+
+                            // curl noise: 连续的旋涡/流动向量场.
+                            float3 curlSpark = GsplatEvalCurlNoise(sparkPos + float3(11.7, 19.3, 7.1));
+                            float curlMag01 = saturate(length(curlSpark) * 0.35);
+
+                            // 稀疏亮点:
+                            // - curlMag01 多数时候偏小,通过幂次把它变成“偶尔很亮”的星火.
+                            float sparkMask = pow(curlMag01, 3.0);
+
+                            // 时间闪烁:
+                            // - 使用已有的第二份噪声采样(warp01b)作为 twinkle 相位,避免再做额外噪声采样.
+                            // - pow 提高“闪一下”的离散感(类似火星闪烁).
+                            float twinkle = pow(saturate(warp01b), 8.0);
+
+                            float sparkle = sparkMask * twinkle;
+
+                            // 只提升 ring 前沿的亮度(乘性),不影响 alphaMask,避免引入新的残留问题.
+                            ringGlow *= 1.0 + sparkleStrength * sparkle * 2.0;
+                        }
+
+                        float tailGlow = pow(tailInside, 0.5);
+                        glowFactor = ringGlow + tailGlow * showBoost * 0.85;
                     }
-                    visibilityGlowAdd = _VisibilityGlowColor.rgb * ring * glowIntensity;
+                    else if (_VisibilityMode == 2)
+                    {
+                        // hide:
+                        // - 前沿(ring)更亮(Boost),但不随扩散向外变弱(避免外围突兀).
+                        // - 增加一个“向内衰减”的 afterglow tail(位于内侧),让衰减方向朝内而不是朝外.
+                        //
+                        // 说明:
+                        // - tailInside 在边界内侧(edgeDistNoisy<=0)取值,在边界处=1,向内逐渐衰减到 0.
+                        // - 这样“中心先烧掉,更早冷却”,视觉上 tail 会朝内变弱.
+                        glowFactor = ring * _VisibilityHideGlowStartBoost + tailInside;
+                    }
+
+                    visibilityGlowAdd = _VisibilityGlowColor.rgb * glowFactor * glowIntensity;
 
                     // --------------------------------------------------------
                     // 大小变化:
@@ -345,26 +461,35 @@ Shader "Gsplat/Standard"
                     // - 用 passed 作为每个 splat 的局部进度,让“被燃烧环扫过”的区域自然变大/变小.
                     // - show 时设置一个很小的 minScale,避免 progress 刚开始时 ring 过于不可见.
                     // --------------------------------------------------------
-                    float sizeT = (_VisibilityMode == 1) ? passed : (1.0 - passed);
-                    // 用更“慢一点”的 easing,让 grow/shrink 更容易被肉眼感知:
-                    // - show: 刚出现时更小,随后更慢地长到正常.
-                    // - hide: 更快缩小到极小,更像烧成灰.
-                    sizeT = saturate(sizeT);
-                    // show: 尺寸变大更快一些,避免 ring 阶段全是很小的点点.
-                    // hide: shrink 更强,更像“烧成灰”.
-                    float sizePow = (_VisibilityMode == 1) ? 0.5 : 4.0;
-                    sizeT = pow(sizeT, sizePow);
-                    sizeT = smoothstep(0.0, 1.0, sizeT);
-                    float minScale = (_VisibilityMode == 1) ? 0.01 : 0.0;
-                    visibilitySizeMul = lerp(minScale, 1.0, sizeT);
-                    if (_VisibilityMode == 2)
+                    float minScaleShow = 0.01;
+                    float minScaleHide = 0.06;
+                    if (_VisibilityMode == 1)
                     {
-                        // hide 额外叠加一个 global shrink:
-                        // - 让“尚未被燃烧环扫到”的外圈 splats 也会逐渐变小,避免体感一直很大.
-                        // - 越接近结束(progress->1),整体越接近 0.
-                        float globalShrink = saturate(1.0 - progressExpand);
-                        globalShrink = smoothstep(0.0, 1.0, globalShrink);
-                        visibilitySizeMul *= globalShrink;
+                        // show:
+                        // - 继续沿用“慢一点”的 grow,让从极小->正常的过程更容易被肉眼感知.
+                        float tGrow = saturate(passed);
+                        tGrow = pow(tGrow, 0.5);
+                        tGrow = smoothstep(0.0, 1.0, tGrow);
+                        visibilitySizeMul = lerp(minScaleShow, 1.0, tGrow);
+                    }
+                    else
+                    {
+                        // hide:
+                        // - 目标: 先迅速缩到“比较小但仍可见”的 size,再主要依赖 alpha trail 慢慢消失.
+                        // - 解决用户反馈:
+                        //   1) 燃烧(glow)阶段 splat 仍偏大 -> shrink 更早触发.
+                        //   2) size 过早接近 0 导致“看起来消失太快” -> minScaleHide 保持非 0.
+                        //
+                        // shrinkBand:
+                        // - 允许比 ringWidth 更宽一点,让 shrink 在 glow 前就提前开始.
+                        float shrinkBand = max(ringWidth, trailWidth * 0.35);
+                        shrinkBand = max(shrinkBand, 1e-5);
+
+                        // tShrink=0: 远离燃烧前沿(尺寸保持正常)
+                        // tShrink=1: 到达或进入燃烧前沿(尺寸快速变小)
+                        float tShrink = saturate((shrinkBand - edgeDistForFade) / shrinkBand);
+                        tShrink = EaseOutCirc(tShrink);
+                        visibilitySizeMul = lerp(1.0, minScaleHide, tShrink);
                     }
 
                     // --------------------------------------------------------
@@ -389,13 +514,34 @@ Shader "Gsplat/Standard"
                     if (warpAmp > 0.0 && dist > 1e-5)
                     {
                         float3 radial = delta / dist;
-                        float3 axis = (abs(radial.y) < 0.99) ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
-                        float3 tangent = normalize(cross(axis, radial));
-                        float3 bitangent = cross(radial, tangent);
+                        float3 warpVec = float3(0.0, 0.0, 0.0);
 
-                        float3 warpVec = tangent * warpSignedA + bitangent * warpSignedB;
-                        // 轻微径向分量,让扭曲更像“空间被拉扯”.
-                        warpVec += radial * (warp01a * 2.0 - 1.0) * 0.45;
+                        if (_VisibilityNoiseMode == 1)
+                        {
+                            // CurlSmoke:
+                            // - 用 curl-like 向量场生成更连续的“旋涡/流动”扭曲方向.
+                            // - 让 warp 更像烟雾流动,减少随机抖动感.
+                            float3 curlVec = GsplatEvalCurlNoise(smokePosWarp + float3(101.17, 17.31, 9.77));
+
+                            // 让“旋涡”更偏向切向(围绕中心转),减少径向把对象拉散的感觉.
+                            curlVec = curlVec - radial * dot(curlVec, radial);
+                            warpVec = curlVec;
+
+                            // 仍然保留一点径向分量,让扭曲更像“空间被拉扯”.
+                            warpVec += radial * (warp01a * 2.0 - 1.0) * 0.25;
+                        }
+                        else
+                        {
+                            // ValueSmoke / HashLegacy:
+                            // - 用两个标量噪声在 tangent/bitangent 上混合,得到稳定的“扭曲粒子”方向.
+                            float3 axis = (abs(radial.y) < 0.99) ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+                            float3 tangent = normalize(cross(axis, radial));
+                            float3 bitangent = cross(radial, tangent);
+
+                            warpVec = tangent * warpSignedA + bitangent * warpSignedB;
+                            warpVec += radial * (warp01a * 2.0 - 1.0) * 0.45;
+                        }
+
                         warpVec = normalize(warpVec + 1e-5);
 
                         modelCenter = modelCenterBase + warpVec * warpAmp;

@@ -95,13 +95,13 @@ namespace Gsplat
         [Range(0.0f, 1.0f)]
         [FormerlySerializedAs("RingWidthNormalized")]
         [Tooltip("show: 燃烧环宽度(相对 maxRadius 的比例).")]
-        public float ShowRingWidthNormalized = 0.06f;
+        public float ShowRingWidthNormalized = 0.066f;
 
         [Range(0.0f, 1.0f)]
         [FormerlySerializedAs("TrailWidthNormalized")]
         [Tooltip("show: 燃烧拖尾宽度(相对 maxRadius 的比例).\n" +
                  "它决定被扫过区域“慢慢透明/消失”的距离尺度.")]
-        public float ShowTrailWidthNormalized = 0.12f;
+        public float ShowTrailWidthNormalized = 0.048f;
 
         [Range(0.0f, 1.0f)]
         [Tooltip("hide: 燃烧环宽度(相对 maxRadius 的比例).")]
@@ -118,6 +118,20 @@ namespace Gsplat
         [Min(0.0f)]
         [Tooltip("show 阶段的发光强度.")]
         public float ShowGlowIntensity = 1.5f;
+
+        [Min(0.0f)]
+        [Tooltip("show 起始阶段额外亮度倍数(>=1 更像“点燃瞬间更亮”).\n" +
+                 "说明: 该参数主要用于放大 show 的燃烧环前沿 glow,让中心起燃更有冲击力.\n" +
+                 "若你希望全程更亮,请优先调大 ShowGlowIntensity.")]
+        public float ShowGlowStartBoost = 1.0f;
+
+        [Range(0.0f, 3.0f)]
+        [Tooltip("show: 燃烧前沿 ring 的“星火闪烁”强度(0=关闭).\n" +
+                 "说明:\n" +
+                 "- 该效果会用 curl-like 噪声场调制 ring glow 亮度,让它像火星/星星一样闪烁.\n" +
+                 "- 只影响 show 的 ring 前沿,不改变 hide.\n" +
+                 "- 值越大,闪烁越明显,但 show 阶段的 shader 计算也会更重一些.")]
+        public float ShowGlowSparkleStrength = 0.0f;
 
         [Min(0.0f)]
         [Tooltip("hide 阶段的发光强度.")]
@@ -148,6 +162,12 @@ namespace Gsplat
                  "- 1: 默认强度.\n" +
                  "- 2~3: 更明显的空间扭曲(可能需要更保守的 bounds 扩展).")]
         public float WarpStrength = 2.0f;
+
+        [Tooltip("显隐动画的噪声类型(主要影响 position warp 的噪声场).\n" +
+                 "- ValueSmoke: 当前默认,更平滑更像烟雾.\n" +
+                 "- CurlSmoke: 更像连续的旋涡/流动(开销更高).\n" +
+                 "- HashLegacy: 旧版对照,更碎更抖.")]
+        public GsplatVisibilityNoiseMode VisibilityNoiseMode = GsplatVisibilityNoiseMode.ValueSmoke;
 
         // --------------------------------------------------------------------
         // 显隐燃烧环动画 runtime 状态(非序列化)
@@ -615,10 +635,12 @@ namespace Gsplat
             var trailWidth = maxRadius * Mathf.Clamp01(trailWidthNorm);
 
             var glowIntensity = mode == 2 ? HideGlowIntensity : ShowGlowIntensity;
+            var showGlowSparkleStrength = mode == 1 ? ShowGlowSparkleStrength : 0.0f;
             var t = Time.realtimeSinceStartup;
 
             m_renderer.SetVisibilityUniforms(
                 mode: mode,
+                noiseMode: (int)VisibilityNoiseMode,
                 progress: progress,
                 centerModel: centerModel,
                 maxRadius: maxRadius,
@@ -626,6 +648,8 @@ namespace Gsplat
                 trailWidth: trailWidth,
                 glowColor: GlowColor,
                 glowIntensity: glowIntensity,
+                showGlowStartBoost: ShowGlowStartBoost,
+                showGlowSparkleStrength: showGlowSparkleStrength,
                 hideGlowStartBoost: HideGlowStartBoost,
                 noiseStrength: NoiseStrength,
                 noiseScale: NoiseScale,

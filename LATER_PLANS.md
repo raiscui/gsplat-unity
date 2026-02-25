@@ -125,4 +125,3 @@
   - 现状: warp 只在 vertex shader 里改 `modelCenter`,排序 key 仍基于原始 PositionBuffer.
   - 影响: 动画期间可能出现短暂的半透明排序误差(尤其在 warpStrength 很大时更明显).
   - 方向: compute 侧生成一份临时 position buffer(或 warp delta buffer),并让 CalcDistance 与渲染都读同一套“扭曲后位置”.
-- 候选增强: 将 warp 的噪声从 hash noise 进一步升级为更平滑的 noise(例如 value noise / curl-like),让扭曲更像连续的“空间流动”,减少抖动感.

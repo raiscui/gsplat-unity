@@ -143,7 +143,7 @@
 
 **Decision:**
 
-- 在显隐分支中对 `modelCenter` 增加基于 hash noise 的位移扰动(扭曲粒子效果).
+- 在显隐分支中对 `modelCenter` 增加基于连续噪声场的位移扰动(扭曲粒子效果).
 - 增加一个独立的位移强度倍率 `WarpStrength`,并通过新 uniform `_VisibilityWarpStrength` 下发,用于在不必拉高 `NoiseStrength` 的情况下获得更明显的 pos 位移.
 - 在 shader 中引入 per-splat phase offset + 各轴不同的时间推进 + globalWarp 权重,让扭曲位移更明显且更像“扭曲空间”的粒子效果,同时避免整片区域同步抖动.
 - 为了稳定阈值,`passed/ring` 的判定仍基于 `modelCenterBase`(未位移的中心)计算.
@@ -175,14 +175,16 @@
   - show: `ShowRingWidthNormalized` / `ShowTrailWidthNormalized`
   - hide: `HideRingWidthNormalized` / `HideTrailWidthNormalized`
 - 通过 `FormerlySerializedAs` 保持旧场景/Prefab 的序列化兼容(旧字段值迁移到 show 侧).
-- shader 侧对 hide 做语义校正:
-  - ring 更像“燃烧前沿”,主要出现在外侧(未燃烧侧).
-  - trail(渐隐)更自然地落在内侧(已燃烧区域),避免体感“trail 在外”.
+- shader 侧统一 show/hide 的语义:
+  - ring 更像“燃烧前沿”,show/hide 都主要出现在外侧(未燃烧侧,edgeDist>=0).
+  - trail(渐隐)与 afterglow(余辉)更自然地落在内侧(已燃烧侧,edgeDist<=0),并朝内衰减,
+    让“内部更亮,外围不突兀”,避免体感“trail 在外”.
 
 **Why:**
 
 - show/hide 的最佳观感参数通常不同(例如 hide 想要更厚的拖尾与更强的灰烬感).
-- hide 的 ring 如果在边界两侧都发光,很容易与内侧的渐隐叠在一起,产生“拖尾好像跑到外面”的错觉.
+- ring 如果在边界两侧都发光,很容易与内侧的渐隐/余辉叠在一起,产生“拖尾好像跑到外面”的错觉.
+  同时对 show 来说,也更容易出现“前沿亮但内部不够亮”的体感落差.
 
 ### 10) Editor 下 show/hide 动画期间主动 Repaint,避免“鼠标不动就不播放”
 
@@ -227,3 +229,139 @@
   - 起始更慢(更像“点燃/聚能”)
   - 中段更快(扩散更明显)
   - 末尾逐渐减速(收尾更自然,减少最后一瞬间的突兀感)
+
+### 12) 噪声模式可切换: ValueSmoke / CurlSmoke / HashLegacy
+
+**Decision:**
+
+- 在 `GsplatRenderer`/`GsplatSequenceRenderer` 增加 `VisibilityNoiseMode` 下拉枚举(默认 `ValueSmoke`).
+- shader 增加 `_VisibilityNoiseMode` uniform,由 `GsplatRendererImpl.SetVisibilityUniforms(...)` 每帧下发.
+- 在 shader 中根据 `_VisibilityNoiseMode` 切换 warp 噪声场:
+  - `ValueSmoke`: 沿用现有 value noise + domain warp,并用两个标量噪声混合 tangent/bitangent 生成 warp 方向.
+  - `CurlSmoke`: 基于 value noise 的梯度/旋度构造 curl-like 向量场,生成更连续的“旋涡/流动”warp 方向.
+  - `HashLegacy`: 旧版对照(更碎更抖),用于调试或性能基线.
+
+**Why:**
+
+- 用户需要“更平滑/更像烟雾流动”的扭曲,但也希望能快速切回当前效果做对照,避免调参时迷失.
+- 默认值保持 `ValueSmoke`,可以保证升级后旧项目观感不被意外改变.
+- `CurlSmoke` 会更贵,但它只在 show/hide 动画期间启用,因此整体成本可控.
+
+### 13) Glow 语义调优: show 也有 StartBoost,hide 增加“朝内衰减”的 tail
+
+**Decision:**
+
+- show 增加 `ShowGlowStartBoost`:
+  - 用于在 show 起始阶段增强燃烧环的“点燃瞬间更亮”的冲击力.
+  - `ShowGlowIntensity` 仍作为全局强度,StartBoost 只用于起始阶段的额外放大.
+- show 的 glow 也遵循“前沿更亮 + 内侧余辉”的语义:
+  - 前沿 ring(外侧)始终更亮(可被 StartBoost 放大).
+  - 内侧 afterglow/tail 朝内衰减,用于补足“内部不够亮”.
+  - 由于本 shader 使用 premul alpha 输出,为了让内侧 afterglow 肉眼可见,
+    show 允许 tail 提供一个受限的 alpha 下限(只在前沿内侧,且被 ring 抑制),避免 glow 被 alpha 吃掉.
+- hide 的 glow 改为“前沿更亮 + 内侧衰减的尾巴”:
+  - 前沿 ring 使用 `HideGlowStartBoost` 做 boost,并避免因扩散到外围就整体变暗导致外围突兀.
+  - 在 ring 的内侧增加 afterglow tail,并使其朝内(中心方向)逐渐衰减,更符合“中心先烧掉”的语义.
+
+**Why:**
+
+- 用户反馈的核心不是“亮不亮”,而是“衰减方向不对”:
+  - 若 glow 随扩散向外整体变弱,会导致外围燃烧前沿缺乏存在感,体感突兀.
+  - 更符合语义的是: 前沿一直明显,而内侧因为更早燃烧而更早冷却,因此朝内变弱.
+
+### 14) hide 在 glow 前提前 shrink(进入 glow 时已明显变小)
+
+**Decision:**
+
+- hide 的 splat 尺寸 shrink 不再严格绑定 `passed`(边界处为 0),
+  而是使用一个“向外提前”的 passedForSize:
+  - 让 ring(glow)出现时,对应 splat 已经开始缩小,避免 glow 阶段仍像“正常大小点云在发光”.
+
+**Why:**
+
+- 用户期望“燃烧前沿”出现时,高斯基元已经呈现“燃烧收缩”的形态.
+- 通过提前 shrink,可以不必整体后移 glow/noise 的时序,也更容易保持 reveal/burn 的阈值判定稳定.
+
+### 15) hide size 节奏: 先迅速变小(easeOutCirc),再慢慢消失(避免 size 过早接近 0)
+
+**Decision:**
+
+- hide 的 size shrink 不再强依赖 `passed` 把尺寸一路压到接近 0.
+- 改为在燃烧前沿附近快速 shrink 到一个非 0 的 `minScaleHide`,
+  后续主要依赖 alpha trail 让它慢慢消失.
+- shrink 的时间曲线使用 `easeOutCirc` 风格,实现“先快后慢”的观感.
+
+**Why:**
+
+- 用户反馈“hide 燃烧时粒子太大”与“看起来消失太快”的根因往往是同一个:
+  - 尺寸在 glow 阶段没有足够早变小,但一旦进入 shrink 又被压到接近 0,导致肉眼感觉“瞬间消失”.
+- 保持一个非 0 的 minScaleHide,能让粒子在燃烧尾巴阶段仍可见,
+  再由 alpha trail 渐隐完成“慢慢消失”的节奏.
+
+### 16) show/hide 的 ring/tail 语义统一: 前沿在外侧,余辉在内侧
+
+**Decision:**
+
+- ring 统一为“前沿在外侧(edgeDist>=0)”.
+  - 前沿 ring 永远在最外侧先到,更符合“燃烧扩散”的直觉.
+- afterglow/tail 统一为“只在内侧(edgeDist<=0),并朝内衰减”.
+  - 让内部更亮,同时避免外围突兀.
+- show 在 premul alpha 的约束下,给内侧 afterglow 一个受限 alpha 下限(只在前沿附近且被 ring 抑制),
+  确保余辉不会被 alpha 吃掉,能稳定地被肉眼看到.
+
+**Why:**
+
+- 用户反馈的核心是“语义一致性”:
+  - 前沿应该永远是最亮、最先到的边界.
+  - 余辉应该落在已经被扫过的一侧,并且越靠近中心越冷却.
+- 在 premul alpha 输出下,如果内侧余辉区域的 alpha 太低,即使加了 glow 也会被 alpha 乘没,
+  视觉上就会出现“内部不够亮”的错觉.
+
+### 17) hide 末尾残留修复: fade/shrink 不允许“边界噪声往外推”
+
+**Decision:**
+
+- hide 的边界噪声拆分为两条用途:
+  - ring/glow: 仍使用完整的 `edgeDistNoisy`,保留燃烧边界抖动质感.
+  - fade/shrink: 改用更稳态的 `edgeDistForFade`:
+    - 仅允许噪声往内咬(`min(noiseSigned,0)`),不允许往外推.
+    - 目的: 避免局部 passed 被“正向噪声”长期压在 <1,导致动画末尾 lingering.
+
+**Why:**
+
+- 用户反馈的“hide 最最后残留一些高斯基元很久才消失”本质上是:
+  - `passed`/`visible` 直接跟随 `edgeDistNoisy` 时,当噪声把边界往外推,
+    就相当于局部 burn front 被“拖住”,最后一圈 splats 会持续半透明可见.
+- 通过只在 fade/shrink 上禁止外推,我们既保留了 ring 的抖动质感,
+  也保证了 hide 在末尾能稳定烧尽并进入 Hidden.
+
+### 18) show 的 ring glow 星火闪烁: curl noise 调制亮度
+
+**Decision:**
+
+- 为 show 增加一个可调参数 `ShowGlowSparkleStrength`(0=关闭).
+- show 的 ring(前沿) glow 亮度使用 curl-like 噪声场做调制,形成“稀疏亮点 + 时间闪烁”的火星感:
+  - 稀疏亮点(sparkMask): 由 curl 向量场的幅度经过幂次增强得到,多数区域较暗,少数区域会更亮.
+  - 时间闪烁(twinkle): 使用随时间变化的噪声相位(复用已有 noise 采样),让亮点闪烁而不是静态斑点.
+- 该效果只作用于 ring 前沿,不影响 tail,避免内部余辉变成噪点墙.
+
+**Why:**
+
+- 用户希望 show 的环状 glow 不要“纯均匀的光带”,而是像火星/星星一样闪闪.
+- curl-like 噪声场在空间上连续且带旋涡感,用它做亮度调制更像“火星在流动的气流里跳动”,
+  比纯 hash 抖动更自然,也更接近“星火闪烁”的观感.
+
+### 19) 默认参数微调: show 的 ring 更厚,trail 更短
+
+**Decision:**
+
+- 调整 show 的默认参数(仅影响“新加组件/Reset”,不对已有序列化对象做自动迁移):
+  - `ShowRingWidthNormalized`: `0.06 -> 0.066`(+10%).
+  - `ShowTrailWidthNormalized`: `0.12 -> 0.048`(×0.4).
+
+**Why:**
+
+- ring 稍微更厚,能让前沿的存在感更强,更像“燃烧前沿”.
+- trail 更短会让 reveal 在前沿扫过后更快稳定为“完全可见”,从而:
+  - 内部更快变亮/变实(减少“外侧亮但内部发暗”的体感).
+  - 降低长拖尾带来的“半透明区域过宽”的混浊感.

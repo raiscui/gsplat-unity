@@ -350,6 +350,136 @@
 - 用户新需求(显隐燃烧环动画):
   - 将燃烧环扩散速度曲线改为 `easeInOutQuad`.
 - 本轮计划:
-  - [ ] shader 将 `progressExpand` 从 `EaseOutCirc` 切换为 `EaseInOutQuad`.
-  - [ ] 同步更新 OpenSpec change(burn-reveal-visibility)的 tasks/design/spec/changelog 记录,避免规格与实现不一致.
-  - [ ] 跑 Unity EditMode tests 回归(若可用),至少确保没有编译错误与 tests 回退.
+  - [x] shader 将 `progressExpand` 从 `EaseOutCirc` 切换为 `EaseInOutQuad`.
+  - [x] 同步更新 OpenSpec change(burn-reveal-visibility)的 tasks/design/spec/changelog 记录,避免规格与实现不一致.
+  - [x] 跑 Unity EditMode tests 回归(若可用),至少确保没有编译错误与 tests 回退.
+- 验证(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_easeInOutQuad_rerun_2026-02-25.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+### 2026-02-25 18:20:00 +0800
+- 用户新需求(显隐燃烧环动画):
+  - 将 show/hide 期间的 warp 噪声进一步升级为更平滑的 noise(例如 value noise / curl-like).
+  - 并提供一个下拉选项,可以在“当前效果”和“新 noise 效果”之间切换对比.
+- 本轮计划:
+  - [x] 增加 `VisibilityNoiseMode` 下拉枚举(默认保持当前行为),并在两个 renderer(GsplatRenderer/GsplatSequenceRenderer)暴露到 Inspector.
+  - [x] shader 增加 `_VisibilityNoiseMode` uniform,并在 `GsplatRendererImpl.SetVisibilityUniforms(...)` 每帧写入.
+  - [x] 实现更平滑的 curl-like 噪声场(基于 value noise 的梯度/旋度构造),用于 position warp 方向生成,让扭曲更像“连续的烟雾流动”.
+  - [x] 更新 OpenSpec change(burn-reveal-visibility)的 tasks/design/spec,并补充 `CHANGELOG.md`.
+  - [x] 跑 Unity EditMode tests 回归,确认编译与行为不回退.
+- 验证(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_noise_mode_noquit_2026-02-25.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+### 2026-02-25 19:10:00 +0800
+- 用户新反馈(显隐燃烧环动画,继续调优):
+  1) hide 时 glow 阶段 splat 仍偏大,希望进入 glow 时已经更小.
+     - 候选: shrink 更早开始(在 glow 前预收缩),或把 glow/noise 效果整体后移.
+  2) show 也需要一个 `GlowStartBoost`(类似 hide).
+  3) hide 的 `HideGlowIntensity` / `HideGlowStartBoost` 体感“反了”:
+     - 消失从中心向外.
+     - 希望: 前沿突然更亮(Boost),并且衰减的尾巴应该“朝内”(中心方向),而不是随着扩散向外越来越弱导致外围突兀.
+- 本轮计划:
+  - [x] shader: 调整 hide 的 glow 构成:
+    - 前沿 ring 使用 Boost(更亮).
+    - 增加一个位于内侧的 afterglow tail,并随“向内”衰减(避免外围突兀).
+  - [x] shader: hide 的 size shrink 提前开始(在 glow ring 出现时已明显变小).
+  - [x] runtime: 增加 `ShowGlowStartBoost` 字段并下发到 shader.
+  - [x] 更新 OpenSpec(change burn-reveal-visibility)的 tasks/spec/design 与 `CHANGELOG.md`.
+  - [x] 跑 Unity EditMode tests 回归.
+- 验证(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_glow_tuning_2026-02-25.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+### 2026-02-25 20:05:00 +0800
+- 用户新反馈(显隐燃烧环动画,hide size 节奏):
+  - hide 燃烧时高斯基元粒子大小仍偏大.
+  - 期望: 先迅速降低到比较小的 size,再慢慢消失.
+  - 现状体感: 变得太小导致“看起来消失太快”.
+  - 候选: hide 的 size 曲线尝试类似 `easeOutCirc` 的节奏(先快后慢).
+- 本轮计划:
+  - [x] shader: 调整 hide 的 size 曲线:
+    - 在燃烧前沿附近快速 shrink 到“较小但仍可见”的 minScale.
+    - 后续更多依赖 alpha trail 慢慢消失,避免 size 过早接近 0.
+  - [ ] (如仍偏快) hide 的 alpha fade 对 passed 施加 easing,让 fade 更“前沿利落,尾巴更慢”.
+  - [x] 更新 OpenSpec/CHANGELOG/四文件记录.
+  - [x] 跑 Unity EditMode tests 回归.
+- 验证(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_hide_size_easeOutCirc_2026-02-25.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+### 2026-02-25 20:35:00 +0800
+- 用户新反馈(show/hide 的 trail/glow 语义):
+  - 质疑: `ShowTrailWidthNormalized` 是否在燃烧外部先到? 体感内部不够亮.
+  - 需求确认: 希望保证/强化:
+    - 前沿 ring 始终更亮(Boost).
+    - 内侧有 afterglow tail,并朝内衰减(中心方向),这样内部更亮,外围不突兀.
+- 本轮计划:
+  - [ ] shader: 为 show 增加内侧 afterglow tail(朝内衰减),补足“内部不够亮”.
+  - [ ] 检查 hide 是否仍满足“前沿 ring 更亮 + 内侧 tail 朝内衰减”的语义,必要时微调.
+  - [ ] 更新 OpenSpec/CHANGELOG/四文件记录.
+  - [ ] 跑 Unity EditMode tests 回归.
+
+### 2026-02-25 20:10:00 +0800
+- 用户继续反馈:
+  - 怀疑 show 的 trail/glow 语义不对: `ShowTrailWidthNormalized` 体感像跑到外侧,内部不够亮.
+  - 期望: 前沿 ring 永远更亮(可被 boost 放大),并且内侧 afterglow/tail 朝内衰减.
+- 本轮落地:
+  - [x] shader: 统一 show/hide 的 ring/tail 语义为:
+    - ring 作为“燃烧前沿”,show/hide 都主要出现在外侧(edgeDist>=0),保证前沿永远在最外侧先到.
+    - 内侧 afterglow/tail 只出现在内侧(edgeDist<=0),并朝内衰减,补足“内部不够亮”并避免外围突兀.
+    - show: 由于 premul alpha 会把低 alpha 区域的 glow 吃掉,因此给 tail 一个受限的 alpha 下限,确保余辉肉眼可见.
+  - [x] 更新 OpenSpec(change burn-reveal-visibility)的 tasks/spec/design 与 `CHANGELOG.md`.
+  - [x] 跑 Unity EditMode tests 回归.
+- 验证(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_show_trail_glow_semantics_2026-02-25_200342.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+- 备注:
+  - 运行 Unity 命令行 tests 时不要加 `-quit`,否则可能在 TestRunner 启动前提前退出,导致不生成 XML.
+
+### 2026-02-25 20:20:00 +0800
+- 用户新反馈:
+  - hide 最最后会残留一些高斯基元很久才消失.
+- 根因判断:
+  - hide 的 passed/visible 若完全跟随 `edgeDistNoisy`,当噪声为正时会把边界往外推,
+    导致局部 passed 长时间达不到 1,于是出现 lingering(末尾残留).
+- 本轮落地:
+  - [x] shader: hide 的 fade/shrink 使用 `edgeDistForFade`(仅允许噪声往内咬),禁止外推导致的 lingering.
+  - [x] 保留 ring/glow 使用 `edgeDistNoisy`,不牺牲边界抖动质感.
+  - [x] 更新 OpenSpec/CHANGELOG/四文件记录.
+  - [x] 跑 Unity EditMode tests 回归.
+- 验证(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_hide_lingering_fix_2026-02-25_201817.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+### 2026-02-25 20:35:00 +0800
+- 用户新需求:
+  - show 的环状 glow 亮度希望有变化,像火星/星星闪闪.
+  - 希望使用 curl noise,并提供强度可调.
+- 本轮落地:
+  - [x] runtime: 增加 `ShowGlowSparkleStrength` 参数(0=关闭),并作为 uniform 下发到 shader.
+  - [x] shader: show 的 ringGlow 使用 curl-like 噪声场生成稀疏亮点 + 随时间 twinkle,形成“星火闪烁”观感.
+  - [x] 更新 OpenSpec/CHANGELOG/四文件记录.
+  - [x] 跑 Unity EditMode tests 回归.
+- 验证(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_show_sparkle_2026-02-25_202927.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+### 2026-02-25 20:45:00 +0800
+- 用户调参需求:
+  - Show 的默认参数希望微调:
+    - `ShowRingWidthNormalized` 大 10%.
+    - `ShowTrailWidthNormalized` 乘以 40%(缩短 trail).
+- 本轮落地:
+  - [x] 调整 `GsplatRenderer`/`GsplatSequenceRenderer` 的默认值:
+    - `ShowRingWidthNormalized`: `0.06 -> 0.066`
+    - `ShowTrailWidthNormalized`: `0.12 -> 0.048`
+  - [x] 更新 OpenSpec/CHANGELOG/四文件记录.
+  - [ ](可选) 若你希望“自动迁移已有 Prefab/场景里仍是旧默认值的对象”,再做一次显式 migration(当前未做,避免升级后意外改动旧场景观感).

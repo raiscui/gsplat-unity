@@ -34,6 +34,7 @@ python3 Tools~/Splat4D/ply_sequence_to_splat4d.py --input-dir /path/to/time_*.pl
 
 - EditMode tests live in `Tests/Editor/` (Unity Test Framework/NUnit). In Test Runner, enable package tests and run `Gsplat.Tests.Editor`.
 - Treat `Samples~/` as the primary visual smoke test.
+- When running EditMode tests via Unity CLI (`-runTests`), if you see the Editor exit but no `-testResults` XML is generated, try removing `-quit` or moving `-quit` to the end of the argument list (some Editor versions can quit before the TestRunner starts when `-quit` is placed early).
 - Note: Package Manager samples are copied into the Unity project under `Assets/Samples/...` and do not auto-update when `Samples~/` changes; if a sample fix "doesn't work", check whether you're running the copied sample instead of the package source.
 - When changing sorting/shaders, validate on a subgroup-capable graphics API (D3D12, Metal, or Vulkan).
 - Metal compute caveat: Metal does not support buffer `GetDimensions` queries in HLSLcc. Pass buffer sizes as constants from C# when needed.

@@ -61,3 +61,61 @@
 ## 11. Tuning: ring expansion uses easeInOutQuad
 
 - [x] 11.1 在 `Runtime/Shaders/Gsplat.shader` 中,将 burn reveal 的扩散半径从线性 `radius=progress*(...)` 改为 `radius=easeInOutQuad(progress)*(...)`,并让与扩散强相关的全局效果(glow/globalWarp/globalShrink)使用同一套 eased progress,保证观感一致.
+
+## 12. Noise: warp noise mode dropdown + curl-like field
+
+- [x] 12.1 在 `Runtime/GsplatRenderer.cs`/`Runtime/GsplatSequenceRenderer.cs` 增加 `VisibilityNoiseMode` 下拉枚举(默认 ValueSmoke,保持当前行为不变).
+- [x] 12.2 在 `Runtime/GsplatRendererImpl.cs` 增加 `_VisibilityNoiseMode` uniform 的下发(每帧写入 MPB),并在 `Runtime/Shaders/Gsplat.shader` 声明该 uniform.
+- [x] 12.3 在 `Runtime/Shaders/Gsplat.hlsl` 实现 value noise 的梯度计算,并基于 curl(A)=∇×A 构造 curl-like 向量场.
+- [x] 12.4 在 `Runtime/Shaders/Gsplat.shader` 中根据 `_VisibilityNoiseMode` 切换:
+  - ValueSmoke/HashLegacy: 维持现有 tangent/bitangent 混合 warp.
+  - CurlSmoke: 使用 curl-like 向量场生成更连续的“旋涡/流动”扭曲方向.
+
+## 13. Tuning: glow semantics + show glow boost + earlier hide shrink
+
+- [x] 13.1 在 `Runtime/GsplatRenderer.cs`/`Runtime/GsplatSequenceRenderer.cs` 增加 `ShowGlowStartBoost` 参数,并在 shader 增加 `_VisibilityShowGlowStartBoost` uniform 下发.
+- [x] 13.2 调整 hide 的 glow 语义:
+  - 前沿 ring 使用 `HideGlowStartBoost` 进行更亮的 boost,且不再随扩散向外变弱(避免外围突兀).
+  - 增加内侧 afterglow tail,并随“向内”衰减(中心方向),让衰减方向朝内而不是朝外.
+- [x] 13.3 调整 hide 的 size shrink 提前开始:
+  - 让 ring(glow)出现时 splat 已明显变小,更符合“燃烧前沿”观感.
+
+## 14. Tuning: hide size quickly shrinks then lingers (easeOutCirc)
+
+- [x] 14.1 在 `Runtime/Shaders/Gsplat.shader` 为 hide 的 size shrink 改为 `easeOutCirc` 风格:
+  - 燃烧前沿附近先迅速 shrink 到“较小但仍可见”的 minScale.
+  - 后续更多依赖 alpha trail 慢慢消失,避免 size 过早接近 0 导致“看起来消失太快”.
+
+## 15. Tuning: show has inner afterglow tail (brighter interior)
+
+- [x] 15.1 在 `Runtime/Shaders/Gsplat.shader` 为 show 增加内侧 afterglow tail:
+  - tail 只出现在燃烧前沿内侧(edgeDist<=0),并朝内衰减.
+  - tail 从 ring 内侧开始(避免与 ring 叠加过曝),用于补足用户反馈的“内部不够亮”.
+
+## 16. Tuning: show/hide 统一“前沿在外侧”+ show 内侧更亮
+
+- [x] 16.1 在 `Runtime/Shaders/Gsplat.shader` 进一步统一与强化语义:
+  - ring 作为“燃烧前沿”,在 show/hide 期间都主要出现在外侧(edgeDist>=0).
+  - 内侧 afterglow/tail 只出现在内侧(edgeDist<=0),并朝内衰减,保证“内部更亮,外围不突兀”.
+  - show: 为了避免 premul alpha 把内侧 afterglow 吃掉,允许 tail 提供一个受限的 alpha 下限,让内部余辉肉眼可见.
+
+## 17. Tuning: fix hide end lingering splats (fade/shrink ignore outward jitter)
+
+- [x] 17.1 修复 hide 末尾“残留一些高斯基元很久才消失”的问题:
+  - 原因: 当边界噪声为正时,会把 edgeDist 往外推,导致局部 passed 永远达不到 1,从而在末尾 lingering.
+  - 策略:
+    - ring/glow 仍使用完整的 `edgeDistNoisy`,保留燃烧边界抖动质感.
+    - 但 hide 的 alpha fade 与 size shrink 使用更稳态的 `edgeDistForFade`:
+      仅允许噪声往内咬(`min(noiseSigned,0)`),不允许往外推,确保最终一定能烧尽.
+
+## 18. Tuning: show ring glow sparkle (curl noise twinkle)
+
+- [x] 18.1 show 的 ring glow 增加“火星/星星闪烁”亮度变化:
+  - 使用 curl-like 噪声场生成稀疏亮点(sparkMask),并用随时间变化的噪声相位生成 twinkle.
+  - 提供可调参数 `ShowGlowSparkleStrength`(0=关闭).
+
+## 19. Tuning: adjust default show widths (ring +10%, trail *40%)
+
+- [x] 19.1 调整 show 的默认宽度参数(仅影响新加组件/Reset 的默认值,不强制迁移旧场景):
+  - `ShowRingWidthNormalized` 默认值扩大 10%: `0.06 -> 0.066`
+  - `ShowTrailWidthNormalized` 默认值乘以 40%: `0.12 -> 0.048`

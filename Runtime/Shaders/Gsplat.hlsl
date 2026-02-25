@@ -292,3 +292,104 @@ void GsplatEvalValueNoise01(float3 p, out float noise01, out float noiseSigned)
     noise01 = GsplatValueNoise01(p);
     noiseSigned = noise01 * 2.0 - 1.0;
 }
+
+// --------------------------------------------------------------------
+// 3D value noise + gradient:
+// - 目标: 给 curl-like 噪声场提供“可导”的连续噪声.
+// - 实现方式: 仍然只做 8 个 corner hash,但同时计算 trilinear+fade 的偏导数.
+//
+// 注意:
+// - 这里的梯度是对输入 p 的偏导(∂/∂x,∂/∂y,∂/∂z).
+// - 在 cell 边界处 fade 的导数为 0,因此梯度可保持连续,比白噪声式抖动更像烟雾流动.
+// --------------------------------------------------------------------
+void GsplatValueNoise01Grad(float3 p, out float noise01, out float3 grad01)
+{
+    float3 ip = floor(p);
+    float3 fp = frac(p);
+
+    // fade: f(t)=t^2*(3-2t), f'(t)=6t(1-t)
+    float3 u = fp * fp * (3.0 - 2.0 * fp);
+    float3 du = 6.0 * fp * (1.0 - fp);
+
+    float n000 = GsplatHash13(ip + float3(0.0, 0.0, 0.0));
+    float n100 = GsplatHash13(ip + float3(1.0, 0.0, 0.0));
+    float n010 = GsplatHash13(ip + float3(0.0, 1.0, 0.0));
+    float n110 = GsplatHash13(ip + float3(1.0, 1.0, 0.0));
+    float n001 = GsplatHash13(ip + float3(0.0, 0.0, 1.0));
+    float n101 = GsplatHash13(ip + float3(1.0, 0.0, 1.0));
+    float n011 = GsplatHash13(ip + float3(0.0, 1.0, 1.0));
+    float n111 = GsplatHash13(ip + float3(1.0, 1.0, 1.0));
+
+    // x 方向插值
+    float nx00 = lerp(n000, n100, u.x);
+    float nx10 = lerp(n010, n110, u.x);
+    float nx01 = lerp(n001, n101, u.x);
+    float nx11 = lerp(n011, n111, u.x);
+
+    // y 方向插值
+    float nxy0 = lerp(nx00, nx10, u.y);
+    float nxy1 = lerp(nx01, nx11, u.y);
+
+    // z 方向插值(最终 noise)
+    noise01 = lerp(nxy0, nxy1, u.z);
+
+    // ∂/∂x:
+    // - 只有 u.x 依赖 x,因此只需要对 x 方向的 lerp 求导,再把结果继续按 y/z 插值.
+    float dnx00_dx = (n100 - n000) * du.x;
+    float dnx10_dx = (n110 - n010) * du.x;
+    float dnx01_dx = (n101 - n001) * du.x;
+    float dnx11_dx = (n111 - n011) * du.x;
+    float dnxy0_dx = lerp(dnx00_dx, dnx10_dx, u.y);
+    float dnxy1_dx = lerp(dnx01_dx, dnx11_dx, u.y);
+    float dn_dx = lerp(dnxy0_dx, dnxy1_dx, u.z);
+
+    // ∂/∂y:
+    // - nxy0 = nx00 + (nx10-nx00)*u.y
+    // - nxy1 = nx01 + (nx11-nx01)*u.y
+    float dnxy0_dy = (nx10 - nx00) * du.y;
+    float dnxy1_dy = (nx11 - nx01) * du.y;
+    float dn_dy = lerp(dnxy0_dy, dnxy1_dy, u.z);
+
+    // ∂/∂z:
+    // - noise = nxy0 + (nxy1-nxy0)*u.z
+    float dn_dz = (nxy1 - nxy0) * du.z;
+
+    grad01 = float3(dn_dx, dn_dy, dn_dz);
+}
+
+void GsplatEvalValueNoise01Grad(float3 p, out float noise01, out float noiseSigned, out float3 gradSigned)
+{
+    float3 grad01;
+    GsplatValueNoise01Grad(p, noise01, grad01);
+    noiseSigned = noise01 * 2.0 - 1.0;
+    gradSigned = grad01 * 2.0;
+}
+
+// --------------------------------------------------------------------
+// Curl-like 噪声场:
+// - 用 3 份独立的 value noise 作为 vector potential A(p)=(Ax,Ay,Az),
+//   然后取 curl(A)=∇×A 得到“旋涡/流动”更明显的向量场.
+//
+// 设计目标:
+// - 相比直接用两个标量噪声拼 tangent/bitangent,它更像连续烟雾的旋涡,更少“随机抖动”感.
+// - 只在 show/hide 动画期间启用,因此即使稍贵也可接受.
+// --------------------------------------------------------------------
+float3 GsplatEvalCurlNoise(float3 p)
+{
+    // 3 个不同 offset 的噪声,作为 vector potential 的三个分量.
+    // 说明: offset 只要足够大且不共线即可,这里选固定常数用于可复现.
+    float n1, s1;
+    float n2, s2;
+    float n3, s3;
+    float3 g1, g2, g3;
+    GsplatEvalValueNoise01Grad(p + float3(17.13, 31.77, 47.11), n1, s1, g1);
+    GsplatEvalValueNoise01Grad(p + float3(53.11, 12.77, 9.71), n2, s2, g2);
+    GsplatEvalValueNoise01Grad(p + float3(29.21, 83.11, 11.73), n3, s3, g3);
+
+    // curl(A) = (∂Az/∂y - ∂Ay/∂z, ∂Ax/∂z - ∂Az/∂x, ∂Ay/∂x - ∂Ax/∂y)
+    return float3(
+        g3.y - g2.z,
+        g1.z - g3.x,
+        g2.x - g1.y
+    );
+}

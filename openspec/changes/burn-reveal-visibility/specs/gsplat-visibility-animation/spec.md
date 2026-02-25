@@ -33,6 +33,74 @@
 - **WHEN** 用户调用 `PlayHide()`(或 `SetVisible(false, animated:true)`)
 - **THEN** 点云 MUST 逐步消失并在动画结束后完全不可见
 
+### Requirement: Hide fade MUST NOT linger due to outward edge noise
+系统 MUST 避免 hide 动画末尾出现“少量 splats 长时间残留”的现象(即便开启了边界噪声与扭曲):
+
+- 边界噪声 MAY 影响 ring/glow 的抖动质感.
+- 但边界噪声 MUST NOT 以“往外推边界”的方式长期阻止 fade/shrink 完成,
+  否则会出现局部 passed 无法到达 1 的 lingering.
+
+#### Scenario: Hide completes without lingering splats at the end
+- **GIVEN** 用户启用了显隐动画并播放 hide
+- **WHEN** hide 进度接近结束(progress→1)
+- **THEN** splats MUST 能稳定淡出并在动画结束时不残留(不会因为正向噪声把边界推外而长期半透明可见)
+
+### Requirement: Glow boost is configurable for show and hide
+系统 MUST 支持对 show/hide 的燃烧发光进行额外 boost 调节,以便实现更“点燃瞬间”的冲击力:
+
+- show:
+  - 系统 MUST 提供 `ShowGlowStartBoost`.
+  - 当 `ShowGlowStartBoost > 1` 时,show 的燃烧环在起始阶段 SHOULD 更亮.
+- hide:
+  - 系统 MUST 保留并支持 `HideGlowStartBoost`.
+  - 当 `HideGlowStartBoost > 1` 时,hide 的燃烧前沿(ring) SHOULD 更亮.
+
+#### Scenario: Boost values affect ring glow intensity
+- **GIVEN** 用户启用了显隐动画
+- **WHEN** 用户调大 `ShowGlowStartBoost`
+- **THEN** show 的燃烧环 glow 在起始阶段 SHOULD 更亮
+- **WHEN** 用户调大 `HideGlowStartBoost`
+- **THEN** hide 的燃烧前沿 glow SHOULD 更亮
+
+### Requirement: Hide glow tail SHOULD decay inward (avoid abrupt outer rim)
+系统 SHOULD 在 hide 期间让 glow 的衰减方向更符合“中心先烧掉”的语义:
+
+- hide 的燃烧前沿(ring) SHOULD 保持明显亮度,不应因为扩散到外围就整体变暗导致外围突兀.
+- 系统 SHOULD 在燃烧前沿内侧提供一个 afterglow tail,并使其朝内(中心方向)逐渐衰减.
+
+#### Scenario: Hide glow has bright front and inward-decaying tail
+- **GIVEN** hide 动画正在播放
+- **WHEN** 燃烧前沿向外推进
+- **THEN** 前沿 glow SHOULD 仍然明显,且内侧 tail SHOULD 随向内距离衰减
+
+### Requirement: Show glow SHOULD also have a bright front and an inward afterglow tail
+系统 SHOULD 在 show 期间也保证/强化“前沿更亮 + 内侧余辉朝内衰减”的语义,避免出现“外侧很亮但内部发暗”的体感:
+
+- show 的燃烧前沿(ring) SHOULD 更像“燃烧前沿”,主要出现在外侧(edgeDist>=0).
+- 前沿 ring SHOULD 保持更亮的观感(可由 `ShowGlowStartBoost` 增强).
+- 系统 SHOULD 在燃烧前沿内侧提供一个 afterglow tail,并使其朝内(中心方向)逐渐衰减,用于补足“内部不够亮”.
+- 系统 SHOULD 确保该内侧 afterglow 在实际渲染中肉眼可见(例如不要被 premul alpha 完全压没).
+
+#### Scenario: Show glow has bright front and visible inward afterglow
+- **GIVEN** show 动画正在播放
+- **WHEN** 燃烧前沿向外推进
+- **THEN** 前沿 ring SHOULD 更亮且位于外侧,内侧 afterglow SHOULD 朝内衰减且可被清晰看到
+
+### Requirement: Show ring glow MAY sparkle (curl noise twinkle) when enabled
+系统 MAY 在 show 阶段为燃烧前沿 ring 的 glow 提供“星火闪烁”效果,并且可调:
+
+- 系统 MAY 提供 `ShowGlowSparkleStrength` 参数:
+  - `0` 表示关闭闪烁(默认值 SHOULD 为 0,避免升级后意外改变观感/性能).
+  - 值越大,ring glow 的局部亮点与闪烁 SHOULD 更明显.
+- 闪烁 SHOULD 通过更平滑的噪声场实现(例如 curl-like 噪声场),
+  使其更像火星/星星闪闪,而不是白噪声式的随机抖动.
+- 闪烁 SHOULD 主要作用在 ring 前沿,不应把整段 tail 都变成噪点墙.
+
+#### Scenario: Sparkle strength changes ring glow flicker
+- **GIVEN** 用户启用了显隐动画并播放 show
+- **WHEN** 用户把 `ShowGlowSparkleStrength` 从 0 调大
+- **THEN** ring 前沿 glow SHOULD 出现更明显的“星火闪烁”亮度变化
+
 ### Requirement: Hidden state MUST stop sorting and draw submission
 当对象处于隐藏态(即 hide 动画已结束)时,系统 MUST 满足:
 
@@ -88,6 +156,9 @@
   - 随着燃烧环继续推进(局部进度增加),splat 尺寸 MUST 平滑变为正常大小.
 - hide:
   - 当 splat 被燃烧环扫过时,其尺寸 MUST 从正常大小平滑缩小到“极小”.
+  - hide 的 shrink SHOULD 呈现“先快后慢”的节奏:
+    - 在燃烧前沿(glow)阶段快速缩到较小但仍可见的尺寸.
+    - 随后更多由 alpha trail 慢慢消失,避免因尺寸过早接近 0 而显得消失太快.
 
 #### Scenario: Splats grow during show and shrink during hide
 - **WHEN** show 动画推进,且某个 splat 从“刚出现”进入“稳定显示”
@@ -109,6 +180,21 @@
 - **THEN** splat 的位移扭曲 MUST 明显变弱且趋于稳定
 - **WHEN** hide 动画推进到后半段
 - **THEN** splat 的位移扭曲 MUST 更明显且更碎屑化
+
+### Requirement: Visibility noise mode MUST be selectable (dropdown)
+系统 MUST 提供一个可切换的噪声模式,用于对比与调参:
+
+- 系统 MUST 在 `GsplatRenderer` 与 `GsplatSequenceRenderer` 上提供 `VisibilityNoiseMode` 下拉选项.
+- 默认值 MUST 为 `ValueSmoke`,以保持当前项目在升级后观感不被意外改变.
+- 系统 MUST 至少提供两种可选模式:
+  - `ValueSmoke`: 平滑 value noise + 轻量 domain warp(当前默认,更像烟雾波动).
+  - `CurlSmoke`: curl-like 向量场(更像旋涡/流动,主要用于 position warp).
+- 系统 MAY 提供 `HashLegacy` 作为旧版对照模式(更碎更抖),用于调试或性能基线对比.
+
+#### Scenario: Switching noise mode changes warp field without breaking semantics
+- **GIVEN** 用户启用了显隐动画
+- **WHEN** 用户把 `VisibilityNoiseMode` 从 `ValueSmoke` 切换为 `CurlSmoke`
+- **THEN** show/hide 期间的 position warp 方向 MUST 更像连续的流动/旋涡,且 reveal/burn 的 passed/ring 判定 MUST 仍保持稳定(不因 warp 抖动阈值)
 
 ### Requirement: Inspector provides Show/Hide controls for rapid iteration
 系统 MUST 在 Unity Editor 的 Inspector 中提供快捷触发:
