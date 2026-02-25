@@ -910,3 +910,50 @@
   - `-batchmode -nographics -runTests -testFilter Gsplat.Tests`
   - 结果文件: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_timeNormalized_fix_2026-02-24_1453.xml`
   - 汇总: total=26, passed=24, failed=0, skipped=2
+
+## 2026-02-25 00:08:10 +0800: d3d11 下 Gsplat.shader 编译报错(signed/unsigned + out 未初始化)
+
+### 现象
+- 在 Unity batchmode 跑 EditMode tests 后,`shadercompiler-UnityShaderCompiler-*.log` 出现:
+  - `signed/unsigned mismatch, unsigned assumed`
+  - `use of potentially uninitialized variable (center)`
+
+### 根因
+- `InitSource` 中 `source.order(uint)` 与 `_SplatCount(int)` 直接比较,触发 d3d11 编译器对 signed/unsigned 的严格报错.
+- `InitCenter(out SplatCenter center)` 在 early-return 分支没有初始化 out 参数所有字段,触发 d3d11 的“out 必须全路径初始化”检查.
+
+### 修复
+- `Runtime/Shaders/Gsplat.shader`:
+  - 对比较做显式 cast: `source.order >= (uint)_SplatCount`.
+  - 在 `InitCenter` 函数入口初始化 `center` 的全部字段,再走 early-return.
+
+### 验证(证据)
+- Unity 6000.3.8f1,最小工程 `_tmp_gsplat_pkgtests`:
+  - `-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - 结果文件:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_warp_tuning_2026-02-25_000517.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+  - `shadercompiler-UnityShaderCompiler-*.log` 不再出现 `error:`.
+
+## 2026-02-25 16:12:00 +0800: Unity EditMode tests 被脚本编译错误阻断(UnityEditor.Application 不存在)
+
+### 现象
+- 在最小工程 `_tmp_gsplat_pkgtests` 里跑 EditMode tests 时,Unity 直接在脚本编译阶段失败并退出,测试用例没有开始执行.
+- 编译错误:
+  - `Runtime/GsplatRenderer.cs: error CS0234: The type or namespace name 'Application' does not exist in the namespace 'UnityEditor'`
+  - `Runtime/GsplatSequenceRenderer.cs: error CS0234: The type or namespace name 'Application' does not exist in the namespace 'UnityEditor'`
+
+### 根因
+- 我们在 Runtime 代码的 `#if UNITY_EDITOR` 分支里误写了 `UnityEditor.Application.isBatchMode`.
+- UnityEditor 命名空间里不存在 `Application` 类型(正确的是 `UnityEngine.Application`),因此会触发编译错误.
+
+### 修复
+- `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`:
+  - 将 `UnityEditor.Application.isBatchMode` 改为 `UnityEngine.Application.isBatchMode`.
+  - 保持其它 `UnityEditor.EditorApplication` / `InternalEditorUtility.RepaintAllViews` 调用仍在 `#if UNITY_EDITOR` 内,只在 EditMode 动画期间触发.
+
+### 验证(证据型)
+- Unity 6000.3.8f1,最小工程 `_tmp_gsplat_pkgtests`:
+  - `-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_editor_repaint_2026-02-25.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2

@@ -224,3 +224,234 @@
   - 更新现有 skill: `self-learning.unity-editor-srp-beginCameraRendering-flicker`(补充 SceneView camera enabled 状态坑位).
   - 新增 skill 候选:
     - `self-learning.unity-metal-skip-draw-missing-buffer`: Metal 因 StructuredBuffer 未绑定导致跳绘制的排障与修复.
+
+---
+
+## 2026-02-24 21:31:02 +0800: 显隐燃烧环动画(burn reveal)落地笔记
+
+### 状态机设计要点
+- `Visible/Showing/Hiding/Hidden` 四态即可覆盖需求.
+- 关键门禁: `Hidden => Valid=false`.
+  - 这是“真正停排序与渲染开销”的根本保证(不是只把 alpha 乘 0).
+- Showing/Hiding 期间保持 `Valid=true`,保证 sorter/draw 能跑,动画才可见.
+
+### uniforms 推送要点
+- Update 渲染入口与 EditMode SRP 相机回调渲染入口,都必须在 draw 前推一次本帧 uniforms.
+  - 否则会出现 Update 路径与 CameraCallback 路径的动画进度不一致,体感像“偶尔跳一下/卡一下”.
+
+### Unity batchmode 测试踩坑
+- 运行 `-runTests` 时不要附带 `-quit`.
+  - 观察到 `-quit` 会导致 Unity 在完成导入/编译后直接退出,测试不会执行,也不会生成 testResults.
+- EditMode tests 中,ExecuteAlways.Update 的触发与 `Time.frameCount` 行为不一定稳定.
+  - 因此回归用例里用反射直接调用 `AdvanceVisibilityStateIfNeeded` 推进状态机,
+    让测试不依赖 Editor PlayerLoop 细节.
+
+---
+
+## 2026-02-25 00:06:30 +0800: 显隐燃烧环动画(burn reveal)调优: 更慢的 size easing + 更明显的 warp 粒子
+
+### 用户反馈
+- 位置扭曲(pos warp)不够明显,看起来更像 alpha 在抖,而不是“扭曲空间”的粒子位移.
+- show/hide 的 size 变化希望更慢更容易看出来.
+
+### 调整要点
+- 新增独立参数 `WarpStrength`(C# 字段 + shader uniform `_VisibilityWarpStrength`):
+  - 目的: 不必通过拉高 `NoiseStrength` 才能获得明显位移.
+- warp 观感增强(仍保持 passed/ring 判定基于 basePos 的稳定性):
+  - per-splat phase offset: 通过 splatId 生成相位偏移,避免整片区域同步抖动.
+  - 各轴不同的时间推进: 避免噪波场只沿对角线平移导致运动不够“活”.
+  - globalWarp 权重: show 早期/ hide 后期更不稳定,让位移在视觉上更明显.
+- size easing 调整:
+  - 用 `pow + smoothstep` 让 grow 更慢,shrink 更快更明显(相对 alphaMask 更容易被肉眼感知).
+
+### 顺手修复: d3d11 shader 编译错误
+- 问题:
+  - `signed/unsigned mismatch`(uint vs int 比较).
+  - `out` 参数未在所有路径初始化(InitCenter).
+- 修复:
+  - 显式 cast 消除 signed/unsigned 歧义.
+  - 在 `InitCenter` 入口初始化 `center` 的所有字段,再走早退分支.
+
+### 回归(证据)
+- Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+- 结果文件:
+  - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_warp_tuning_2026-02-25_000517.xml`
+- 汇总: total=28, passed=26, failed=0, skipped=2
+- shadercompiler logs: 本次不再出现 `error:` 记录.
+
+---
+
+## 2026-02-25 00:31:30 +0800: 显隐燃烧环动画调优: hide shrink 更强 + 噪波更像烟雾
+
+### 用户反馈
+- hide 期间 splat 尺寸仍然很大,缺少“从正常逐渐变小”的过程.
+- noise 仍然很混乱,不像烟雾.
+
+### 处理思路
+- hide size:
+  - 仅靠 passed 的局部 shrink 会让“外圈未扫过区域”一直保持大尺寸.
+  - 因此对 hide 增加:
+    - 更强的 shrink 曲线(指数更大).
+    - global progress 的整体 shrink(让未扫到区域也会逐渐变小).
+- smoke noise:
+  - 之前的 hash 白噪声更像随机抖动,缺少烟雾的空间连续性.
+  - 升级为 3D value noise(8-corner hash + trilinear),并加入轻量 domain warp,让噪波形态更像烟雾的扭曲与波动.
+
+### 回归(证据)
+- Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+- 结果文件:
+  - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_smoke_tuning_2026-02-25_003000.xml`
+- 汇总: total=28, passed=26, failed=0, skipped=2
+- shadercompiler logs: 未出现 `error:`.
+
+---
+
+## 2026-02-25 01:22:20 +0800: smoke noise 进一步稳态化(去掉 per-splat 大相位偏移)
+
+### 动机
+- 用户希望噪波更像烟雾(空间连续的扭曲与波动),而不是每个 splat 独立抖动导致的混乱.
+
+### 调整
+- `Runtime/Shaders/Gsplat.shader`:
+  - 移除 per-splat 大幅 `idPhase` 偏移(它会破坏空间连续性).
+  - 改为:
+    - 先用 value noise 得到 base01/baseSigned.
+    - 用 base 生成 domain warp(降低强度到 0.65).
+    - 再用 warp 后的噪声(warp01a/warpSignedA)作为 jitter/ash/warpVec 的统一噪声源.
+    - jitter 额外乘 0.75,避免边界抖动过碎.
+
+### 回归(证据)
+- Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+- 结果文件:
+  - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_smoke_tuning_2026-02-25_012102.xml`
+- 汇总: total=28, passed=26, failed=0, skipped=2
+
+---
+
+## 2026-02-25 01:26:10 +0800: show/hide 宽度拆分 + hide 前沿方位校正
+
+### 用户反馈
+- show 的 ring/trail 宽度希望与 hide 分开设置.
+- show 在 ring 阶段 size grow 过慢,看到的都是小点点; 但仍希望从极小开始.
+- hide 的 ring/trail 方位希望“反过来”: 体感现在像 trail 在外,希望 trail 在内.
+
+### 实现要点
+- 参数拆分(保持兼容):
+  - 将旧的 `RingWidthNormalized/TrailWidthNormalized` 迁移为 show 专用(`ShowRingWidthNormalized/ShowTrailWidthNormalized`).
+  - 新增 hide 专用(`HideRingWidthNormalized/HideTrailWidthNormalized`).
+  - 用 `FormerlySerializedAs("RingWidthNormalized")` 保证旧 Prefab/Scene 自动迁移.
+- show size:
+  - 将 show 的 grow 曲线从“慢”改为“更快”(指数从 2.0 改为 0.5),避免 ring 阶段全是小点点.
+  - 仍保持 passed=0 时从极小开始.
+- hide 方位:
+  - hide 的 ring 改为主要出现在外侧(edgeDist>=0)的“前沿”,避免 ring 在边界两侧发光与内侧渐隐叠加导致方位错觉.
+  - trail(渐隐)仍基于 passed,自然落在内侧(已燃烧区域).
+
+### 回归(证据)
+- Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+- 结果文件:
+  - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_smoke_tuning_2026-02-25_012102.xml`
+- 汇总: total=28, passed=26, failed=0, skipped=2
+
+补充(证据更新):
+- 上述“show/hide 宽度拆分 + hide 前沿方位校正”的回归结果文件是:
+  - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_widthsplit_2026-02-25_105753.xml`
+- 汇总: total=28, passed=26, failed=0, skipped=2
+
+---
+
+## 2026-02-25 15:55:00 +0800: burn reveal 显隐动画在 EditMode 下“鼠标不动不播放”的根因与修复
+
+### 现象
+- 在 Unity Editor 非 Play 模式下触发 `PlayShow()` / `PlayHide()`:
+  - 如果鼠标不动,SceneView/GameView 不 repaint.
+  - 体感像动画不播放,晃动鼠标才会“跳一下”更新.
+
+### 根因(本质)
+- EditMode 下的 SceneView/GameView 往往是“事件驱动 repaint”:
+  - 没有鼠标/键盘事件时,视口不会持续刷新.
+- 我们的 burn reveal 是 shader/uniform 驱动的时间动画:
+  - `AdvanceVisibilityStateIfNeeded()` 需要被调用推进 progress.
+  - 更关键的是,即使 progress 推进了,也必须有视口 repaint 才会提交 draw,肉眼才能看到连续帧.
+
+### 修复策略(改良胜过新增)
+- 只在 Showing/Hiding 期间(动画进行中)主动请求 Editor 刷新:
+  - `EditorApplication.QueuePlayerLoopUpdate()`
+  - `InternalEditorUtility.RepaintAllViews()`
+- 加轻量节流(60fps 上限),避免空闲耗电与刷屏.
+- `Application.isBatchMode` 下跳过,避免命令行 tests/CI 的无意义调用与潜在不稳定因素.
+- 动画刚结束时额外补 1 次强制刷新,避免停在“最后一帧之前”的错觉.
+
+### 验证(证据)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=28, passed=26, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_editor_repaint_2026-02-25.xml`
+
+---
+
+## 2026-02-25 16:35:00 +0800: 仅靠“请求 Repaint”仍不足时,用 EditorApplication.update ticker 彻底驱动 show/hide
+
+### 用户反馈
+- 上述“只在状态机里请求 Repaint”的优化,用户实测仍会出现:
+  - 鼠标不动,画面还是不动.
+
+### 推断
+- 可能存在某些 Editor 状态下:
+  - `ExecuteAlways.Update`/相机回调链路不会持续触发.
+  - 导致我们的 repaint 请求只发生一次,之后缺少持续 tick,又回到“鸡生蛋”循环.
+
+### 最终做法(更稳态)
+- 在 `GsplatRenderer`/`GsplatSequenceRenderer` 内增加 EditorApplication.update 驱动的 ticker:
+  - 只在 Showing/Hiding 期间注册.
+  - 每 tick 主动调用 `AdvanceVisibilityStateIfNeeded()`,并通过内部的 `RequestEditorRepaintForVisibilityAnimation()` 持续触发:
+    - `QueuePlayerLoopUpdate()`
+    - `RepaintAllViews()`
+  - 动画结束后自动注销.
+- 诊断增强(可控):
+  - `Runtime/GsplatEditorDiagnostics.cs` 新增 `[VIS_STATE]/[VIS_REPAINT]` 事件写入 ring buffer.
+  - 当 `GsplatSettings.EnableEditorDiagnostics=true` 时,可通过 `Tools/Gsplat/Dump Editor Diagnostics` dump 出完整时序证据.
+
+### 回归(证据)
+- Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_editor_ticker_2026-02-25.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+---
+
+## 2026-02-25 17:10:00 +0800: 燃烧环扩散速度曲线改为 easeInOutQuart
+
+### 用户需求
+- show/hide 的燃烧环扩散希望不是匀速.
+- 期望曲线: `easeInOutQuart`.
+
+### 落地方式
+- `Runtime/Shaders/Gsplat.shader`:
+  - 增加 `EaseInOutQuart(float t)` 函数(避免 pow,用乘法实现).
+  - 用 `progressExpand = EaseInOutQuart(progress)` 替代线性 progress,用于:
+    - `radius = progressExpand * (maxRadius + trailWidth)`
+    - hide glow 衰减 lerp
+    - hide globalShrink
+    - globalWarp
+
+### 回归(证据)
+- Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_easeInOutQuart_2026-02-25.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+---
+
+## 2026-02-25 17:35:00 +0800: 燃烧环扩散速度曲线切换为 easeOutCirc
+
+### 用户需求
+- 试一下 `easeOutCirc`.
+
+### 调整点
+- `Runtime/Shaders/Gsplat.shader`:
+  - 将扩散半径的推进曲线从 `easeInOutQuart` 切换为 `easeOutCirc`.
+  - `easeOutCirc(t)=sqrt(1-(t-1)^2)`,并对 sqrt 输入做 `max(0,x)` 防御浮点误差.
+  - 与扩散节奏强相关的全局效果继续使用同一套 `progressExpand`,避免节奏脱钩.
+
+### 回归(证据)
+- Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_easeOutCirc_2026-02-25.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2

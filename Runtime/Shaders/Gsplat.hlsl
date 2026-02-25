@@ -237,3 +237,58 @@ float3 EvalSH(const inout float3 sh[SH_COEFFS], float3 dir, int degree = 3)
     return result;
 }
 #endif
+
+// --------------------------------------------------------------------
+// 可选: 显隐燃烧环动画用的轻量 noise(无贴图,无 sin)
+// - 输出 noise01: [0,1]
+// - 输出 noiseSigned: [-1,1]
+// - 设计目标: 开销小,且在 model space 下可稳定复现,用于边界抖动与灰烬颗粒感.
+// --------------------------------------------------------------------
+float GsplatHash13(float3 p3)
+{
+    // 参考: "hash without sine" 的常见写法(只用 frac/dot/mul/add).
+    p3 = frac(p3 * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return frac((p3.x + p3.y) * p3.z);
+}
+
+void GsplatEvalHashNoise01(float3 p, out float noise01, out float noiseSigned)
+{
+    noise01 = GsplatHash13(p);
+    noiseSigned = noise01 * 2.0 - 1.0;
+}
+
+// 3D value noise:
+// - 使用 8 个格点 hash + trilinear 插值,空间上更平滑,更接近“烟雾/流体”的连续变化.
+// - 返回范围: [0,1]
+float GsplatValueNoise01(float3 p)
+{
+    float3 ip = floor(p);
+    float3 fp = frac(p);
+
+    // 平滑插值权重(Perlin 的 fade 简化版).
+    float3 u = fp * fp * (3.0 - 2.0 * fp);
+
+    float n000 = GsplatHash13(ip + float3(0.0, 0.0, 0.0));
+    float n100 = GsplatHash13(ip + float3(1.0, 0.0, 0.0));
+    float n010 = GsplatHash13(ip + float3(0.0, 1.0, 0.0));
+    float n110 = GsplatHash13(ip + float3(1.0, 1.0, 0.0));
+    float n001 = GsplatHash13(ip + float3(0.0, 0.0, 1.0));
+    float n101 = GsplatHash13(ip + float3(1.0, 0.0, 1.0));
+    float n011 = GsplatHash13(ip + float3(0.0, 1.0, 1.0));
+    float n111 = GsplatHash13(ip + float3(1.0, 1.0, 1.0));
+
+    float nx00 = lerp(n000, n100, u.x);
+    float nx10 = lerp(n010, n110, u.x);
+    float nx01 = lerp(n001, n101, u.x);
+    float nx11 = lerp(n011, n111, u.x);
+    float nxy0 = lerp(nx00, nx10, u.y);
+    float nxy1 = lerp(nx01, nx11, u.y);
+    return lerp(nxy0, nxy1, u.z);
+}
+
+void GsplatEvalValueNoise01(float3 p, out float noise01, out float noiseSigned)
+{
+    noise01 = GsplatValueNoise01(p);
+    noiseSigned = noise01 * 2.0 - 1.0;
+}

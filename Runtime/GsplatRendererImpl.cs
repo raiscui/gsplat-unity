@@ -67,6 +67,26 @@ namespace Gsplat
         static readonly int k_timeModel = Shader.PropertyToID("_TimeModel");
         static readonly int k_temporalCutoff = Shader.PropertyToID("_TemporalCutoff");
 
+        // ----------------------------------------------------------------
+        // 可选: 显隐燃烧环动画 uniforms
+        // - 注意: 这些字段全部是可选的,默认 mode=0 表示完全禁用,不改变旧行为.
+        // - 为了避免 shader 侧出现未初始化值导致的“偶发闪一下”,我们选择每帧都显式写入.
+        // ----------------------------------------------------------------
+        static readonly int k_visibilityMode = Shader.PropertyToID("_VisibilityMode");
+        static readonly int k_visibilityProgress = Shader.PropertyToID("_VisibilityProgress");
+        static readonly int k_visibilityCenterModel = Shader.PropertyToID("_VisibilityCenterModel");
+        static readonly int k_visibilityMaxRadius = Shader.PropertyToID("_VisibilityMaxRadius");
+        static readonly int k_visibilityRingWidth = Shader.PropertyToID("_VisibilityRingWidth");
+        static readonly int k_visibilityTrailWidth = Shader.PropertyToID("_VisibilityTrailWidth");
+        static readonly int k_visibilityGlowColor = Shader.PropertyToID("_VisibilityGlowColor");
+        static readonly int k_visibilityGlowIntensity = Shader.PropertyToID("_VisibilityGlowIntensity");
+        static readonly int k_visibilityHideGlowStartBoost = Shader.PropertyToID("_VisibilityHideGlowStartBoost");
+        static readonly int k_visibilityNoiseStrength = Shader.PropertyToID("_VisibilityNoiseStrength");
+        static readonly int k_visibilityNoiseScale = Shader.PropertyToID("_VisibilityNoiseScale");
+        static readonly int k_visibilityNoiseSpeed = Shader.PropertyToID("_VisibilityNoiseSpeed");
+        static readonly int k_visibilityWarpStrength = Shader.PropertyToID("_VisibilityWarpStrength");
+        static readonly int k_visibilityTime = Shader.PropertyToID("_VisibilityTime");
+
         Material GetOrCreateMaterialInstance()
         {
             var settings = GsplatSettings.Instance;
@@ -229,6 +249,73 @@ namespace Gsplat
         {
             // 统一收敛到同一条绑定路径,避免“某个 buffer 忘记绑定”导致 Metal 跳绘制.
             BindBuffersToPropertyBlock();
+        }
+
+        // ----------------------------------------------------------------
+        // 显隐燃烧环动画: uniforms 下发
+        // - 该方法只负责把参数写入 MaterialPropertyBlock.
+        // - 由上层组件(GsplatRenderer/GsplatSequenceRenderer)负责:
+        //   1) 状态机(Showing/Hiding/Hidden/Visible)
+        //   2) 计算 center/maxRadius/ringWidth/trailWidth
+        //   3) 决定 mode/progress
+        // ----------------------------------------------------------------
+        public void SetVisibilityUniforms(int mode, float progress, Vector3 centerModel, float maxRadius,
+            float ringWidth, float trailWidth, Color glowColor, float glowIntensity, float hideGlowStartBoost,
+            float noiseStrength, float noiseScale, float noiseSpeed, float warpStrength, float timeSeconds)
+        {
+            m_propertyBlock ??= new MaterialPropertyBlock();
+
+            // mode: 0=off,1=show,2=hide
+            if (mode != 1 && mode != 2)
+                mode = 0;
+
+            if (float.IsNaN(progress) || float.IsInfinity(progress))
+                progress = 0.0f;
+            progress = Mathf.Clamp01(progress);
+
+            // 半径/宽度类参数允许为 0(表示几乎无效果),但不允许为 NaN/Inf 或负数.
+            if (float.IsNaN(maxRadius) || float.IsInfinity(maxRadius) || maxRadius < 0.0f)
+                maxRadius = 0.0f;
+            if (float.IsNaN(ringWidth) || float.IsInfinity(ringWidth) || ringWidth < 0.0f)
+                ringWidth = 0.0f;
+            if (float.IsNaN(trailWidth) || float.IsInfinity(trailWidth) || trailWidth < 0.0f)
+                trailWidth = 0.0f;
+
+            if (float.IsNaN(glowIntensity) || float.IsInfinity(glowIntensity) || glowIntensity < 0.0f)
+                glowIntensity = 0.0f;
+            if (float.IsNaN(hideGlowStartBoost) || float.IsInfinity(hideGlowStartBoost) || hideGlowStartBoost < 0.0f)
+                hideGlowStartBoost = 1.0f;
+
+            if (float.IsNaN(noiseStrength) || float.IsInfinity(noiseStrength))
+                noiseStrength = 0.0f;
+            noiseStrength = Mathf.Clamp01(noiseStrength);
+
+            if (float.IsNaN(noiseScale) || float.IsInfinity(noiseScale) || noiseScale < 0.0f)
+                noiseScale = 0.0f;
+            if (float.IsNaN(noiseSpeed) || float.IsInfinity(noiseSpeed) || noiseSpeed < 0.0f)
+                noiseSpeed = 0.0f;
+
+            if (float.IsNaN(warpStrength) || float.IsInfinity(warpStrength) || warpStrength < 0.0f)
+                warpStrength = 0.0f;
+
+            if (float.IsNaN(timeSeconds) || float.IsInfinity(timeSeconds))
+                timeSeconds = 0.0f;
+
+            m_propertyBlock.SetInteger(k_visibilityMode, mode);
+            m_propertyBlock.SetFloat(k_visibilityProgress, progress);
+            // Shader 侧为 float3,这里用 Vector4 写入 xyz.
+            m_propertyBlock.SetVector(k_visibilityCenterModel, new Vector4(centerModel.x, centerModel.y, centerModel.z, 0.0f));
+            m_propertyBlock.SetFloat(k_visibilityMaxRadius, maxRadius);
+            m_propertyBlock.SetFloat(k_visibilityRingWidth, ringWidth);
+            m_propertyBlock.SetFloat(k_visibilityTrailWidth, trailWidth);
+            m_propertyBlock.SetColor(k_visibilityGlowColor, glowColor);
+            m_propertyBlock.SetFloat(k_visibilityGlowIntensity, glowIntensity);
+            m_propertyBlock.SetFloat(k_visibilityHideGlowStartBoost, hideGlowStartBoost);
+            m_propertyBlock.SetFloat(k_visibilityNoiseStrength, noiseStrength);
+            m_propertyBlock.SetFloat(k_visibilityNoiseScale, noiseScale);
+            m_propertyBlock.SetFloat(k_visibilityNoiseSpeed, noiseSpeed);
+            m_propertyBlock.SetFloat(k_visibilityWarpStrength, warpStrength);
+            m_propertyBlock.SetFloat(k_visibilityTime, timeSeconds);
         }
 
         public void Dispose()

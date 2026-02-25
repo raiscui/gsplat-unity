@@ -811,3 +811,276 @@
   - `-batchmode -nographics -runTests -testFilter Gsplat.Tests`
   - 结果文件: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_timeNormalized_fix_2026-02-24_1453.xml`
   - 汇总: total=26, passed=24, failed=0, skipped=2
+
+## 2026-02-24 21:31:02 +0800: Gsplat 显隐燃烧环动画(show/hide) + Inspector Show/Hide 按钮
+
+### 目标
+- 初始隐藏->显示: 从中心燃烧发光环向外扩散,逐步显示点云.
+- 显示->隐藏: 从中心起燃,环向外扩散,噪波增强像碎屑,逐步透明并最终消失.
+- hide 结束后真正停掉 sorter/draw 开销(不是只把 alpha 乘 0).
+- Inspector 提供 Show/Hide 按钮用于快速验证与调参.
+
+### 变更
+- `Runtime/Shaders/Gsplat.shader`
+  - 增加显隐动画 uniforms(`_VisibilityMode/_VisibilityProgress/_VisibilityCenterModel/...`).
+  - 在 `vert()` 集成 reveal/burn: 径向 mask + 环形 glow + 边界噪波扰动 + 灰烬颗粒.
+  - show 起始(progress=0)强制全不可见,避免“第一帧漏出”.
+- `Runtime/Shaders/Gsplat.hlsl`
+  - 增加轻量 hash noise(无贴图,无 sin),输出 `noise01/noiseSigned`.
+- `Runtime/GsplatRendererImpl.cs`
+  - 增加一组 `Shader.PropertyToID` 与 `SetVisibilityUniforms(...)`,集中写入 `MaterialPropertyBlock`.
+- `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+  - 增加显隐动画配置字段与公开 API:
+    - `SetVisible(bool visible, bool animated = true)`
+    - `PlayShow()` / `PlayHide()`
+  - 增加 show/hide 状态机:
+    - Showing/Hiding 期间保持 `Valid=true` 以允许排序与渲染.
+    - Hidden 时 `Valid=false`,从根源停止 sorter gather 与 draw 提交(停开销).
+  - 在 Update 与 EditMode SRP 相机回调两条 draw 路径,渲染前都推本帧显隐 uniforms.
+- `Editor/GsplatRendererEditor.cs`
+  - Inspector 底部增加 "Show" / "Hide" 两个按钮.
+- `Editor/GsplatSequenceRendererEditor.cs`
+  - 新增,为 `GsplatSequenceRenderer` 提供同样按钮.
+- `Tests/Editor/GsplatVisibilityAnimationTests.cs`
+  - 新增最小回归:
+    - `PlayHide()` -> 最终 Hidden 且 `Valid=false`
+    - `PlayShow()` -> 从 Hidden 恢复且 `Valid=true`
+- `CHANGELOG.md`
+  - Unreleased Added 增加该能力说明(默认关闭,不影响旧行为).
+
+### 验证(证据型)
+- Unity 6000.3.8f1,最小工程 `_tmp_gsplat_pkgtests`:
+  - `-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - 结果文件: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_2026-02-24_212906.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+---
+
+## 2026-02-25 00:07:20 +0800
+
+### 目标
+- 在既有 burn reveal(show/hide)显隐动画基础上,让两件事更“肉眼可见”:
+  - show/hide 的 splat size 变化更慢更明显.
+  - noise 的“空间扭曲粒子”效果让 pos 位移更明显(不是只像 alpha 抖动).
+
+### 变更
+- `Runtime/GsplatRenderer.cs`
+  - 新增参数 `WarpStrength`(0..3),用于放大 show/hide 期间的位移扭曲.
+  - bounds 扩展逻辑引入 `WarpStrength` 系数,避免 CPU culling 裁掉扭曲位移后的 splats.
+- `Runtime/GsplatSequenceRenderer.cs`
+  - 同步新增 `WarpStrength` + bounds 扩展系数.
+- `Runtime/GsplatRendererImpl.cs`
+  - `SetVisibilityUniforms(...)` 增加 `warpStrength` 入参并下发 `_VisibilityWarpStrength`.
+- `Runtime/Shaders/Gsplat.shader`
+  - size easing: `pow + smoothstep`,让 grow 更慢,shrink 更明显.
+  - warp 粒子感增强:
+    - per-splat phase offset(基于 splatId).
+    - 各轴不同时间推进.
+    - globalWarp 权重(show 早期/ hide 后期更不稳定).
+  - 修复 d3d11 shader 编译错误:
+    - 消除 signed/unsigned mismatch.
+    - `InitCenter(out center)` 在所有路径初始化 out 参数.
+- `CHANGELOG.md`
+  - Unreleased Added 补充 `WarpStrength` 可调参数.
+
+### 验证(证据型)
+- Unity 6000.3.8f1,最小工程 `_tmp_gsplat_pkgtests`:
+  - `-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - 结果文件:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_warp_tuning_2026-02-25_000517.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+  - shadercompiler logs: 未再出现 `error:`.
+
+---
+
+## 2026-02-25 00:32:40 +0800
+
+### 目标
+- 修正用户反馈的两点观感问题:
+  - hide 期间 splat 尺寸仍然很大,希望能从正常逐渐变小.
+  - noise 观感混乱,希望更像烟雾的扭曲与波动.
+
+### 变更
+- `Runtime/Shaders/Gsplat.shader`
+  - hide shrink 增强:
+    - 对 hide 使用更强的 shrink 曲线(sizePow=4).
+    - 叠加 global progress shrink,让未被扫过区域也会逐渐变小.
+  - smoke-like 噪声:
+    - 噪声输入改为 `modelCenterBase(xyz) + time`.
+    - per-splat 只做小相位偏移(改时间相位,保留空间连续性).
+    - 增加轻量 domain warp,让形态更像烟雾团簇与流动.
+- `Runtime/Shaders/Gsplat.hlsl`
+  - 新增 3D value noise(8-corner hash + trilinear)与 `GsplatEvalValueNoise01`.
+- `openspec/changes/burn-reveal-visibility/`
+  - 同步更新 design/spec/tasks 记录,`openspec validate --strict` 通过.
+
+### 验证(证据型)
+- Unity 6000.3.8f1,最小工程 `_tmp_gsplat_pkgtests`:
+  - `-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - 结果文件:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_smoke_tuning_2026-02-25_003000.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+---
+
+## 2026-02-25 01:23:10 +0800
+
+### 目标
+- 让噪波更像烟雾(空间连续),并减少“每个 splat 独立乱抖”的混乱感.
+
+### 变更
+- `Runtime/Shaders/Gsplat.shader`
+  - 移除 per-splat 大相位偏移,避免破坏空间连续性.
+  - jitter/ash/warp 位移统一使用 warp 后的 value noise,并下调 domain warp 与 jitter 强度.
+
+### 验证(证据型)
+- Unity 6000.3.8f1,最小工程 `_tmp_gsplat_pkgtests`:
+  - `-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - 结果文件:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_smoke_tuning_2026-02-25_012102.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+---
+
+## 2026-02-25 10:59:10 +0800
+
+### 目标
+- 按用户反馈继续调优 burn reveal 显隐动画:
+  - show/hide 的 ring/trail 宽度分开配置.
+  - show 的 ring 阶段 size grow 更快一些(避免全是小点点),但仍从极小开始.
+  - hide 的 ring/trail 方位校正: ring 更像外侧前沿,trail 落在内侧.
+
+### 变更
+- `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+  - 新增两组宽度参数:
+    - show: `ShowRingWidthNormalized`/`ShowTrailWidthNormalized`
+    - hide: `HideRingWidthNormalized`/`HideTrailWidthNormalized`
+  - 用 `FormerlySerializedAs("RingWidthNormalized")`/`FormerlySerializedAs("TrailWidthNormalized")` 保持旧序列化兼容.
+  - uniforms 下发时按 show/hide mode 选择对应宽度.
+- `Runtime/Shaders/Gsplat.shader`
+  - show: size grow 曲线更快(指数改为 0.5),ring 阶段不再全是小点点.
+  - hide: ring 主要出现在外侧(edgeDist>=0),避免与内侧渐隐叠在一起造成“trail 在外”的错觉.
+- `openspec/changes/burn-reveal-visibility/`
+  - 同步更新 spec/design/tasks.
+- `CHANGELOG.md`
+  - Unreleased Added 补充 show/hide ring+trail widths 拆分.
+
+### 验证(证据型)
+- Unity 6000.3.8f1,最小工程 `_tmp_gsplat_pkgtests`:
+  - `-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - 结果文件:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_widthsplit_2026-02-25_105753.xml`
+- 汇总: total=28, passed=26, failed=0, skipped=2
+
+---
+
+## 2026-02-25 16:05:00 +0800: burn reveal 显隐动画(EditMode)强制刷新,解决“鼠标不动不播放”
+
+### 用户问题
+- show/hide 播放时,如果鼠标不动(视口不触发 repaint),画面就不动,动画不会连续播放.
+- 希望在播放时间段内即使鼠标不动也能持续播放到结束.
+
+### 根因
+- Unity Editor 非 Play 模式下,SceneView/GameView 通常是事件驱动 repaint.
+- burn reveal 是 shader/uniform 动画,没有 repaint 就不会提交 draw,因此肉眼看起来像“卡住”.
+
+### 解决方案(只在动画期间生效,避免空闲耗电)
+- `Runtime/GsplatRenderer.cs`:
+  - 在 `AdvanceVisibilityStateIfNeeded()` 中:
+    - Showing/Hiding 期间请求 `QueuePlayerLoopUpdate + RepaintAllViews`(60fps 节流).
+    - 动画结束时补 1 次强制刷新.
+    - `Application.isBatchMode` 下跳过.
+  - 在 `PlayShow/PlayHide/InitVisibilityOnEnable` 入口强制刷新 1 次,避免“按了没反应”的错觉.
+- `Runtime/GsplatSequenceRenderer.cs`:
+  - 同步实现同样逻辑(序列后端 show/hide 也适用).
+
+### 规格同步
+- OpenSpec change: `openspec/changes/burn-reveal-visibility/`
+  - `tasks.md` 新增并完成第 10 节(强制刷新).
+  - `design.md` 补充第 10 条决策(动画期间主动 Repaint + 节流 + batchmode 门禁).
+  - `specs/gsplat-visibility-animation/spec.md` 增加对应 Requirement + Scenario.
+- `CHANGELOG.md` 补充 Fixed: Editor 下动画无需鼠标交互也能播放到结束.
+
+### 回归(证据型)
+- Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_editor_repaint_2026-02-25.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+---
+
+## 2026-02-25 16:45:00 +0800: 进一步补强: EditorApplication.update ticker + 可控 VIS 诊断事件
+
+### 背景(用户继续反馈)
+- 用户实测仍然可能出现“鼠标不动就不播放”.
+- 说明仅靠在状态机里请求 Repaint,在某些 Editor 状态下仍可能只触发一次,随后缺少持续 tick.
+
+### 变更
+- `Runtime/GsplatRenderer.cs`
+  - 增加 EditorApplication.update 驱动的显隐动画 ticker:
+    - 只在 Showing/Hiding 期间注册.
+    - 每 tick 调用 `AdvanceVisibilityStateIfNeeded()`,确保持续推进并持续请求 repaint.
+    - 动画结束自动注销,避免空闲耗电.
+  - `RequestEditorRepaintForVisibilityAnimation(...)` 增加 `reason` 参数,便于诊断.
+  - 在 ticker/register/unregister/state.change 时写入可控诊断事件(见下).
+- `Runtime/GsplatSequenceRenderer.cs`
+  - 同步增加同款 ticker + `reason` + 诊断事件.
+- `Runtime/GsplatEditorDiagnostics.cs`
+  - 新增两类事件写入 ring buffer(仅当 `EnableEditorDiagnostics=true`):
+    - `[VIS_STATE]`: 记录显隐状态变化与 ticker tick.
+    - `[VIS_REPAINT]`: 记录每次 repaint 请求(含 reason/force/state/progress).
+  - 可通过菜单 `Tools/Gsplat/Dump Editor Diagnostics` dump 出完整时序证据,定位“到底有没有 tick/有没有 repaint”.
+- `openspec/changes/burn-reveal-visibility/`
+  - `tasks.md` 增加并完成 10.4(可控诊断事件).
+  - `design.md` 更新第 10 条决策: 引入 EditorApplication.update ticker 打破鸡生蛋循环.
+
+### 回归(证据型)
+- Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_editor_ticker_2026-02-25.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+---
+
+## 2026-02-25 17:15:00 +0800: 燃烧环扩散速度曲线调整为 easeInOutQuart
+
+### 用户需求
+- show/hide 的燃烧环扩散动画速度曲线希望是 `easeInOutQuart`.
+
+### 变更
+- `Runtime/Shaders/Gsplat.shader`
+  - 新增 `EaseInOutQuart(float t)`(仅乘法,避免 pow).
+  - 使用 `progressExpand = EaseInOutQuart(progress)`:
+    - 扩散半径: `radius = progressExpand * (maxRadius + trailWidth)`
+    - hide glow 衰减、globalWarp、globalShrink 与扩散节奏保持一致(避免脱钩).
+- `openspec/changes/burn-reveal-visibility/`
+  - `tasks.md` 增加第 11 节并完成(扩散曲线 easeInOutQuart).
+  - `design.md` 增加第 11 条决策(为何用 easing).
+  - `specs/gsplat-visibility-animation/spec.md` 增加对应 Requirement + Scenario.
+- `CHANGELOG.md`
+  - 在 burn-ring visibility animation 的 Added 说明中补充 ring expansion 使用 `easeInOutQuart`.
+
+### 回归(证据型)
+- Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_easeInOutQuart_2026-02-25.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+---
+
+## 2026-02-25 17:40:00 +0800: 燃烧环扩散速度曲线切换为 easeOutCirc
+
+### 用户需求
+- 将 show/hide 的燃烧环扩散动画速度曲线改成 `easeOutCirc`.
+
+### 变更
+- `Runtime/Shaders/Gsplat.shader`
+  - 用 `EaseOutCirc(progress)` 生成 `progressExpand`,用于:
+    - `radius = progressExpand * (maxRadius + trailWidth)`
+    - hide glow 衰减、globalWarp、globalShrink 与扩散节奏保持一致.
+- `openspec/changes/burn-reveal-visibility/`
+  - `tasks.md`/`design.md`/`spec.md` 同步将 easing 要求从 quart 改为 circ.
+- `CHANGELOG.md`
+  - burn reveal 的 Added 描述同步更新为 `easeOutCirc ring expansion`.
+
+### 回归(证据型)
+- Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_easeOutCirc_2026-02-25.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2

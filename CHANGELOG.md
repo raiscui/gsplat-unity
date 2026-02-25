@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `GsplatActiveCameraOverride` component to explicitly pick a Game/VR camera as the active camera in `ActiveCameraOnly` mode (supports priority + last-enabled tie-break).
 - Added optional Editor diagnostics (`GsplatSettings.EnableEditorDiagnostics`) to collect camera/sort/draw traces and auto-dump context when Metal skips draw calls due to missing buffer bindings.
+- Added optional burn-ring visibility animation (Show/Hide) for `GsplatRenderer` and `GsplatSequenceRenderer` (easeInOutQuad ring expansion, smoke-like noise, configurable center, separate show/hide ring+trail widths, per-splat grow/shrink + position warp distortion, adjustable `WarpStrength`, and Inspector buttons). Disabled by default to keep legacy behavior.
 
 ### Fixed
 
@@ -19,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed Editor Edit Mode flicker in SRP where a camera can trigger multiple `beginCameraRendering` invocations within the same frame, but draw submission was happening only once in `ExecuteAlways.Update` (draw submission is now aligned to the camera callbacks in Edit Mode `ActiveCameraOnly`).
 - Fixed splats disappearing in the GameView (Edit Mode) while dragging `TimeNormalized` in the Inspector (GameView stays "sticky" as the active viewport even when Inspector takes focus).
 - Fixed very slow keyframe `.splat4d(window)` playback by sorting and rendering only the active time segment (sub-range sort/draw) when the asset matches the non-overlapping segment pattern.
+- Fixed burn-ring visibility animation (Show/Hide) in Editor Edit Mode appearing to "not play" unless the viewport repaints (e.g., mouse movement), by requesting Editor repaints while the animation is in progress.
 
 ## [1.1.4] - 2026-02-23
 

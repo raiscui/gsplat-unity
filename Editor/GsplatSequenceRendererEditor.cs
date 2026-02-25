@@ -1,4 +1,4 @@
-﻿// Copyright (c) 2025 Yize Wu
+// Copyright (c) 2026 Yize Wu
 // SPDX-License-Identifier: MIT
 
 using UnityEditor;
@@ -6,24 +6,14 @@ using UnityEngine;
 
 namespace Gsplat.Editor
 {
-    [CustomEditor(typeof(GsplatRenderer))]
-    public class GsplatRendererEditor : UnityEditor.Editor
+    [CustomEditor(typeof(GsplatSequenceRenderer))]
+    public sealed class GsplatSequenceRendererEditor : UnityEditor.Editor
     {
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
 
-            DrawPropertiesExcluding(serializedObject, "m_Script", nameof(GsplatRenderer.UploadBatchSize),
-                nameof(GsplatRenderer.RenderBeforeUploadComplete));
-            
-            if (serializedObject.FindProperty(nameof(GsplatRenderer.AsyncUpload)).boolValue)
-            {
-                EditorGUI.indentLevel++;
-                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.UploadBatchSize)));
-                EditorGUILayout.PropertyField(
-                    serializedObject.FindProperty(nameof(GsplatRenderer.RenderBeforeUploadComplete)));
-                EditorGUI.indentLevel--;
-            }
+            DrawDefaultInspector();
 
             // ----------------------------------------------------------------
             // Show/Hide 快捷按钮:
@@ -36,7 +26,7 @@ namespace Gsplat.Editor
             var anyAnimationDisabled = false;
             foreach (var obj in targets)
             {
-                var r = obj as GsplatRenderer;
+                var r = obj as GsplatSequenceRenderer;
                 if (!r || r.EnableVisibilityAnimation)
                     continue;
                 anyAnimationDisabled = true;
@@ -56,14 +46,13 @@ namespace Gsplat.Editor
                 {
                     foreach (var obj in targets)
                     {
-                        var r = obj as GsplatRenderer;
+                        var r = obj as GsplatSequenceRenderer;
                         if (!r)
                             continue;
                         r.PlayShow();
                         EditorUtility.SetDirty(r);
                     }
 
-                    // 编辑态触发动画时,主动刷新 PlayerLoop + 视图,避免“按了没反应”的错觉.
                     EditorApplication.QueuePlayerLoopUpdate();
                     UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
                 }
@@ -72,7 +61,7 @@ namespace Gsplat.Editor
                 {
                     foreach (var obj in targets)
                     {
-                        var r = obj as GsplatRenderer;
+                        var r = obj as GsplatSequenceRenderer;
                         if (!r)
                             continue;
                         r.PlayHide();
@@ -88,3 +77,4 @@ namespace Gsplat.Editor
         }
     }
 }
+

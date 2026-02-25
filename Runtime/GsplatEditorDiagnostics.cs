@@ -219,6 +219,17 @@ namespace Gsplat
             return $"{cam.cameraType}/{cam.name}#{id} en={en} act={act}";
         }
 
+        static string DescribeObject(UnityEngine.Object obj)
+        {
+            if (!obj)
+                return "null";
+
+            // 说明:
+            // - 显隐动画的诊断主要关心“哪个组件实例”在请求 repaint/推进状态机.
+            // - 打印 Type + name + instanceID,便于在多对象场景下定位.
+            return $"{obj.GetType().Name}/{obj.name}#{obj.GetInstanceID()}";
+        }
+
         static string DescribeWindow(UnityEditor.EditorWindow w)
         {
             if (!w)
@@ -495,6 +506,30 @@ namespace Gsplat
             AddEvent($"[RENDER_SKIP] reason={reason}");
         }
 
+        // ----------------------------------------------------------------
+        // Visibility animation diagnostics:
+        // - 用于定位“show/hide 动画在 EditMode 下是否持续 tick / 是否持续请求 repaint”.
+        // - 默认关闭(EnableEditorDiagnostics=false 时 no-op),避免刷屏与额外开销.
+        // ----------------------------------------------------------------
+        public static void MarkVisibilityState(UnityEngine.Object owner, string phase, string state,
+            float progress01)
+        {
+            if (!Enabled)
+                return;
+
+            AddEvent($"[VIS_STATE] phase={phase} owner={DescribeObject(owner)} state={state} p={progress01:0.000}");
+        }
+
+        public static void MarkVisibilityRepaint(UnityEngine.Object owner, string reason, bool force, string state,
+            float progress01)
+        {
+            if (!Enabled)
+                return;
+
+            var f = force ? 1 : 0;
+            AddEvent($"[VIS_REPAINT] reason={reason} force={f} owner={DescribeObject(owner)} state={state} p={progress01:0.000}");
+        }
+
         static void AppendShaderBufferIndexMap(StringBuilder sb)
         {
             // ----------------------------------------------------------------
@@ -566,6 +601,8 @@ namespace Gsplat
         public static void MarkSortDispatched(Camera cam, int activeGsplatCount) { }
         public static void MarkDrawSubmitted(Camera cam, int layer, int instanceCount, string tag) { }
         public static void LogRenderSkipped(string reason) { }
+        public static void MarkVisibilityState(UnityEngine.Object owner, string phase, string state, float progress01) { }
+        public static void MarkVisibilityRepaint(UnityEngine.Object owner, string reason, bool force, string state, float progress01) { }
 #endif
     }
 }

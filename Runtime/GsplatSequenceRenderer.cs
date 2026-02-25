@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Serialization;
 
 namespace Gsplat
 {
@@ -64,6 +66,272 @@ namespace Gsplat
         public float Speed = 1.0f;
         public bool Loop = true;
 
+        // --------------------------------------------------------------------
+        // 可选: 显隐燃烧环动画(show/hide)
+        // - 默认关闭,不影响旧行为与性能.
+        // - 序列后端的 decode 也会在 Hidden 状态被停掉,避免“不可见但仍在解码/排序”的浪费.
+        // --------------------------------------------------------------------
+        [Header("Visibility Animation (Burn Reveal)")]
+        [Tooltip("是否启用显隐燃烧环动画. 默认关闭,不影响旧行为与性能.")]
+        public bool EnableVisibilityAnimation;
+
+        [Tooltip("显隐动画中心.\n" +
+                 "- 不为空: 以该 Transform 为中心.\n" +
+                 "- 为空: 回退使用序列 union bounds.center.")]
+        public Transform VisibilityCenter;
+
+        [Tooltip("启用组件时是否自动播放 show 动画(从隐藏->显示).\n" +
+                 "仅在 EnableVisibilityAnimation=true 时生效.")]
+        public bool PlayShowOnEnable = true;
+
+        [Min(0.0f)]
+        [Tooltip("show 动画时长(秒).")]
+        public float ShowDuration = 1.0f;
+
+        [Min(0.0f)]
+        [Tooltip("hide 动画时长(秒).")]
+        public float HideDuration = 1.2f;
+
+        [Range(0.0f, 1.0f)]
+        [FormerlySerializedAs("RingWidthNormalized")]
+        [Tooltip("show: 燃烧环宽度(相对 maxRadius 的比例).")]
+        public float ShowRingWidthNormalized = 0.06f;
+
+        [Range(0.0f, 1.0f)]
+        [FormerlySerializedAs("TrailWidthNormalized")]
+        [Tooltip("show: 燃烧拖尾宽度(相对 maxRadius 的比例).\n" +
+                 "它决定被扫过区域“慢慢透明/消失”的距离尺度.")]
+        public float ShowTrailWidthNormalized = 0.12f;
+
+        [Range(0.0f, 1.0f)]
+        [Tooltip("hide: 燃烧环宽度(相对 maxRadius 的比例).")]
+        public float HideRingWidthNormalized = 0.06f;
+
+        [Range(0.0f, 1.0f)]
+        [Tooltip("hide: 燃烧拖尾宽度(相对 maxRadius 的比例).\n" +
+                 "它决定被扫过区域“慢慢透明/消失”的距离尺度.")]
+        public float HideTrailWidthNormalized = 0.12f;
+
+        [Tooltip("燃烧发光颜色.")]
+        public Color GlowColor = new(1.0f, 0.45f, 0.1f, 1.0f);
+
+        [Min(0.0f)]
+        [Tooltip("show 阶段的发光强度.")]
+        public float ShowGlowIntensity = 1.5f;
+
+        [Min(0.0f)]
+        [Tooltip("hide 阶段的发光强度.")]
+        public float HideGlowIntensity = 2.5f;
+
+        [Min(0.0f)]
+        [Tooltip("hide 起始阶段额外亮度倍数(>1 更像“先高亮燃烧”).")]
+        public float HideGlowStartBoost = 2.0f;
+
+        [Range(0.0f, 1.0f)]
+        [Tooltip("噪波强度(0..1).\n" +
+                 "- show: 越往后越弱.\n" +
+                 "- hide: 越往后越强(更碎屑).")]
+        public float NoiseStrength = 0.6f;
+
+        [Min(0.0f)]
+        [Tooltip("噪波空间频率(基于 model space).")]
+        public float NoiseScale = 1.0f;
+
+        [Min(0.0f)]
+        [Tooltip("噪波随时间变化速度.")]
+        public float NoiseSpeed = 1.0f;
+
+        [Range(0.0f, 3.0f)]
+        [Tooltip("空间扭曲(位移)强度倍率(0..3).\n" +
+                 "说明: 该参数只影响 show/hide 期间的 position warp,不影响 alpha 的灰烬颗粒/边界抖动.\n" +
+                 "- 0: 禁用位移扭曲.\n" +
+                 "- 1: 默认强度.\n" +
+                 "- 2~3: 更明显的空间扭曲(可能需要更保守的 bounds 扩展).")]
+        public float WarpStrength = 2.0f;
+
+        // --------------------------------------------------------------------
+        // 显隐燃烧环动画 runtime 状态(非序列化)
+        // --------------------------------------------------------------------
+        enum VisibilityAnimState
+        {
+            Visible = 0,
+            Hidden = 1,
+            Showing = 2,
+            Hiding = 3,
+        }
+
+        VisibilityAnimState m_visibilityState = VisibilityAnimState.Visible;
+        float m_visibilityProgress01 = 1.0f;
+        float m_visibilityLastAdvanceRealtime = -1.0f;
+
+#if UNITY_EDITOR
+        // --------------------------------------------------------------------
+        // Editor 体验修复: 让 show/hide 动画在“鼠标不动”时也能连续播放.
+        //
+        // 说明:
+        // - 原因与 `GsplatRenderer` 完全一致: EditMode 下视口 repaint 往往是事件驱动,
+        //   如果没有鼠标交互,show/hide 这种纯 shader/uniform 动画就会“看起来不动”.
+        // - 这里复用同样策略: 仅在 Showing/Hiding 期间主动 Repaint,并在结束时补 1 次刷新.
+        // --------------------------------------------------------------------
+        double m_visibilityEditorLastRepaintTime = -1.0;
+        double m_visibilityEditorLastDiagTickTime = -1.0;
+
+        // --------------------------------------------------------------------
+        // Editor update ticker(关键补强):
+        // - 仅靠 Update/相机回调触发 repaint,某些编辑器状态下仍可能只刷一次就停,导致动画看起来“卡住”.
+        // - 因此增加 EditorApplication.update 驱动的 ticker:
+        //   - 只在 Showing/Hiding 期间注册.
+        //   - 主动推进状态机并触发 repaint.
+        //   - 动画结束后自动注销,避免空闲耗电.
+        // --------------------------------------------------------------------
+        static readonly HashSet<GsplatSequenceRenderer> s_visibilityEditorTickers = new();
+        static readonly List<GsplatSequenceRenderer> s_visibilityEditorTickersToRemove = new();
+        static bool s_visibilityEditorUpdateHooked;
+        static double s_visibilityEditorLastTickTime;
+
+        static void EnsureVisibilityEditorUpdateHooked()
+        {
+            if (s_visibilityEditorUpdateHooked)
+                return;
+
+            s_visibilityEditorUpdateHooked = true;
+            UnityEditor.EditorApplication.update += TickVisibilityAnimationsInEditor;
+        }
+
+        static void UnhookVisibilityEditorUpdateIfIdle()
+        {
+            if (!s_visibilityEditorUpdateHooked || s_visibilityEditorTickers.Count != 0)
+                return;
+
+            UnityEditor.EditorApplication.update -= TickVisibilityAnimationsInEditor;
+            s_visibilityEditorUpdateHooked = false;
+        }
+
+        static void TickVisibilityAnimationsInEditor()
+        {
+            if (Application.isPlaying || Application.isBatchMode)
+            {
+                s_visibilityEditorTickers.Clear();
+                s_visibilityEditorTickersToRemove.Clear();
+                if (s_visibilityEditorUpdateHooked)
+                {
+                    UnityEditor.EditorApplication.update -= TickVisibilityAnimationsInEditor;
+                    s_visibilityEditorUpdateHooked = false;
+                }
+                return;
+            }
+
+            if (s_visibilityEditorTickers.Count == 0)
+            {
+                UnhookVisibilityEditorUpdateIfIdle();
+                return;
+            }
+
+            const double kMinInterval = 1.0 / 60.0;
+            var now = UnityEditor.EditorApplication.timeSinceStartup;
+            if (now - s_visibilityEditorLastTickTime < kMinInterval)
+                return;
+            s_visibilityEditorLastTickTime = now;
+
+            s_visibilityEditorTickersToRemove.Clear();
+            foreach (var r in s_visibilityEditorTickers)
+            {
+                if (!r || !r.isActiveAndEnabled || !r.EnableVisibilityAnimation)
+                {
+                    s_visibilityEditorTickersToRemove.Add(r);
+                    continue;
+                }
+
+                if (r.m_visibilityState != VisibilityAnimState.Showing &&
+                    r.m_visibilityState != VisibilityAnimState.Hiding)
+                {
+                    s_visibilityEditorTickersToRemove.Add(r);
+                    continue;
+                }
+
+                r.AdvanceVisibilityStateIfNeeded();
+
+                // 诊断(可选): 仅在 EnableEditorDiagnostics=true 时记录,并做额外节流.
+                if (GsplatEditorDiagnostics.Enabled)
+                {
+                    const double kDiagInterval = 0.25;
+                    if (r.m_visibilityEditorLastDiagTickTime < 0.0 ||
+                        now - r.m_visibilityEditorLastDiagTickTime >= kDiagInterval)
+                    {
+                        r.m_visibilityEditorLastDiagTickTime = now;
+                        GsplatEditorDiagnostics.MarkVisibilityState(r, "ticker.tick",
+                            r.m_visibilityState.ToString(), r.m_visibilityProgress01);
+                    }
+                }
+
+                if (r.m_visibilityState != VisibilityAnimState.Showing &&
+                    r.m_visibilityState != VisibilityAnimState.Hiding)
+                {
+                    s_visibilityEditorTickersToRemove.Add(r);
+                }
+            }
+
+            foreach (var r in s_visibilityEditorTickersToRemove)
+                s_visibilityEditorTickers.Remove(r);
+
+            UnhookVisibilityEditorUpdateIfIdle();
+        }
+
+        void RegisterVisibilityEditorTickerIfAnimating()
+        {
+            if (Application.isPlaying || Application.isBatchMode)
+                return;
+
+            if (m_visibilityState != VisibilityAnimState.Showing && m_visibilityState != VisibilityAnimState.Hiding)
+                return;
+
+            EnsureVisibilityEditorUpdateHooked();
+            s_visibilityEditorTickers.Add(this);
+
+            if (GsplatEditorDiagnostics.Enabled)
+            {
+                GsplatEditorDiagnostics.MarkVisibilityState(this, "ticker.register",
+                    m_visibilityState.ToString(), m_visibilityProgress01);
+            }
+        }
+
+        void UnregisterVisibilityEditorTickerIfAny()
+        {
+            if (s_visibilityEditorTickers.Remove(this) && GsplatEditorDiagnostics.Enabled)
+            {
+                GsplatEditorDiagnostics.MarkVisibilityState(this, "ticker.unregister",
+                    m_visibilityState.ToString(), m_visibilityProgress01);
+            }
+            UnhookVisibilityEditorUpdateIfIdle();
+        }
+
+        void RequestEditorRepaintForVisibilityAnimation(bool force = false, string reason = "VisibilityAnim")
+        {
+            if (Application.isPlaying)
+                return;
+
+            if (Application.isBatchMode)
+                return;
+
+            const double kMinInterval = 1.0 / 60.0;
+            var now = UnityEditor.EditorApplication.timeSinceStartup;
+            if (!force && m_visibilityEditorLastRepaintTime > 0.0 &&
+                now - m_visibilityEditorLastRepaintTime < kMinInterval)
+                return;
+
+            m_visibilityEditorLastRepaintTime = now;
+
+            if (GsplatEditorDiagnostics.Enabled)
+            {
+                GsplatEditorDiagnostics.MarkVisibilityRepaint(this, reason, force,
+                    m_visibilityState.ToString(), m_visibilityProgress01);
+            }
+
+            UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
+            UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+        }
+#endif
+
         GsplatSequenceAsset m_prevAsset;
         GsplatRendererImpl m_renderer;
         bool m_disabledDueToError;
@@ -107,6 +375,7 @@ namespace Gsplat
 
         public bool Valid =>
             EnableGsplatBackend &&
+            m_visibilityState != VisibilityAnimState.Hidden &&
             !m_disabledDueToError &&
             SequenceAsset &&
             m_renderer != null &&
@@ -134,10 +403,15 @@ namespace Gsplat
             if (Application.isPlaying)
                 return;
 
+            AdvanceVisibilityStateIfNeeded();
+
             if (!Valid || m_renderer == null || !m_renderer.Valid || !SequenceAsset)
                 return;
 
-            m_renderer.RenderForCamera(camera, SplatCount, transform, SequenceAsset.UnionBounds, gameObject.layer,
+            PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
+
+            var boundsForRender = CalcVisibilityExpandedRenderBounds(SequenceAsset.UnionBounds);
+            m_renderer.RenderForCamera(camera, SplatCount, transform, boundsForRender, gameObject.layer,
                 GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
                 timeModel: 1, temporalCutoff: 0.01f,
                 diagTag: "EditMode.CameraCallback");
@@ -151,6 +425,288 @@ namespace Gsplat
         public GraphicsBuffer SHBuffer => m_renderer != null ? m_renderer.SHBuffer : null;
         public GraphicsBuffer OrderBuffer => m_renderer != null ? m_renderer.OrderBuffer : null;
         public byte EffectiveSHBands => m_renderer != null ? m_renderer.SHBands : (byte)0;
+
+        // --------------------------------------------------------------------
+        // Public API: show/hide 显隐控制
+        // --------------------------------------------------------------------
+        public void SetVisible(bool visible, bool animated = true)
+        {
+            if (!animated || !EnableVisibilityAnimation)
+            {
+                m_visibilityState = visible ? VisibilityAnimState.Visible : VisibilityAnimState.Hidden;
+                m_visibilityProgress01 = 1.0f;
+                return;
+            }
+
+            if (visible)
+                PlayShow();
+            else
+                PlayHide();
+        }
+
+        public void PlayShow()
+        {
+            if (!EnableVisibilityAnimation)
+            {
+                m_visibilityState = VisibilityAnimState.Visible;
+                m_visibilityProgress01 = 1.0f;
+                return;
+            }
+
+            if (m_visibilityState is VisibilityAnimState.Visible or VisibilityAnimState.Showing)
+                return;
+
+            var startProgress = 0.0f;
+            if (m_visibilityState == VisibilityAnimState.Hiding)
+                startProgress = 1.0f - Mathf.Clamp01(m_visibilityProgress01);
+
+            m_visibilityState = VisibilityAnimState.Showing;
+            m_visibilityProgress01 = Mathf.Clamp01(startProgress);
+            m_visibilityLastAdvanceRealtime = -1.0f;
+
+#if UNITY_EDITOR
+            RequestEditorRepaintForVisibilityAnimation(force: true, reason: "PlayShow");
+            RegisterVisibilityEditorTickerIfAnimating();
+#endif
+        }
+
+        public void PlayHide()
+        {
+            if (!EnableVisibilityAnimation)
+            {
+                m_visibilityState = VisibilityAnimState.Hidden;
+                m_visibilityProgress01 = 1.0f;
+                return;
+            }
+
+            if (m_visibilityState is VisibilityAnimState.Hidden or VisibilityAnimState.Hiding)
+                return;
+
+            var startProgress = 0.0f;
+            if (m_visibilityState == VisibilityAnimState.Showing)
+                startProgress = 1.0f - Mathf.Clamp01(m_visibilityProgress01);
+
+            m_visibilityState = VisibilityAnimState.Hiding;
+            m_visibilityProgress01 = Mathf.Clamp01(startProgress);
+            m_visibilityLastAdvanceRealtime = -1.0f;
+
+#if UNITY_EDITOR
+            RequestEditorRepaintForVisibilityAnimation(force: true, reason: "PlayHide");
+            RegisterVisibilityEditorTickerIfAnimating();
+#endif
+        }
+
+        void InitVisibilityOnEnable()
+        {
+            m_visibilityState = VisibilityAnimState.Visible;
+            m_visibilityProgress01 = 1.0f;
+            m_visibilityLastAdvanceRealtime = -1.0f;
+
+            if (!EnableVisibilityAnimation || !PlayShowOnEnable)
+                return;
+
+            m_visibilityState = VisibilityAnimState.Showing;
+            m_visibilityProgress01 = 0.0f;
+
+#if UNITY_EDITOR
+            RequestEditorRepaintForVisibilityAnimation(force: true, reason: "OnEnable");
+            RegisterVisibilityEditorTickerIfAnimating();
+#endif
+        }
+
+        void AdvanceVisibilityStateIfNeeded()
+        {
+            if (!EnableVisibilityAnimation)
+                return;
+
+            var prevState = m_visibilityState;
+
+            var now = Time.realtimeSinceStartup;
+            var dt = 0.0f;
+            if (m_visibilityLastAdvanceRealtime >= 0.0f)
+                dt = Mathf.Max(0.0f, now - m_visibilityLastAdvanceRealtime);
+            m_visibilityLastAdvanceRealtime = now;
+
+            if (float.IsNaN(dt) || float.IsInfinity(dt) || dt < 0.0f)
+                dt = 0.0f;
+
+            if (m_visibilityState == VisibilityAnimState.Showing)
+            {
+                if (ShowDuration <= 0.0f || float.IsNaN(ShowDuration) || float.IsInfinity(ShowDuration))
+                {
+                    m_visibilityProgress01 = 1.0f;
+                    m_visibilityState = VisibilityAnimState.Visible;
+                }
+                else
+                {
+                    m_visibilityProgress01 = Mathf.Clamp01(m_visibilityProgress01 + dt / ShowDuration);
+                    if (m_visibilityProgress01 >= 1.0f)
+                        m_visibilityState = VisibilityAnimState.Visible;
+                }
+            }
+            else if (m_visibilityState == VisibilityAnimState.Hiding)
+            {
+                if (HideDuration <= 0.0f || float.IsNaN(HideDuration) || float.IsInfinity(HideDuration))
+                {
+                    m_visibilityProgress01 = 1.0f;
+                    m_visibilityState = VisibilityAnimState.Hidden;
+                }
+                else
+                {
+                    m_visibilityProgress01 = Mathf.Clamp01(m_visibilityProgress01 + dt / HideDuration);
+                    if (m_visibilityProgress01 >= 1.0f)
+                        m_visibilityState = VisibilityAnimState.Hidden;
+                }
+            }
+
+#if UNITY_EDITOR
+            if (GsplatEditorDiagnostics.Enabled && prevState != m_visibilityState)
+            {
+                GsplatEditorDiagnostics.MarkVisibilityState(this, "state.change",
+                    m_visibilityState.ToString(), m_visibilityProgress01);
+            }
+
+            if (m_visibilityState == VisibilityAnimState.Showing || m_visibilityState == VisibilityAnimState.Hiding)
+            {
+                RequestEditorRepaintForVisibilityAnimation(force: false, reason: "Advance");
+            }
+            else if ((prevState == VisibilityAnimState.Showing || prevState == VisibilityAnimState.Hiding) &&
+                     (m_visibilityState == VisibilityAnimState.Visible || m_visibilityState == VisibilityAnimState.Hidden))
+            {
+                RequestEditorRepaintForVisibilityAnimation(force: true, reason: "Advance.Finish");
+            }
+#endif
+        }
+
+        void PushVisibilityUniformsForThisFrame(Bounds localBounds)
+        {
+            if (m_renderer == null)
+                return;
+
+            var mode = 0;
+            var progress = 1.0f;
+            if (EnableVisibilityAnimation)
+            {
+                if (m_visibilityState == VisibilityAnimState.Showing)
+                {
+                    mode = 1;
+                    progress = m_visibilityProgress01;
+                }
+                else if (m_visibilityState == VisibilityAnimState.Hiding)
+                {
+                    mode = 2;
+                    progress = m_visibilityProgress01;
+                }
+            }
+
+            var centerModel = CalcVisibilityCenterModel(localBounds);
+            var maxRadius = CalcVisibilityMaxRadius(localBounds, centerModel);
+
+            // show/hide 的 ring/trail 宽度允许分别调参.
+            var ringWidthNorm = ShowRingWidthNormalized;
+            var trailWidthNorm = ShowTrailWidthNormalized;
+            if (mode == 2)
+            {
+                ringWidthNorm = HideRingWidthNormalized;
+                trailWidthNorm = HideTrailWidthNormalized;
+            }
+
+            var ringWidth = maxRadius * Mathf.Clamp01(ringWidthNorm);
+            var trailWidth = maxRadius * Mathf.Clamp01(trailWidthNorm);
+
+            var glowIntensity = mode == 2 ? HideGlowIntensity : ShowGlowIntensity;
+            var t = Time.realtimeSinceStartup;
+
+            m_renderer.SetVisibilityUniforms(
+                mode: mode,
+                progress: progress,
+                centerModel: centerModel,
+                maxRadius: maxRadius,
+                ringWidth: ringWidth,
+                trailWidth: trailWidth,
+                glowColor: GlowColor,
+                glowIntensity: glowIntensity,
+                hideGlowStartBoost: HideGlowStartBoost,
+                noiseStrength: NoiseStrength,
+                noiseScale: NoiseScale,
+                noiseSpeed: NoiseSpeed,
+                warpStrength: WarpStrength,
+                timeSeconds: t);
+        }
+
+        Vector3 CalcVisibilityCenterModel(Bounds localBounds)
+        {
+            if (VisibilityCenter)
+            {
+                var worldPos = VisibilityCenter.position;
+                if (!float.IsNaN(worldPos.x) && !float.IsNaN(worldPos.y) && !float.IsNaN(worldPos.z) &&
+                    !float.IsInfinity(worldPos.x) && !float.IsInfinity(worldPos.y) && !float.IsInfinity(worldPos.z))
+                {
+                    return transform.InverseTransformPoint(worldPos);
+                }
+            }
+
+            return localBounds.center;
+        }
+
+        static float CalcVisibilityMaxRadius(Bounds localBounds, Vector3 centerModel)
+        {
+            var ext = localBounds.extents;
+            if (ext.x < 0.0f || ext.y < 0.0f || ext.z < 0.0f)
+                return 0.0f;
+
+            if (float.IsNaN(ext.x) || float.IsNaN(ext.y) || float.IsNaN(ext.z) ||
+                float.IsInfinity(ext.x) || float.IsInfinity(ext.y) || float.IsInfinity(ext.z))
+                return 0.0f;
+
+            var c = localBounds.center;
+            var maxDistSq = 0.0f;
+            for (var sx = -1; sx <= 1; sx += 2)
+            for (var sy = -1; sy <= 1; sy += 2)
+            for (var sz = -1; sz <= 1; sz += 2)
+            {
+                var corner = c + new Vector3(sx * ext.x, sy * ext.y, sz * ext.z);
+                var d = corner - centerModel;
+                var distSq = d.sqrMagnitude;
+                if (distSq > maxDistSq)
+                    maxDistSq = distSq;
+            }
+
+            return Mathf.Sqrt(maxDistSq);
+        }
+
+        Bounds CalcVisibilityExpandedRenderBounds(Bounds baseBounds)
+        {
+            if (!EnableVisibilityAnimation)
+                return baseBounds;
+
+            if (m_visibilityState != VisibilityAnimState.Showing && m_visibilityState != VisibilityAnimState.Hiding)
+                return baseBounds;
+
+            var ns = NoiseStrength;
+            if (float.IsNaN(ns) || float.IsInfinity(ns))
+                ns = 0.0f;
+            ns = Mathf.Clamp01(ns);
+            if (ns <= 0.0f)
+                return baseBounds;
+
+            var ws = WarpStrength;
+            if (float.IsNaN(ws) || float.IsInfinity(ws) || ws < 0.0f)
+                ws = 0.0f;
+            ws = Mathf.Clamp(ws, 0.0f, 3.0f);
+            if (ws <= 0.0f)
+                return baseBounds;
+
+            var centerModel = CalcVisibilityCenterModel(baseBounds);
+            var maxRadius = CalcVisibilityMaxRadius(baseBounds, centerModel);
+
+            // 与 shader 侧 warpAmp 的同量纲上界(更保守一点),避免 CPU culling 裁掉扭曲位移后的 splats.
+            var warpPadding = maxRadius * ns * ws * 0.15f;
+            if (warpPadding > 0.0f && !float.IsNaN(warpPadding) && !float.IsInfinity(warpPadding))
+                baseBounds.Expand(warpPadding * 2.0f);
+
+            return baseBounds;
+        }
 
         void OnEnable()
         {
@@ -178,10 +734,17 @@ namespace Gsplat
 
             if (!TryCreateOrRecreateDecodeResources())
                 return;
+
+            InitVisibilityOnEnable();
+            PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
         }
 
         void OnDisable()
         {
+#if UNITY_EDITOR
+            // Editor 下该组件被禁用时,显隐动画 ticker 也必须解绑,避免静态集合残留引用.
+            UnregisterVisibilityEditorTickerIfAny();
+#endif
             GsplatSorter.Instance.UnregisterGsplat(this);
             DisposeDecodeResources();
             m_renderer?.Dispose();
@@ -217,6 +780,8 @@ namespace Gsplat
 
         void Update()
         {
+            AdvanceVisibilityStateIfNeeded();
+
             // ----------------------------------------------------------------
             // 稳态恢复: 与 GsplatRenderer 一致,在 Editor/Metal 下 buffer 可能会失效.
             // - 这里做一次节流的自动重建,避免序列后端出现“突然消失且无法自愈”.
@@ -298,7 +863,10 @@ namespace Gsplat
             else
 #endif
             {
-                m_renderer.Render(SplatCount, transform, SequenceAsset.UnionBounds, gameObject.layer,
+                PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
+
+                var boundsForRender = CalcVisibilityExpandedRenderBounds(SequenceAsset.UnionBounds);
+                m_renderer.Render(SplatCount, transform, boundsForRender, gameObject.layer,
                     GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
                     timeModel: 1, temporalCutoff: 0.01f);
             }

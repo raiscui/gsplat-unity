@@ -114,3 +114,15 @@
   - 方向:
     - 按帧跳过部分排序(例如每 N 帧排序一次),或基于相机运动/时间变化幅度做自适应.
     - 作为高级开关,默认保持全量排序的正确性.
+
+## 2026-02-24 21:31:02 +0800
+- 候选扩展: 若项目侧强依赖 vInspector,可考虑增加一个“可选的 Editor 集成层”,让自定义 Inspector 继承 vInspector 的基类并复用 `[Button]` 生态.
+  - 备注: 作为 UPM package 默认仍应保持无 vInspector 强依赖,避免在未安装 vInspector 的项目里编译失败.
+- 候选扩展: 将同款 burn reveal 显隐动画扩展到 VFX Graph 后端(需要改 binder/graph 输出链路).
+
+## 2026-02-25
+- 候选增强(二期): 让显隐动画的“空间扭曲位移”参与排序与 bounds(更稳态,也允许更大幅度).
+  - 现状: warp 只在 vertex shader 里改 `modelCenter`,排序 key 仍基于原始 PositionBuffer.
+  - 影响: 动画期间可能出现短暂的半透明排序误差(尤其在 warpStrength 很大时更明显).
+  - 方向: compute 侧生成一份临时 position buffer(或 warp delta buffer),并让 CalcDistance 与渲染都读同一套“扭曲后位置”.
+- 候选增强: 将 warp 的噪声从 hash noise 进一步升级为更平滑的 noise(例如 value noise / curl-like),让扭曲更像连续的“空间流动”,减少抖动感.
