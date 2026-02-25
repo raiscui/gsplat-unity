@@ -58,6 +58,6 @@
 - [x] 10.3 更新 `CHANGELOG.md` 与 OpenSpec spec/design,记录该 Editor 行为改进,并跑 EditMode tests 回归.
 - [x] 10.4 增加可控诊断事件(复用 `GsplatSettings.EnableEditorDiagnostics` 的 ring buffer),记录 show/hide 的 state/ticker/repaint,用于定位“为何看起来不播放”.
 
-## 11. Tuning: ring expansion uses easeOutCirc
+## 11. Tuning: ring expansion uses easeInOutQuad
 
-- [x] 11.1 在 `Runtime/Shaders/Gsplat.shader` 中,将 burn reveal 的扩散半径从线性 `radius=progress*(...)` 改为 `radius=easeOutCirc(progress)*(...)`,并让与扩散强相关的全局效果(glow/globalWarp/globalShrink)使用同一套 eased progress,保证观感一致.
+- [x] 11.1 在 `Runtime/Shaders/Gsplat.shader` 中,将 burn reveal 的扩散半径从线性 `radius=progress*(...)` 改为 `radius=easeInOutQuad(progress)*(...)`,并让与扩散强相关的全局效果(glow/globalWarp/globalShrink)使用同一套 eased progress,保证观感一致.

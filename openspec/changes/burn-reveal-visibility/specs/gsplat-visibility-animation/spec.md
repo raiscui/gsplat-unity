@@ -144,13 +144,14 @@
 - **WHEN** 在 hide duration 内没有鼠标交互
 - **THEN** 动画 MUST 仍能持续推进并在时长结束后进入 Hidden
 
-### Requirement: Burn ring expansion MUST use easeOutCirc timing
-系统 MUST 使用 `easeOutCirc` 作为燃烧环扩散的时间曲线,而不是匀速线性推进:
+### Requirement: Burn ring expansion MUST use easeInOutQuad timing
+系统 MUST 使用 `easeInOutQuad` 作为燃烧环扩散的时间曲线,而不是匀速线性推进:
 
-- 前半段扩散 MUST 更快(更有冲击力).
-- 后半段扩散 MUST 逐渐减速(收尾更自然,减少最后一瞬间的突兀感).
+- 起始阶段扩散 MUST 相对更慢(更像“点燃/聚能”).
+- 中段扩散 MUST 相对更快(扩散更明显).
+- 末尾阶段扩散 MUST 逐渐减速(收尾更自然,减少最后一瞬间的突兀感).
 
-#### Scenario: Ring radius advances with easeOutCirc
+#### Scenario: Ring radius advances with easeInOutQuad
 - **GIVEN** show/hide 动画正在播放
 - **WHEN** `_VisibilityProgress` 从 0 递增到 1
-- **THEN** 燃烧环半径的推进 MUST 呈现 `easeOutCirc` 的非线性速度曲线
+- **THEN** 燃烧环半径的推进 MUST 呈现 `easeInOutQuad` 的非线性速度曲线
