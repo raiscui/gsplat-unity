@@ -36,6 +36,17 @@ namespace Gsplat.Tests
         }
 
         [Test]
+        public void EaseInOutQuart_ReturnsExpectedValues()
+        {
+            // 目的: 锁定 render style 切换默认动画曲线的关键采样点,避免节奏被意外修改.
+            Assert.AreEqual(0.0f, GsplatUtils.EaseInOutQuart(0.0f), 1e-6f);
+            Assert.AreEqual(0.03125f, GsplatUtils.EaseInOutQuart(0.25f), 1e-6f);
+            Assert.AreEqual(0.5f, GsplatUtils.EaseInOutQuart(0.5f), 1e-6f);
+            Assert.AreEqual(0.96875f, GsplatUtils.EaseInOutQuart(0.75f), 1e-6f);
+            Assert.AreEqual(1.0f, GsplatUtils.EaseInOutQuart(1.0f), 1e-6f);
+        }
+
+        [Test]
         public void EstimateGpuBytes_ZeroSplats_HasGlobalHistogramBuffer()
         {
             // 说明: 即使 splatCount=0,估算函数仍会包含排序实现中的固定全局直方图 buffer.

@@ -54,6 +54,31 @@ namespace Gsplat
         public bool Loop = true;
 
         // --------------------------------------------------------------------
+        // Render Style: Gaussian <-> Particle Dots
+        // - 目标: 提供一个“更像粒子/点云”的圆片/圆点显示效果,并支持与高斯常规显示效果动画切换.
+        // - 切换动画:
+        //   - easing 固定为 easeInOutQuart
+        //   - 默认时长 1.5 秒(可改)
+        // --------------------------------------------------------------------
+        [Header("Render Style (Gaussian / Particle Dots)")]
+        [Tooltip("渲染风格.\n" +
+                 "- Gaussian: 常规高斯基元(椭圆高斯核).\n" +
+                 "- ParticleDots: 粒子圆片/圆点(屏幕空间圆盘).")]
+        public GsplatRenderStyle RenderStyle = GsplatRenderStyle.Gaussian;
+
+        [Min(0.0f)]
+        [Tooltip("ParticleDots 的圆点半径(屏幕像素,px radius).\n" +
+                 "说明:\n" +
+                 "- 该参数只影响 ParticleDots 与切换过渡期.\n" +
+                 "- 0 表示点半径为 0,效果接近不可见(用于特殊需要).")]
+        public float ParticleDotRadiusPixels = 4.0f;
+
+        [Min(0.0f)]
+        [Tooltip("渲染风格切换的默认时长(秒).\n" +
+                 "当你通过 API `SetRenderStyle(..., durationSeconds:-1)` 调用时,会使用该默认值.")]
+        public float RenderStyleSwitchDurationSeconds = 1.5f;
+
+        // --------------------------------------------------------------------
         // 可选: 显隐燃烧环动画(show/hide)
         // - 默认关闭,不影响旧行为与性能.
         // - 该动画用于“初始隐藏 -> 燃烧环扩散显示”和“中心起燃 -> 燃烧成灰消失”.
@@ -204,6 +229,20 @@ namespace Gsplat
         float m_visibilityProgress01 = 1.0f;
         float m_visibilityLastAdvanceRealtime = -1.0f;
 
+        // --------------------------------------------------------------------
+        // Render style 切换 runtime 状态(非序列化):
+        // - blend01=0: Gaussian
+        // - blend01=1: ParticleDots
+        // - 中间值: shader morph 过渡期(单次 draw).
+        // --------------------------------------------------------------------
+        float m_renderStyleBlend01;
+        bool m_renderStyleAnimating;
+        float m_renderStyleAnimProgress01;
+        float m_renderStyleAnimStartBlend01;
+        float m_renderStyleAnimTargetBlend01;
+        float m_renderStyleAnimDurationSeconds = 1.5f;
+        float m_renderStyleLastAdvanceRealtime = -1.0f;
+
 #if UNITY_EDITOR
         // --------------------------------------------------------------------
         // Editor 体验修复: 让 show/hide 动画在“鼠标不动”时也能连续播放.
@@ -237,6 +276,24 @@ namespace Gsplat
         static readonly List<GsplatRenderer> s_visibilityEditorTickersToRemove = new();
         static bool s_visibilityEditorUpdateHooked;
         static double s_visibilityEditorLastTickTime;
+
+        bool IsAnyAnimationActiveForEditorTicker()
+        {
+            // 显隐动画:
+            // - 只有 EnableVisibilityAnimation=true 且处于 Showing/Hiding 时才需要 tick.
+            if (EnableVisibilityAnimation &&
+                (m_visibilityState == VisibilityAnimState.Showing || m_visibilityState == VisibilityAnimState.Hiding))
+            {
+                return true;
+            }
+
+            // Render style 切换动画:
+            // - 与显隐动画独立,即便 EnableVisibilityAnimation=false,也可能需要 tick.
+            if (m_renderStyleAnimating)
+                return true;
+
+            return false;
+        }
 
         static void EnsureVisibilityEditorUpdateHooked()
         {
@@ -289,23 +346,25 @@ namespace Gsplat
             foreach (var r in s_visibilityEditorTickers)
             {
                 // 域重载/销毁/禁用时做清理.
-                if (!r || !r.isActiveAndEnabled || !r.EnableVisibilityAnimation)
+                if (!r || !r.isActiveAndEnabled)
                 {
                     s_visibilityEditorTickersToRemove.Add(r);
                     continue;
                 }
 
-                // 只在 Showing/Hiding 期间 tick,其它状态不占用 update.
-                if (r.m_visibilityState != VisibilityAnimState.Showing &&
-                    r.m_visibilityState != VisibilityAnimState.Hiding)
+                // 只在“任意动画进行中”才 tick(显隐动画或 render style 切换动画).
+                // 其它状态不占用 EditorApplication.update.
+                if (!r.IsAnyAnimationActiveForEditorTicker())
                 {
                     s_visibilityEditorTickersToRemove.Add(r);
                     continue;
                 }
 
-                // 推进显隐状态机:
-                // - 该函数内部会根据状态调用 RequestEditorRepaintForVisibilityAnimation().
+                // 推进动画状态机:
+                // - 显隐动画与 render style 动画都在这里推进,并通过 RequestEditorRepaintForVisibilityAnimation 触发持续 repaint.
+                // - 每个 Advance 函数内部都会自带 NaN/Inf 防御,避免 Editor 环境的异常 dt 导致跳变.
                 r.AdvanceVisibilityStateIfNeeded();
+                r.AdvanceRenderStyleStateIfNeeded();
 
                 // 诊断(可选):
                 // - 只有在 EnableEditorDiagnostics=true 时才记录到 ring buffer,避免默认刷屏.
@@ -317,14 +376,19 @@ namespace Gsplat
                         now - r.m_visibilityEditorLastDiagTickTime >= kDiagInterval)
                     {
                         r.m_visibilityEditorLastDiagTickTime = now;
-                        GsplatEditorDiagnostics.MarkVisibilityState(r, "ticker.tick",
-                            r.m_visibilityState.ToString(), r.m_visibilityProgress01);
+                        // 只在显隐动画启用且处于 Showing/Hiding 时记录 visibility 状态,避免 render style 切换刷屏污染证据.
+                        if (r.EnableVisibilityAnimation &&
+                            (r.m_visibilityState == VisibilityAnimState.Showing ||
+                             r.m_visibilityState == VisibilityAnimState.Hiding))
+                        {
+                            GsplatEditorDiagnostics.MarkVisibilityState(r, "ticker.tick",
+                                r.m_visibilityState.ToString(), r.m_visibilityProgress01);
+                        }
                     }
                 }
 
                 // 如果 tick 一次后就结束了(例如 duration=0),下一帧移除即可.
-                if (r.m_visibilityState != VisibilityAnimState.Showing &&
-                    r.m_visibilityState != VisibilityAnimState.Hiding)
+                if (!r.IsAnyAnimationActiveForEditorTicker())
                 {
                     s_visibilityEditorTickersToRemove.Add(r);
                 }
@@ -341,7 +405,7 @@ namespace Gsplat
             if (Application.isPlaying || Application.isBatchMode)
                 return;
 
-            if (m_visibilityState != VisibilityAnimState.Showing && m_visibilityState != VisibilityAnimState.Hiding)
+            if (!IsAnyAnimationActiveForEditorTicker())
                 return;
 
             EnsureVisibilityEditorUpdateHooked();
@@ -485,12 +549,14 @@ namespace Gsplat
             // 在 EditMode 下,Update 与相机回调的调用时序可能不稳定.
             // 这里在相机回调入口也推进一次显隐动画状态,避免动画“卡住”.
             AdvanceVisibilityStateIfNeeded();
+            AdvanceRenderStyleStateIfNeeded();
 
             if (!Valid || m_renderer == null || !m_renderer.Valid || !GsplatAsset)
                 return;
 
-            // 确保本次 draw 使用本帧最新的显隐 uniforms(避免 Update/CameraCallback 行为漂移).
+            // 确保本次 draw 使用本帧最新的 uniforms(避免 Update/CameraCallback 行为漂移).
             PushVisibilityUniformsForThisFrame(GsplatAsset.Bounds);
+            PushRenderStyleUniformsForThisFrame();
 
             var motionPadding = 0.0f;
             if (m_renderer.Has4D)
@@ -1778,6 +1844,70 @@ namespace Gsplat
         }
 
         // --------------------------------------------------------------------
+        // Public API: Render style 切换(Gaussian <-> ParticleDots)
+        // --------------------------------------------------------------------
+        public void SetRenderStyle(GsplatRenderStyle style, bool animated = true, float durationSeconds = -1.0f)
+        {
+            RenderStyle = style;
+
+            var target = style == GsplatRenderStyle.ParticleDots ? 1.0f : 0.0f;
+
+            var d = durationSeconds;
+            if (d < 0.0f)
+                d = RenderStyleSwitchDurationSeconds;
+            if (float.IsNaN(d) || float.IsInfinity(d) || d < 0.0f)
+                d = 0.0f;
+
+            if (!animated || d <= 0.0f)
+            {
+                m_renderStyleBlend01 = target;
+                m_renderStyleAnimating = false;
+                m_renderStyleAnimProgress01 = 1.0f;
+                m_renderStyleAnimStartBlend01 = target;
+                m_renderStyleAnimTargetBlend01 = target;
+                m_renderStyleLastAdvanceRealtime = -1.0f;
+
+                PushRenderStyleUniformsForThisFrame();
+
+#if UNITY_EDITOR
+                RequestEditorRepaintForVisibilityAnimation(force: true, reason: "RenderStyle.HardSet");
+#endif
+                return;
+            }
+
+            // 支持中途打断:
+            // - 从当前 blend01 作为新的起点,平滑过渡到目标风格.
+            m_renderStyleAnimating = true;
+            m_renderStyleAnimProgress01 = 0.0f;
+            m_renderStyleAnimStartBlend01 = m_renderStyleBlend01;
+            m_renderStyleAnimTargetBlend01 = target;
+            m_renderStyleAnimDurationSeconds = d;
+            m_renderStyleLastAdvanceRealtime = -1.0f;
+
+#if UNITY_EDITOR
+            RequestEditorRepaintForVisibilityAnimation(force: true, reason: "RenderStyle.AnimStart");
+            RegisterVisibilityEditorTickerIfAnimating();
+#endif
+        }
+
+        public void SetParticleDotRadiusPixels(float radiusPixels)
+        {
+            if (float.IsNaN(radiusPixels) || float.IsInfinity(radiusPixels) || radiusPixels < 0.0f)
+                radiusPixels = 0.0f;
+
+            ParticleDotRadiusPixels = radiusPixels;
+            PushRenderStyleUniformsForThisFrame();
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
+                UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+            }
+#endif
+        }
+
+        // --------------------------------------------------------------------
         // Public API: show/hide 显隐控制
         // --------------------------------------------------------------------
         public void SetVisible(bool visible, bool animated = true)
@@ -1885,6 +2015,27 @@ namespace Gsplat
 #endif
         }
 
+        void InitRenderStyleOnEnable()
+        {
+            // 默认保持旧行为: Gaussian.
+            // - RenderStyle 的初始值由序列化字段决定.
+            // - 这里不自动播放切换动画,避免 OnEnable 时出现“莫名其妙在变形”的错觉.
+            m_renderStyleAnimating = false;
+            m_renderStyleAnimProgress01 = 1.0f;
+            m_renderStyleAnimStartBlend01 = 0.0f;
+            m_renderStyleAnimTargetBlend01 = RenderStyle == GsplatRenderStyle.ParticleDots ? 1.0f : 0.0f;
+            m_renderStyleBlend01 = m_renderStyleAnimTargetBlend01;
+
+            m_renderStyleAnimDurationSeconds = RenderStyleSwitchDurationSeconds;
+            if (float.IsNaN(m_renderStyleAnimDurationSeconds) || float.IsInfinity(m_renderStyleAnimDurationSeconds) ||
+                m_renderStyleAnimDurationSeconds < 0.0f)
+            {
+                m_renderStyleAnimDurationSeconds = 1.5f;
+            }
+
+            m_renderStyleLastAdvanceRealtime = -1.0f;
+        }
+
         void AdvanceVisibilityStateIfNeeded()
         {
             // 只有动画启用时才推进 Showing/Hiding 的 progress.
@@ -1951,6 +2102,74 @@ namespace Gsplat
                 RequestEditorRepaintForVisibilityAnimation(force: true, reason: "Advance.Finish");
             }
 #endif
+        }
+
+        void AdvanceRenderStyleStateIfNeeded()
+        {
+            if (!m_renderStyleAnimating)
+                return;
+
+            var now = Time.realtimeSinceStartup;
+            var dt = 0.0f;
+            if (m_renderStyleLastAdvanceRealtime >= 0.0f)
+                dt = Mathf.Max(0.0f, now - m_renderStyleLastAdvanceRealtime);
+            m_renderStyleLastAdvanceRealtime = now;
+
+            if (float.IsNaN(dt) || float.IsInfinity(dt) || dt < 0.0f)
+                dt = 0.0f;
+
+            var d = m_renderStyleAnimDurationSeconds;
+            if (float.IsNaN(d) || float.IsInfinity(d) || d <= 0.0f)
+                d = 0.0f;
+
+            if (d <= 0.0f)
+            {
+                m_renderStyleBlend01 = m_renderStyleAnimTargetBlend01;
+                m_renderStyleAnimating = false;
+                m_renderStyleAnimProgress01 = 1.0f;
+            }
+            else
+            {
+                m_renderStyleAnimProgress01 = Mathf.Clamp01(m_renderStyleAnimProgress01 + dt / d);
+                var eased = GsplatUtils.EaseInOutQuart(m_renderStyleAnimProgress01);
+                m_renderStyleBlend01 = Mathf.Lerp(m_renderStyleAnimStartBlend01, m_renderStyleAnimTargetBlend01, eased);
+
+                if (m_renderStyleAnimProgress01 >= 1.0f)
+                {
+                    m_renderStyleBlend01 = m_renderStyleAnimTargetBlend01;
+                    m_renderStyleAnimating = false;
+                }
+            }
+
+#if UNITY_EDITOR
+            // Editor 下,render style 切换期间也需要主动请求 Repaint,否则可能“只动一帧就停”.
+            if (m_renderStyleAnimating)
+            {
+                RequestEditorRepaintForVisibilityAnimation(force: false, reason: "RenderStyle.Advance");
+            }
+            else
+            {
+                // 刚结束时补 1 次强制刷新,避免停在“最后一帧之前”的错觉.
+                RequestEditorRepaintForVisibilityAnimation(force: true, reason: "RenderStyle.Advance.Finish");
+            }
+#endif
+        }
+
+        void PushRenderStyleUniformsForThisFrame()
+        {
+            if (m_renderer == null)
+                return;
+
+            var dotRadius = ParticleDotRadiusPixels;
+            if (float.IsNaN(dotRadius) || float.IsInfinity(dotRadius) || dotRadius < 0.0f)
+                dotRadius = 0.0f;
+
+            var blend = m_renderStyleBlend01;
+            if (float.IsNaN(blend) || float.IsInfinity(blend))
+                blend = 0.0f;
+            blend = Mathf.Clamp01(blend);
+
+            m_renderer.SetRenderStyleUniforms(blend, dotRadius);
         }
 
         void PushVisibilityUniformsForThisFrame(Bounds localBounds)
@@ -2141,7 +2360,9 @@ namespace Gsplat
             // - 默认不启用该效果,保持旧行为.
             // - 启用且 PlayShowOnEnable=true 时,会以 Showing(0->1) 的方式从隐藏渐进显示.
             InitVisibilityOnEnable();
+            InitRenderStyleOnEnable();
             PushVisibilityUniformsForThisFrame(GsplatAsset.Bounds);
+            PushRenderStyleUniformsForThisFrame();
         }
 
         void OnDisable()
@@ -2173,6 +2394,23 @@ namespace Gsplat
             m_timeNormalizedThisFrame = t;
             UpdateSortRangeForTime(t);
 
+            // Render style(编辑态参数同步):
+            // - Inspector 修改 RenderStyle / ParticleDotRadiusPixels 后,需要立刻刷新 MPB 并 repaint.
+            var dotRadius = ParticleDotRadiusPixels;
+            if (float.IsNaN(dotRadius) || float.IsInfinity(dotRadius) || dotRadius < 0.0f)
+                ParticleDotRadiusPixels = 0.0f;
+
+            var dur = RenderStyleSwitchDurationSeconds;
+            if (float.IsNaN(dur) || float.IsInfinity(dur) || dur < 0.0f)
+                RenderStyleSwitchDurationSeconds = 1.5f;
+
+            // OnValidate 默认不自动播放切换动画:
+            // - 目标是让 Inspector 切换能立刻反映最终状态,避免“拖动字段就开始播动画”的干扰.
+            if (!m_renderStyleAnimating)
+                m_renderStyleBlend01 = RenderStyle == GsplatRenderStyle.ParticleDots ? 1.0f : 0.0f;
+
+            PushRenderStyleUniformsForThisFrame();
+
             // 触发 Editor 的渲染循环:
             // - QueuePlayerLoopUpdate: 让 ExecuteAlways 的 Update 尽快执行(包括动态 SH(delta)等逻辑).
             // - RepaintAll: 让 SceneView 相机立刻渲染,从而触发按相机排序(beginCameraRendering).
@@ -2191,6 +2429,7 @@ namespace Gsplat
             // - 这样本帧 render/相机回调使用的 uniforms 都基于同一个 progress.
             // - 也能确保 hide 播完后及时进入 Hidden,从根源停掉 sorter/draw 开销.
             AdvanceVisibilityStateIfNeeded();
+            AdvanceRenderStyleStateIfNeeded();
 
             // ----------------------------------------------------------------
             // 稳态恢复: GPU buffer 可能在 Editor/Metal 下因域重载、图形设备切换等原因失效.
@@ -2284,6 +2523,7 @@ namespace Gsplat
                 // - Update 渲染路径.
                 // - SRP 相机回调渲染路径(即便 Update 本帧不 submit draw,也要把 MPB 更新到最新状态).
                 PushVisibilityUniformsForThisFrame(GsplatAsset.Bounds);
+                PushRenderStyleUniformsForThisFrame();
 
 #if UNITY_EDITOR
                 // Editor 非 Play 模式下,SRP 相机可能在同一帧内触发多次渲染(beginCameraRendering).

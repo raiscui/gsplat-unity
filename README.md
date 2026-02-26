@@ -95,6 +95,26 @@ Create or choose a game object in your scene, and add the `Gsplat Renderer` comp
 
 The `SH Degree` option sets the order of SH coefficients used for rendering. The final value is capped by the Gsplat Asset's `SH Bands`.
 
+### Render style (Gaussian vs ParticleDots)
+
+Both `Gsplat Renderer` and `GsplatSequenceRenderer` support two render styles:
+
+- `Gaussian` (default): standard elliptical Gaussian splats.
+- `ParticleDots`: screen-space solid discs ("particle dots") with a soft edge.
+
+Dot size is controlled by `ParticleDotRadiusPixels` (radius in screen pixels).
+
+You can switch styles via API. The default transition is an animated shader morph using `easeInOutQuart` over `1.5s`:
+
+```csharp
+var r = GetComponent<GsplatRenderer>();
+r.SetRenderStyle(GsplatRenderStyle.ParticleDots); // animated, 1.5s easeInOutQuart
+r.SetParticleDotRadiusPixels(6.0f);
+
+r.SetRenderStyle(GsplatRenderStyle.Gaussian, animated: false); // hard switch
+r.SetRenderStyle(GsplatRenderStyle.Gaussian, animated: true, durationSeconds: 0.3f); // custom duration
+```
+
 ### 4DGS motion model and visibility
 
 When a `Gsplat Asset` contains 4D fields (`Velocities/Times/Durations`), splat centers are evaluated at time `t`:

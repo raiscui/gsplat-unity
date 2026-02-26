@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `ShowGlowSparkleStrength` to modulate the show ring glow with curl-noise sparkle/twinkle ("embers" flicker).
 - Added burn-ring visibility animation particle-size tuning: `ShowSplatMinScale`, `ShowRingSplatMinScale`, `ShowTrailSplatMinScale`, and `HideSplatMinScale` (separates "spatial ring width" from "splat size", and reduces the "tiny dots" look on the burn front).
 - Tuned hide splat size shrink to follow a faster-then-slower (easeOutCirc-like) curve, keeping a non-zero minimum size to avoid "disappearing too fast" during the burn tail.
+- Added `GsplatRenderStyle` (`Gaussian` / `ParticleDots`) and `SetRenderStyle(...)` API for `GsplatRenderer` and `GsplatSequenceRenderer` to switch between standard Gaussian splats and screen-space particle dots (solid discs with a soft edge), with a default animated morph transition (`easeInOutQuart`, `1.5s`) and adjustable `ParticleDotRadiusPixels` (radius in screen pixels).
 
 ### Changed
 

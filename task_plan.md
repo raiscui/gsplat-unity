@@ -521,3 +521,46 @@
   - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_hide_trail_inside_ring_warp_clamp_2026-02-26_0029.xml`
   - 汇总: total=28, passed=26, failed=0, skipped=2
+
+### 2026-02-26 11:48:36 +0800
+- 用户需求: 增加一种新的显示效果,并且可以通过 API 在“高斯基元常规显示效果”和“粒子圆片/圆点显示”之间切换.
+  - 新效果: 类似粒子的圆片/圆点,大小可调.
+  - 切换要求: 有动画效果,默认 `easeInOutQuart`,时长 1.5 秒.
+- 本轮选择(已确认):
+  - 大小语义: 屏幕像素半径(px radius).
+  - 点外观: 实心 + 柔边(soft edge).
+  - 切换动画: 形态渐变(morph),尽量保持单次 draw(避免双绘制 crossfade 带来的性能与叠加差异).
+- 注意(文件上下文维护):
+  - `WORKLOG.md` 已超过 1000 行,需要先按规则续档(加日期重命名 + 新建空白 WORKLOG),并执行一次 continuous-learning 总结,避免后续记录继续膨胀.
+- 本轮计划:
+  - [x] 续档 `WORKLOG.md`(超过 1000 行),并做 continuous-learning 复盘沉淀.
+  - [x] Runtime: 新增 `GsplatRenderStyle(Gaussian/ParticleDots)` 与 API `SetRenderStyle(...)`,支持 1.5s easeInOutQuart 动画切换.
+  - [x] Runtime: 新增 dot 参数 `ParticleDotRadiusPixels`,并通过 MPB 下发 `_RenderStyleBlend/_ParticleDotRadiusPixels`.
+  - [x] Shader: `Gsplat.shader` 增加 dots 渲染与 morph 逻辑,`blend=0` 时保持旧行为不变.
+  - [x] Tests: 增加 easing 单测,增加 render style 动画状态机单测(反射推进,避免依赖 Editor PlayerLoop).
+  - [x] Docs: 更新 `README.md` 与 `CHANGELOG.md`.
+  - [x] 四文件: `notes.md` 记录关键决策与实现要点,`WORKLOG.md` 记录最终结果,`LATER_PLANS.md` 如有二期项再追加.
+
+### 2026-02-26 12:26:00 +0800
+- 已完成: RenderStyle(ParticleDots) 与动画切换.
+- 回归(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - total=30, passed=28, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_2026-02-26_noquit.xml`
+
+### 2026-02-26 12:30:00 +0800
+- 用户反馈:
+  - Inspector 的 RenderStyle 下拉切换没有看到动画.
+  - 期望: 在面板上提供按钮,可以触发“动画切换”.
+- 说明(根因):
+  - 下拉框修改的是序列化字段,会触发 OnValidate 做“参数同步”,默认是硬切,不会走 `SetRenderStyle(..., animated:true)` 的动画状态机.
+- 本轮计划:
+  - [x] Editor: `GsplatRenderer` Inspector 增加两个按钮(`Gaussian(动画)` / `ParticleDots(动画)`),通过 `SetRenderStyle(..., animated:true)` 触发切换动画.
+  - [x] Editor: `GsplatSequenceRenderer` Inspector 同步增加两个按钮.
+  - [x] Editor: 在按钮型 API 调用前先 `ApplyModifiedProperties`,避免按钮读取到旧的 duration/参数导致“改了但没生效”的错觉.
+  - [x] 回归: 跑 Unity EditMode tests 确保无编译错误与回归.
+
+- 回归(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - total=30, passed=28, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_inspector_buttons_2026-02-26.xml`

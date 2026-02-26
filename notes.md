@@ -754,3 +754,100 @@
 - Unity 6000.3.8f1 EditMode tests:
   - total=28, passed=26, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_hide_trail_inside_ring_warp_clamp_2026-02-26_0029.xml`
+
+---
+
+## 2026-02-26 11:48:36 +0800: continuous-learning(因 WORKLOG 超 1000 行续档)
+
+## 四文件摘要(用于决定是否提取 skill)
+- 任务目标(task_plan.md):
+  - 增加新的显示效果: 粒子圆片/圆点(Particle Dots),并支持 API 与高斯常规显示效果切换,切换有动画(默认 easeInOutQuart,1.5 秒).
+- 关键决定(task_plan.md):
+  - 大小语义选择为屏幕像素半径(px radius).
+  - 点外观选择为实心 + 柔边(soft edge).
+  - 切换动画选择为形态渐变(morph),并尽量保持单次 draw(避免双绘制 crossfade).
+  - 在开始实现前,先对超过 1000 行的 `WORKLOG.md` 进行续档,避免上下文文件无限膨胀.
+- 关键发现(notes.md):
+  - 本轮暂无新的外部调研结论,主要是基于现有渲染架构做可控扩展.
+- 实际变更(WORKLOG_2026-02-26_114836.md):
+  - 上一阶段的 WORKLOG 主要记录了 burn reveal(显隐燃烧环)的一系列调参与稳态修复,以及 Unity `-runTests` CLI 的参数顺序小坑.
+  - 这些内容已在项目 `AGENTS.md` 中沉淀为可执行的测试注意事项,无需重复提取.
+- 错误与根因(ERRORFIX.md):
+  - 本轮不是 error fix,不新增 ERRORFIX 记录.
+- 可复用点候选(1-3 条):
+  1. 对于“显示风格切换”类需求,优先选单次 draw 的 shader morph,把性能与排序一致性风险压到最低.
+  2. EditMode 下要保证动画连续,就必须有 EditorApplication.update ticker 兜底,否则很容易因为 repaint 信号不足而“只动一帧”.
+- 是否需要固化到 docs/specs: 否(本轮属于新增功能实现,按 README/CHANGELOG 记录即可).
+- 是否提取/更新 skill: 否(当前决策与实现方式更偏项目内部扩展,且已有类似动画/ticker 模式,暂不新增 skill).
+
+---
+
+## 2026-02-26 12:26:00 +0800: RenderStyle(ParticleDots) 实现记录
+
+### 需求
+- 增加一种新的显示效果.
+- 显示成类似粒子的圆片/圆点.
+- 大小可调.
+- 通过 API 在 ParticleDots 和常规 Gaussian 之间切换.
+- 切换要有动画效果.
+- 默认曲线 `easeInOutQuart`,默认时长 1.5 秒.
+
+### 关键决定
+- 点大小语义: 屏幕像素半径(px radius).
+  - 理由: 更符合“粒子/点云调试视图”的直觉,并且不依赖距离与 FOV.
+- 形态过渡: 单次 draw 的 shader morph.
+  - 理由: 避免双 draw crossfade 带来的叠加差异与性能风险,并让排序一致性更稳.
+- 点外观: 实心 + 柔边(soft edge).
+  - 说明: 柔边宽度暂用 shader 常量,保持 API 简洁. 如后续需要再外露参数.
+
+### 实现要点(摘要)
+- Runtime:
+  - 新增 `GsplatRenderStyle(Gaussian/ParticleDots)`.
+  - `GsplatRenderer/GsplatSequenceRenderer` 增加:
+    - 字段: `RenderStyle`,`ParticleDotRadiusPixels`,`RenderStyleSwitchDurationSeconds(默认 1.5)`.
+    - API: `SetRenderStyle(...)`,`SetParticleDotRadiusPixels(...)`.
+    - 状态机: `m_renderStyleBlend01` + `AdvanceRenderStyleStateIfNeeded()`(使用 `GsplatUtils.EaseInOutQuart`).
+  - `GsplatRendererImpl` 新增 uniforms 下发:
+    - `_RenderStyleBlend`
+    - `_ParticleDotRadiusPixels`
+- Shader(`Gsplat.shader`):
+  - vertex:
+    - Gaussian corner: 走原 `InitCorner`(保留 `<2px` early-out 和 frustum cull).
+    - Dot corner: 屏幕空间圆盘半径(px),不做 `<2px` early-out.
+    - 过渡期兜底: 某一侧 corner 不可用时用另一侧兜底,避免切换期间突然消失.
+  - fragment:
+    - Gaussian alpha: `exp(-A*4)*alpha`.
+    - Dot alpha: 实心 + `smoothstep` 柔边.
+    - 最终 alpha 按 `_RenderStyleBlend` 做 lerp.
+
+### 回归(证据)
+- Unity 6000.3.8f1,EditMode tests:
+  - 命令:
+    - `Unity -batchmode -nographics -projectPath ... -runTests -testPlatform EditMode -testFilter Gsplat.Tests -testResults ... -logFile ...`
+  - 结果:
+    - total=30, passed=28, failed=0, skipped=2
+  - XML:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_2026-02-26_noquit.xml`
+
+---
+
+## 2026-02-26 12:52:00 +0800: Inspector 上的 RenderStyle 动画切换按钮
+
+### 现象
+- 在 Inspector 里用 RenderStyle 下拉切换,看不到动画.
+
+### 根因
+- 下拉框修改的是序列化字段,只会触发 OnValidate 做参数同步.
+- 动画切换只在 `SetRenderStyle(..., animated:true)` 的状态机里发生.
+
+### 落地
+- `Editor/GsplatRendererEditor.cs` 与 `Editor/GsplatSequenceRendererEditor.cs` 增加两个按钮:
+  - `Gaussian(动画)`
+  - `ParticleDots(动画)`
+- 为了避免按钮读取到旧参数:
+  - 在触发按钮型 API 前先 `serializedObject.ApplyModifiedProperties()`.
+
+### 回归(证据)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=30, passed=28, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_inspector_buttons_2026-02-26.xml`

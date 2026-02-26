@@ -68,6 +68,14 @@ namespace Gsplat
         static readonly int k_temporalCutoff = Shader.PropertyToID("_TemporalCutoff");
 
         // ----------------------------------------------------------------
+        // Render style: Gaussian <-> ParticleDots
+        // - 通过 `_RenderStyleBlend` 做单次 draw 的 shader morph.
+        // - `_ParticleDotRadiusPixels` 仅在 ParticleDots 或过渡期生效.
+        // ----------------------------------------------------------------
+        static readonly int k_renderStyleBlend = Shader.PropertyToID("_RenderStyleBlend");
+        static readonly int k_particleDotRadiusPixels = Shader.PropertyToID("_ParticleDotRadiusPixels");
+
+        // ----------------------------------------------------------------
         // 可选: 显隐燃烧环动画 uniforms
         // - 注意: 这些字段全部是可选的,默认 mode=0 表示完全禁用,不改变旧行为.
         // - 为了避免 shader 侧出现未初始化值导致的“偶发闪一下”,我们选择每帧都显式写入.
@@ -256,6 +264,28 @@ namespace Gsplat
         {
             // 统一收敛到同一条绑定路径,避免“某个 buffer 忘记绑定”导致 Metal 跳绘制.
             BindBuffersToPropertyBlock();
+        }
+
+        // ----------------------------------------------------------------
+        // Render style uniforms:
+        // - 该方法只负责写入 MPB(uniform),不参与排序与资源管理.
+        // - 由上层组件负责:
+        //   1) 选择 RenderStyle(Gaussian/ParticleDots)
+        //   2) 动画曲线与时长(easeInOutQuart,1.5s)
+        // ----------------------------------------------------------------
+        public void SetRenderStyleUniforms(float blend01, float dotRadiusPixels)
+        {
+            m_propertyBlock ??= new MaterialPropertyBlock();
+
+            if (float.IsNaN(blend01) || float.IsInfinity(blend01))
+                blend01 = 0.0f;
+            blend01 = Mathf.Clamp01(blend01);
+
+            if (float.IsNaN(dotRadiusPixels) || float.IsInfinity(dotRadiusPixels) || dotRadiusPixels < 0.0f)
+                dotRadiusPixels = 0.0f;
+
+            m_propertyBlock.SetFloat(k_renderStyleBlend, blend01);
+            m_propertyBlock.SetFloat(k_particleDotRadiusPixels, dotRadiusPixels);
         }
 
         // ----------------------------------------------------------------

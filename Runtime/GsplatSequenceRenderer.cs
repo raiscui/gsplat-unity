@@ -67,6 +67,31 @@ namespace Gsplat
         public bool Loop = true;
 
         // --------------------------------------------------------------------
+        // Render Style: Gaussian <-> Particle Dots
+        // - 目标: 提供一个“更像粒子/点云”的圆片/圆点显示效果,并支持与高斯常规显示效果动画切换.
+        // - 切换动画:
+        //   - easing 固定为 easeInOutQuart
+        //   - 默认时长 1.5 秒(可改)
+        // --------------------------------------------------------------------
+        [Header("Render Style (Gaussian / Particle Dots)")]
+        [Tooltip("渲染风格.\n" +
+                 "- Gaussian: 常规高斯基元(椭圆高斯核).\n" +
+                 "- ParticleDots: 粒子圆片/圆点(屏幕空间圆盘).")]
+        public GsplatRenderStyle RenderStyle = GsplatRenderStyle.Gaussian;
+
+        [Min(0.0f)]
+        [Tooltip("ParticleDots 的圆点半径(屏幕像素,px radius).\n" +
+                 "说明:\n" +
+                 "- 该参数只影响 ParticleDots 与切换过渡期.\n" +
+                 "- 0 表示点半径为 0,效果接近不可见(用于特殊需要).")]
+        public float ParticleDotRadiusPixels = 4.0f;
+
+        [Min(0.0f)]
+        [Tooltip("渲染风格切换的默认时长(秒).\n" +
+                 "当你通过 API `SetRenderStyle(..., durationSeconds:-1)` 调用时,会使用该默认值.")]
+        public float RenderStyleSwitchDurationSeconds = 1.5f;
+
+        // --------------------------------------------------------------------
         // 可选: 显隐燃烧环动画(show/hide)
         // - 默认关闭,不影响旧行为与性能.
         // - 序列后端的 decode 也会在 Hidden 状态被停掉,避免“不可见但仍在解码/排序”的浪费.
@@ -215,6 +240,20 @@ namespace Gsplat
         float m_visibilityProgress01 = 1.0f;
         float m_visibilityLastAdvanceRealtime = -1.0f;
 
+        // --------------------------------------------------------------------
+        // Render style 切换 runtime 状态(非序列化):
+        // - blend01=0: Gaussian
+        // - blend01=1: ParticleDots
+        // - 中间值: shader morph 过渡期(单次 draw).
+        // --------------------------------------------------------------------
+        float m_renderStyleBlend01;
+        bool m_renderStyleAnimating;
+        float m_renderStyleAnimProgress01;
+        float m_renderStyleAnimStartBlend01;
+        float m_renderStyleAnimTargetBlend01;
+        float m_renderStyleAnimDurationSeconds = 1.5f;
+        float m_renderStyleLastAdvanceRealtime = -1.0f;
+
 #if UNITY_EDITOR
         // --------------------------------------------------------------------
         // Editor 体验修复: 让 show/hide 动画在“鼠标不动”时也能连续播放.
@@ -239,6 +278,20 @@ namespace Gsplat
         static readonly List<GsplatSequenceRenderer> s_visibilityEditorTickersToRemove = new();
         static bool s_visibilityEditorUpdateHooked;
         static double s_visibilityEditorLastTickTime;
+
+        bool IsAnyAnimationActiveForEditorTicker()
+        {
+            if (EnableVisibilityAnimation &&
+                (m_visibilityState == VisibilityAnimState.Showing || m_visibilityState == VisibilityAnimState.Hiding))
+            {
+                return true;
+            }
+
+            if (m_renderStyleAnimating)
+                return true;
+
+            return false;
+        }
 
         static void EnsureVisibilityEditorUpdateHooked()
         {
@@ -287,20 +340,20 @@ namespace Gsplat
             s_visibilityEditorTickersToRemove.Clear();
             foreach (var r in s_visibilityEditorTickers)
             {
-                if (!r || !r.isActiveAndEnabled || !r.EnableVisibilityAnimation)
+                if (!r || !r.isActiveAndEnabled)
                 {
                     s_visibilityEditorTickersToRemove.Add(r);
                     continue;
                 }
 
-                if (r.m_visibilityState != VisibilityAnimState.Showing &&
-                    r.m_visibilityState != VisibilityAnimState.Hiding)
+                if (!r.IsAnyAnimationActiveForEditorTicker())
                 {
                     s_visibilityEditorTickersToRemove.Add(r);
                     continue;
                 }
 
                 r.AdvanceVisibilityStateIfNeeded();
+                r.AdvanceRenderStyleStateIfNeeded();
 
                 // 诊断(可选): 仅在 EnableEditorDiagnostics=true 时记录,并做额外节流.
                 if (GsplatEditorDiagnostics.Enabled)
@@ -310,13 +363,17 @@ namespace Gsplat
                         now - r.m_visibilityEditorLastDiagTickTime >= kDiagInterval)
                     {
                         r.m_visibilityEditorLastDiagTickTime = now;
-                        GsplatEditorDiagnostics.MarkVisibilityState(r, "ticker.tick",
-                            r.m_visibilityState.ToString(), r.m_visibilityProgress01);
+                        if (r.EnableVisibilityAnimation &&
+                            (r.m_visibilityState == VisibilityAnimState.Showing ||
+                             r.m_visibilityState == VisibilityAnimState.Hiding))
+                        {
+                            GsplatEditorDiagnostics.MarkVisibilityState(r, "ticker.tick",
+                                r.m_visibilityState.ToString(), r.m_visibilityProgress01);
+                        }
                     }
                 }
 
-                if (r.m_visibilityState != VisibilityAnimState.Showing &&
-                    r.m_visibilityState != VisibilityAnimState.Hiding)
+                if (!r.IsAnyAnimationActiveForEditorTicker())
                 {
                     s_visibilityEditorTickersToRemove.Add(r);
                 }
@@ -333,7 +390,7 @@ namespace Gsplat
             if (Application.isPlaying || Application.isBatchMode)
                 return;
 
-            if (m_visibilityState != VisibilityAnimState.Showing && m_visibilityState != VisibilityAnimState.Hiding)
+            if (!IsAnyAnimationActiveForEditorTicker())
                 return;
 
             EnsureVisibilityEditorUpdateHooked();
@@ -455,11 +512,13 @@ namespace Gsplat
                 return;
 
             AdvanceVisibilityStateIfNeeded();
+            AdvanceRenderStyleStateIfNeeded();
 
             if (!Valid || m_renderer == null || !m_renderer.Valid || !SequenceAsset)
                 return;
 
             PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
+            PushRenderStyleUniformsForThisFrame();
 
             var boundsForRender = CalcVisibilityExpandedRenderBounds(SequenceAsset.UnionBounds);
             m_renderer.RenderForCamera(camera, SplatCount, transform, boundsForRender, gameObject.layer,
@@ -476,6 +535,68 @@ namespace Gsplat
         public GraphicsBuffer SHBuffer => m_renderer != null ? m_renderer.SHBuffer : null;
         public GraphicsBuffer OrderBuffer => m_renderer != null ? m_renderer.OrderBuffer : null;
         public byte EffectiveSHBands => m_renderer != null ? m_renderer.SHBands : (byte)0;
+
+        // --------------------------------------------------------------------
+        // Public API: Render style 切换(Gaussian <-> ParticleDots)
+        // --------------------------------------------------------------------
+        public void SetRenderStyle(GsplatRenderStyle style, bool animated = true, float durationSeconds = -1.0f)
+        {
+            RenderStyle = style;
+
+            var target = style == GsplatRenderStyle.ParticleDots ? 1.0f : 0.0f;
+
+            var d = durationSeconds;
+            if (d < 0.0f)
+                d = RenderStyleSwitchDurationSeconds;
+            if (float.IsNaN(d) || float.IsInfinity(d) || d < 0.0f)
+                d = 0.0f;
+
+            if (!animated || d <= 0.0f)
+            {
+                m_renderStyleBlend01 = target;
+                m_renderStyleAnimating = false;
+                m_renderStyleAnimProgress01 = 1.0f;
+                m_renderStyleAnimStartBlend01 = target;
+                m_renderStyleAnimTargetBlend01 = target;
+                m_renderStyleLastAdvanceRealtime = -1.0f;
+
+                PushRenderStyleUniformsForThisFrame();
+
+#if UNITY_EDITOR
+                RequestEditorRepaintForVisibilityAnimation(force: true, reason: "RenderStyle.HardSet");
+#endif
+                return;
+            }
+
+            m_renderStyleAnimating = true;
+            m_renderStyleAnimProgress01 = 0.0f;
+            m_renderStyleAnimStartBlend01 = m_renderStyleBlend01;
+            m_renderStyleAnimTargetBlend01 = target;
+            m_renderStyleAnimDurationSeconds = d;
+            m_renderStyleLastAdvanceRealtime = -1.0f;
+
+#if UNITY_EDITOR
+            RequestEditorRepaintForVisibilityAnimation(force: true, reason: "RenderStyle.AnimStart");
+            RegisterVisibilityEditorTickerIfAnimating();
+#endif
+        }
+
+        public void SetParticleDotRadiusPixels(float radiusPixels)
+        {
+            if (float.IsNaN(radiusPixels) || float.IsInfinity(radiusPixels) || radiusPixels < 0.0f)
+                radiusPixels = 0.0f;
+
+            ParticleDotRadiusPixels = radiusPixels;
+            PushRenderStyleUniformsForThisFrame();
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
+                UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+            }
+#endif
+        }
 
         // --------------------------------------------------------------------
         // Public API: show/hide 显隐控制
@@ -565,6 +686,24 @@ namespace Gsplat
 #endif
         }
 
+        void InitRenderStyleOnEnable()
+        {
+            m_renderStyleAnimating = false;
+            m_renderStyleAnimProgress01 = 1.0f;
+            m_renderStyleAnimStartBlend01 = 0.0f;
+            m_renderStyleAnimTargetBlend01 = RenderStyle == GsplatRenderStyle.ParticleDots ? 1.0f : 0.0f;
+            m_renderStyleBlend01 = m_renderStyleAnimTargetBlend01;
+
+            m_renderStyleAnimDurationSeconds = RenderStyleSwitchDurationSeconds;
+            if (float.IsNaN(m_renderStyleAnimDurationSeconds) || float.IsInfinity(m_renderStyleAnimDurationSeconds) ||
+                m_renderStyleAnimDurationSeconds < 0.0f)
+            {
+                m_renderStyleAnimDurationSeconds = 1.5f;
+            }
+
+            m_renderStyleLastAdvanceRealtime = -1.0f;
+        }
+
         void AdvanceVisibilityStateIfNeeded()
         {
             if (!EnableVisibilityAnimation)
@@ -627,6 +766,72 @@ namespace Gsplat
                 RequestEditorRepaintForVisibilityAnimation(force: true, reason: "Advance.Finish");
             }
 #endif
+        }
+
+        void AdvanceRenderStyleStateIfNeeded()
+        {
+            if (!m_renderStyleAnimating)
+                return;
+
+            var now = Time.realtimeSinceStartup;
+            var dt = 0.0f;
+            if (m_renderStyleLastAdvanceRealtime >= 0.0f)
+                dt = Mathf.Max(0.0f, now - m_renderStyleLastAdvanceRealtime);
+            m_renderStyleLastAdvanceRealtime = now;
+
+            if (float.IsNaN(dt) || float.IsInfinity(dt) || dt < 0.0f)
+                dt = 0.0f;
+
+            var d = m_renderStyleAnimDurationSeconds;
+            if (float.IsNaN(d) || float.IsInfinity(d) || d <= 0.0f)
+                d = 0.0f;
+
+            if (d <= 0.0f)
+            {
+                m_renderStyleBlend01 = m_renderStyleAnimTargetBlend01;
+                m_renderStyleAnimating = false;
+                m_renderStyleAnimProgress01 = 1.0f;
+            }
+            else
+            {
+                m_renderStyleAnimProgress01 = Mathf.Clamp01(m_renderStyleAnimProgress01 + dt / d);
+                var eased = GsplatUtils.EaseInOutQuart(m_renderStyleAnimProgress01);
+                m_renderStyleBlend01 = Mathf.Lerp(m_renderStyleAnimStartBlend01, m_renderStyleAnimTargetBlend01, eased);
+
+                if (m_renderStyleAnimProgress01 >= 1.0f)
+                {
+                    m_renderStyleBlend01 = m_renderStyleAnimTargetBlend01;
+                    m_renderStyleAnimating = false;
+                }
+            }
+
+#if UNITY_EDITOR
+            if (m_renderStyleAnimating)
+            {
+                RequestEditorRepaintForVisibilityAnimation(force: false, reason: "RenderStyle.Advance");
+            }
+            else
+            {
+                RequestEditorRepaintForVisibilityAnimation(force: true, reason: "RenderStyle.Advance.Finish");
+            }
+#endif
+        }
+
+        void PushRenderStyleUniformsForThisFrame()
+        {
+            if (m_renderer == null)
+                return;
+
+            var dotRadius = ParticleDotRadiusPixels;
+            if (float.IsNaN(dotRadius) || float.IsInfinity(dotRadius) || dotRadius < 0.0f)
+                dotRadius = 0.0f;
+
+            var blend = m_renderStyleBlend01;
+            if (float.IsNaN(blend) || float.IsInfinity(blend))
+                blend = 0.0f;
+            blend = Mathf.Clamp01(blend);
+
+            m_renderer.SetRenderStyleUniforms(blend, dotRadius);
         }
 
         void PushVisibilityUniformsForThisFrame(Bounds localBounds)
@@ -795,7 +1000,9 @@ namespace Gsplat
                 return;
 
             InitVisibilityOnEnable();
+            InitRenderStyleOnEnable();
             PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
+            PushRenderStyleUniformsForThisFrame();
         }
 
         void OnDisable()
@@ -831,6 +1038,20 @@ namespace Gsplat
 
             m_timeNormalizedThisFrame = t;
 
+            // Render style(编辑态参数同步):
+            var dotRadius = ParticleDotRadiusPixels;
+            if (float.IsNaN(dotRadius) || float.IsInfinity(dotRadius) || dotRadius < 0.0f)
+                ParticleDotRadiusPixels = 0.0f;
+
+            var dur = RenderStyleSwitchDurationSeconds;
+            if (float.IsNaN(dur) || float.IsInfinity(dur) || dur < 0.0f)
+                RenderStyleSwitchDurationSeconds = 1.5f;
+
+            if (!m_renderStyleAnimating)
+                m_renderStyleBlend01 = RenderStyle == GsplatRenderStyle.ParticleDots ? 1.0f : 0.0f;
+
+            PushRenderStyleUniformsForThisFrame();
+
             UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
             // RepaintAllViews 会同时刷新 SceneView/GameView,避免“拖动 Inspector 滑条时 GameView 不更新”的错觉.
             UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
@@ -840,6 +1061,7 @@ namespace Gsplat
         void Update()
         {
             AdvanceVisibilityStateIfNeeded();
+            AdvanceRenderStyleStateIfNeeded();
 
             // ----------------------------------------------------------------
             // 稳态恢复: 与 GsplatRenderer 一致,在 Editor/Metal 下 buffer 可能会失效.
@@ -923,6 +1145,7 @@ namespace Gsplat
 #endif
             {
                 PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
+                PushRenderStyleUniformsForThisFrame();
 
                 var boundsForRender = CalcVisibilityExpandedRenderBounds(SequenceAsset.UnionBounds);
                 m_renderer.Render(SplatCount, transform, boundsForRender, gameObject.layer,

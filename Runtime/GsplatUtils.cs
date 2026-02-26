@@ -6,6 +6,17 @@ using UnityEngine;
 
 namespace Gsplat
 {
+    /// <summary>
+    /// Gsplat 的显示风格.
+    /// - Gaussian: 常规高斯基元渲染(椭圆高斯核).
+    /// - ParticleDots: 粒子圆片/圆点(屏幕空间圆盘).
+    /// </summary>
+    public enum GsplatRenderStyle
+    {
+        Gaussian = 0,
+        ParticleDots = 1
+    }
+
     public static class GsplatUtils
     {
         public const string k_PackagePath = "Packages/wu.yize.gsplat/";
@@ -13,6 +24,34 @@ namespace Gsplat
         public static float Sigmoid(float x)
         {
             return 1.0f / (1.0f + Mathf.Exp(-x));
+        }
+
+        // --------------------------------------------------------------------
+        // Easing: easeInOutQuart
+        // - 用于显示风格切换(Gaussian <-> ParticleDots)的默认动画曲线.
+        // - 说明: 与 shader 侧的实现一致,避免 pow(),只用乘法,减少平台差异.
+        // - 标准定义:
+        //   t < 0.5:  8*t^4
+        //   t >= 0.5: 1 - ((-2*t + 2)^4)/2
+        // --------------------------------------------------------------------
+        public static float EaseInOutQuart(float t)
+        {
+            if (float.IsNaN(t) || float.IsInfinity(t))
+                t = 0.0f;
+
+            t = Mathf.Clamp01(t);
+
+            if (t < 0.5f)
+            {
+                var t2 = t * t;
+                var t4 = t2 * t2;
+                return 8.0f * t4;
+            }
+
+            var a = -2.0f * t + 2.0f;
+            var a2 = a * a;
+            var a4 = a2 * a2;
+            return 1.0f - 0.5f * a4;
         }
 
         public const int k_PlyPropertyCountNoSH = 17;

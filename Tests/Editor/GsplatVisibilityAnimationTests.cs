@@ -14,6 +14,15 @@ namespace Gsplat.Tests
         static readonly MethodInfo s_advanceVisibilityStateIfNeeded =
             typeof(GsplatRenderer).GetMethod("AdvanceVisibilityStateIfNeeded", BindingFlags.Instance | BindingFlags.NonPublic);
 
+        static readonly MethodInfo s_advanceRenderStyleStateIfNeeded =
+            typeof(GsplatRenderer).GetMethod("AdvanceRenderStyleStateIfNeeded", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_renderStyleBlend01Field =
+            typeof(GsplatRenderer).GetField("m_renderStyleBlend01", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_renderStyleAnimatingField =
+            typeof(GsplatRenderer).GetField("m_renderStyleAnimating", BindingFlags.Instance | BindingFlags.NonPublic);
+
         static void AdvanceVisibilityState(GsplatRenderer renderer)
         {
             // 说明:
@@ -22,6 +31,28 @@ namespace Gsplat.Tests
             // - 因此这里用反射显式推进一次状态机,让测试不依赖 Editor PlayerLoop 行为细节.
             Assert.IsNotNull(s_advanceVisibilityStateIfNeeded, "Expected GsplatRenderer.AdvanceVisibilityStateIfNeeded to exist.");
             s_advanceVisibilityStateIfNeeded.Invoke(renderer, null);
+        }
+
+        static void AdvanceRenderStyleState(GsplatRenderer renderer)
+        {
+            // 说明:
+            // - render style 的动画推进同样不应依赖 Editor PlayerLoop 的触发细节.
+            // - 这里用反射显式推进一次,让测试对 Unity 的窗口重绘/回调时序不敏感.
+            Assert.IsNotNull(s_advanceRenderStyleStateIfNeeded, "Expected GsplatRenderer.AdvanceRenderStyleStateIfNeeded to exist.");
+            s_advanceRenderStyleStateIfNeeded.Invoke(renderer, null);
+        }
+
+        static float GetRenderStyleBlend01(GsplatRenderer renderer)
+        {
+            // 说明: 该值是 shader morph 的核心 uniform,需要锁定其收敛到目标值的语义.
+            Assert.IsNotNull(s_renderStyleBlend01Field, "Expected private field 'm_renderStyleBlend01' to exist on GsplatRenderer.");
+            return (float)s_renderStyleBlend01Field.GetValue(renderer);
+        }
+
+        static bool GetRenderStyleAnimating(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_renderStyleAnimatingField, "Expected private field 'm_renderStyleAnimating' to exist on GsplatRenderer.");
+            return (bool)s_renderStyleAnimatingField.GetValue(renderer);
         }
 
         static GsplatAsset CreateMinimalAsset1Splat()
@@ -82,6 +113,50 @@ namespace Gsplat.Tests
 
             Object.DestroyImmediate(go);
             Object.DestroyImmediate(asset);
+        }
+
+        [UnityTest]
+        public IEnumerator SetRenderStyle_Animated_ReachesTargetBlend()
+        {
+            // 目的:
+            // - 验证 RenderStyle 从 Gaussian -> ParticleDots 的默认动画可以收敛到目标 blend=1.
+            // - 该测试不依赖真实渲染资源(不需要 GsplatAsset),避免在 -nographics 环境下受限.
+            var go = new GameObject("GsplatVisibilityAnimationTests_RenderStyle");
+            go.SetActive(false);
+            var r = go.AddComponent<GsplatRenderer>();
+
+            // 明确起点: hard set 到 Gaussian,确保 blend=0.
+            r.SetRenderStyle(GsplatRenderStyle.Gaussian, animated: false);
+
+            go.SetActive(true);
+            yield return null;
+
+            Assert.AreEqual(0.0f, GetRenderStyleBlend01(r), 1e-6f, "Precondition failed: expected Gaussian blend=0.");
+
+            // 触发动画切换,用很短的 duration 缩短测试时间.
+            r.SetRenderStyle(GsplatRenderStyle.ParticleDots, animated: true, durationSeconds: 0.05f);
+
+            var t0 = Time.realtimeSinceStartup;
+            var sawIntermediate = false;
+            while (Time.realtimeSinceStartup - t0 < 1.0f)
+            {
+                AdvanceRenderStyleState(r);
+
+                var blend = GetRenderStyleBlend01(r);
+                if (blend > 0.0f && blend < 1.0f)
+                    sawIntermediate = true;
+
+                if (!GetRenderStyleAnimating(r) && Mathf.Abs(blend - 1.0f) < 1e-3f)
+                    break;
+
+                yield return null;
+            }
+
+            Assert.IsTrue(sawIntermediate, "Expected render style blend to go through an intermediate value during animation.");
+            Assert.IsFalse(GetRenderStyleAnimating(r), "Expected render style animation to finish within the timeout.");
+            Assert.AreEqual(1.0f, GetRenderStyleBlend01(r), 1e-3f, "Expected render style blend to converge to ParticleDots target=1.");
+
+            Object.DestroyImmediate(go);
         }
 
         [UnityTest]
