@@ -54,3 +54,21 @@
   - total=30, passed=28, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_inspector_buttons_2026-02-26.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_renderstyle_inspector_buttons_2026-02-26.log`
+
+## 2026-02-26 13:33:00 +0800
+- 修复 RenderStyle(Gaussian <-> ParticleDots) 切换时的边缘 pop-in/out:
+  - 表现:
+    - Gaussian -> Dots 动画尾部,部分靠屏幕外缘的 splat 会突然消失.
+    - Dots -> Gaussian 动画头部,同一批 splat 会突然出现.
+  - 根因:
+    - shader 在 `styleBlend==1` 时跳过 Gaussian corner 计算.
+    - 当 dotCorner 因 frustum cull 不可用时,vertex 阶段会直接 discard,导致动画头尾 pop.
+  - 修复:
+    - `Runtime/Shaders/Gsplat.shader`: 先算 dotCorner,当 `styleBlend<1` 或 dotCorner 不可用时才算 Gaussian corner 作为兜底几何.
+    - fragment 增加 `uvDot`(屏幕像素半径归一化),并改为“两种核都不贡献才 discard”,从而让这些 splat 通过 alpha 平滑淡出/淡入,不再突然 pop.
+
+### 回归(证据)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=30, passed=28, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_popfix_2026-02-26.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_renderstyle_popfix_2026-02-26.log`

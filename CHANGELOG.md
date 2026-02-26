@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed very slow keyframe `.splat4d(window)` playback by sorting and rendering only the active time segment (sub-range sort/draw) when the asset matches the non-overlapping segment pattern.
 - Fixed burn-ring visibility animation (Show/Hide) in Editor Edit Mode appearing to "not play" unless the viewport repaints (e.g., mouse movement), by requesting Editor repaints while the animation is in progress.
 - Fixed the burn-ring hide animation sometimes leaving a few splats lingering near the end due to outward edge jitter, by making fade/shrink use a more stable edge distance (ring/glow still jitters).
+- Fixed RenderStyle switching (Gaussian <-> ParticleDots) popping for splats near the screen edge (those culled by the dot frustum cull at the transition endpoints): they now smoothly fade in/out instead of abruptly disappearing/appearing at the start/end of the animation.
 
 ## [1.1.4] - 2026-02-23
 

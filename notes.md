@@ -851,3 +851,38 @@
 - Unity 6000.3.8f1 EditMode tests:
   - total=30, passed=28, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_inspector_buttons_2026-02-26.xml`
+
+---
+
+## 2026-02-26 13:33:00 +0800: RenderStyle 切换边缘 pop-in/out 修复
+
+### 现象
+- Gaussian -> ParticleDots:
+  - 动画接近结束时,有一部分“远处/靠屏幕外缘”的 splat 会突然消失(没有动画).
+- ParticleDots -> Gaussian:
+  - 动画刚开始时,同一批 splat 会突然出现(没有动画).
+
+### 根因
+- shader 里对 Gaussian corner 的计算存在一个分支:
+  - `styleBlend==1` 时会完全跳过 `InitCorner(...)`.
+- 如果某个 splat 在 dot 视图下因为 dot 的 frustum cull(`rPx` 半径)被判定为不可见:
+  - `hasDotCorner=false`
+  - 且 `styleBlend==1` 时 `hasGaussCorner` 也不会被计算
+  - 于是两边 corner 都不可用,会在 vertex 阶段被直接 discard.
+- 这就造成了动画头尾的 pop:
+  - 过渡期(`styleBlend<1`)能渲染(因为有 Gaussian corner),
+  - 但最后一帧(`styleBlend==1`)突然被 discard.
+
+### 修复策略
+- `Gsplat.shader`:
+  1) 先计算 dotCorner.
+  2) 当 `styleBlend<1` 或 dotCorner 不可用时,才计算 Gaussian corner 作为过渡兜底几何.
+  3) fragment 同时计算两套核的 A 值:
+     - Gaussian A: 来自旧的 `uvGauss`(保持旧 morph 观感).
+     - Dot A: 新增 `uvDot`(屏幕像素半径归一化).
+  4) 只有当两种核都不可能贡献时才 discard,其余情况让 alpha 做 lerp 平滑淡出/淡入.
+
+### 回归(证据)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=30, passed=28, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_popfix_2026-02-26.xml`

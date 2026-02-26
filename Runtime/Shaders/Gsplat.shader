@@ -195,13 +195,21 @@ Shader "Gsplat/Standard"
                 return sqrt(saturate(1.0 - u * u));
             }
 
-            struct v2f
-            {
-                float2 uv : TEXCOORD0;
-                float4 vertex : SV_POSITION;
-                float4 color: COLOR;
-                UNITY_VERTEX_OUTPUT_STEREO
-            };
+	            struct v2f
+	            {
+	                // Gaussian kernel 的 uv(沿用旧逻辑: 随 RenderStyleBlend 做线性 morph).
+	                // - 这样可以最大程度保持现有“形态渐变”的观感.
+	                float2 uvGauss : TEXCOORD0;
+
+	                // ParticleDots 的 uv(屏幕空间像素半径归一化).
+	                // - 关键点: 该 uv 的计算基于“visibilitySizeMul 之前的 corner.offset”.
+	                //   这样当显隐动画缩放 corner.offset 时,圆点半径也会同步缩放,
+	                //   不会出现 “sizeMul<1 时圆点突然变成方块/被裁剪” 的问题.
+	                float2 uvDot : TEXCOORD1;
+	                float4 vertex : SV_POSITION;
+	                float4 color: COLOR;
+	                UNITY_VERTEX_OUTPUT_STEREO
+	            };
 
             v2f vert(appdata v)
             {
@@ -635,59 +643,67 @@ Shader "Gsplat/Standard"
                     return o;
                 }
 
-                // ------------------------------------------------------------
-                // Render style: Gaussian <-> ParticleDots
-                // - 目标: 保持单次 draw,通过 shader morph 实现两种显示风格的平滑切换.
-                // - 注意:
-                //   - `blend==0` 时必须保持旧行为(包括 InitCorner 的 early-out).
-                //   - dot 角点使用屏幕空间半径(px),更像粒子/点云调试视图.
-                // ------------------------------------------------------------
-                float styleBlend = saturate(_RenderStyleBlend);
+	                // ------------------------------------------------------------
+	                // Render style: Gaussian <-> ParticleDots
+	                // - 目标: 保持单次 draw,通过 shader morph 实现两种显示风格的平滑切换.
+	                // - 关键修复(避免“远处/屏幕外 splat 在切换头尾突然 pop-in/out”):
+	                //   - 之前在 styleBlend==1 时完全跳过 Gaussian corner 计算.
+	                //   - 当 dotCorner 因为 rPx frustum cull 失败时,两边 corner 都不可用,会被直接 discard.
+	                //   - 结果是:
+	                //     - Gaussian -> Dots: 动画末尾突然消失(没有动画).
+	                //     - Dots -> Gaussian: 动画开头突然出现(没有动画).
+	                //   - 现在的策略:
+	                //     - 先算 dotCorner.
+	                //     - 仅当需要(过渡期 styleBlend<1 或 dotCorner 不可用)时才算 gaussCorner,
+	                //       用它作为“过渡兜底几何”,让这些 splat 可以通过 alpha 平滑淡出/淡入,不再 pop.
+	                // ------------------------------------------------------------
+	                float styleBlend = saturate(_RenderStyleBlend);
+	                float rPx = max(_ParticleDotRadiusPixels, 0.0);
+	                float2 c = center.proj.ww / _ScreenParams.xy;
 
-                SplatCorner gaussCorner;
-                gaussCorner.offset = float2(0.0, 0.0);
-                gaussCorner.uv = float2(0.0, 0.0);
-                bool hasGaussCorner = false;
+	                SplatCorner dotCorner;
+	                dotCorner.offset = float2(0.0, 0.0);
+	                dotCorner.uv = float2(0.0, 0.0);
+	                bool hasDotCorner = false;
 
-                if (styleBlend < 1.0)
-                {
-                    SplatCovariance cov = ReadCovariance(source);
-                    hasGaussCorner = InitCorner(source, cov, center, gaussCorner);
+	                if (styleBlend > 0.0)
+	                {
+	                    // 简单 frustum cull(x/y):
+	                    // - rPx 直接作为“最大像素偏移”.
+	                    // - dot 即使很小也应允许渲染(不做 <2px early-out).
+	                    if (!any(abs(center.proj.xy) - float2(rPx, rPx) * c > center.proj.ww))
+	                    {
+	                        dotCorner.offset = source.cornerUV * rPx * c;
+	                        dotCorner.uv = source.cornerUV;
+	                        hasDotCorner = true;
+	                    }
+	                }
 
-                    // 旧行为锁定:
-                    // - 当 styleBlend==0 时,InitCorner 失败应直接丢弃(保持历史优化: <2px early-out,frustum cull).
-                    if (!hasGaussCorner && styleBlend <= 0.0)
-                    {
-                        o.vertex = discardVec;
-                        return o;
-                    }
-                }
+	                SplatCorner gaussCorner;
+	                gaussCorner.offset = float2(0.0, 0.0);
+	                gaussCorner.uv = float2(0.0, 0.0);
+	                bool hasGaussCorner = false;
 
-                SplatCorner dotCorner;
-                dotCorner.offset = float2(0.0, 0.0);
-                dotCorner.uv = float2(0.0, 0.0);
-                bool hasDotCorner = false;
+	                // 需要 Gaussian corner 的情况:
+	                // 1) styleBlend<1: 处于过渡期,需要旧几何/旧裁剪语义.
+	                // 2) dotCorner 不可用: 需要 Gaussian 作为兜底,避免 styleBlend==1 时直接 discard pop.
+	                if (styleBlend < 1.0 || !hasDotCorner)
+	                {
+	                    SplatCovariance cov = ReadCovariance(source);
+	                    hasGaussCorner = InitCorner(source, cov, center, gaussCorner);
 
-                if (styleBlend > 0.0)
-                {
-                    // dot 的屏幕空间半径(px).
-                    float rPx = max(_ParticleDotRadiusPixels, 0.0);
-                    float2 c = center.proj.ww / _ScreenParams.xy;
+	                    // 旧行为锁定:
+	                    // - 当 styleBlend==0 时,InitCorner 失败应直接丢弃(保持历史优化: <2px early-out,frustum cull).
+	                    if (!hasGaussCorner && styleBlend <= 0.0)
+	                    {
+	                        o.vertex = discardVec;
+	                        return o;
+	                    }
+	                }
 
-                    // 简单 frustum cull(x/y):
-                    // - rPx 直接作为“最大像素偏移”.
-                    // - dot 即使很小也应允许渲染(不做 <2px early-out).
-                    if (!any(abs(center.proj.xy) - float2(rPx, rPx) * c > center.proj.ww))
-                    {
-                        dotCorner.offset = source.cornerUV * rPx * c;
-                        dotCorner.uv = source.cornerUV;
-                        hasDotCorner = true;
-                    }
-                }
-
-                // 过渡期兜底:
-                // - 当某一侧 corner 不可用时,用另一侧兜底,避免切换期间“突然整点消失”.
-                if (!hasGaussCorner && !hasDotCorner)
+	                // 过渡期兜底:
+	                // - 当某一侧 corner 不可用时,用另一侧兜底,避免切换期间“突然整点消失”.
+	                if (!hasGaussCorner && !hasDotCorner)
                 {
                     o.vertex = discardVec;
                     return o;
@@ -726,23 +742,29 @@ Shader "Gsplat/Standard"
                 // ClipCorner:
                 // - 仅对 Gaussian corner 执行(保持旧的 kernel 裁剪优化与数学稳定性).
                 // - dot 不做 ClipCorner,避免 dot 半径被 baseAlpha 影响,保证“像粒子一样”的直觉控制.
-                if (hasGaussCorner && styleBlend < 1.0)
-                {
-                    // ClipCorner 的数学域要求 alpha >= 1/255,否则会出现 NaN.
-                    // 当 alpha 很小时,最终也会在 fragment 阶段被 discard,因此这里对 ClipCorner 的 alpha 做一个下限 clamp.
-                    ClipCorner(gaussCorner, max(baseAlpha, 1.0 / 255.0));
-                }
+	                if (hasGaussCorner && styleBlend < 1.0)
+	                {
+	                    // ClipCorner 的数学域要求 alpha >= 1/255,否则会出现 NaN.
+	                    // 当 alpha 很小时,最终也会在 fragment 阶段被 discard,因此这里对 ClipCorner 的 alpha 做一个下限 clamp.
+	                    ClipCorner(gaussCorner, max(baseAlpha, 1.0 / 255.0));
+	                }
 
-                // corner morph:
-                // - offset/uv 都做线性插值,再由 fragment 阶段决定核形态与 alpha.
-                SplatCorner corner;
-                corner.offset = lerp(gaussCorner.offset, dotCorner.offset, styleBlend);
-                corner.uv = lerp(gaussCorner.uv, dotCorner.uv, styleBlend);
+	                // corner morph:
+	                // - offset/uv 都做线性插值,再由 fragment 阶段决定核形态与 alpha.
+	                SplatCorner corner;
+	                corner.offset = lerp(gaussCorner.offset, dotCorner.offset, styleBlend);
+	                corner.uv = lerp(gaussCorner.uv, dotCorner.uv, styleBlend);
 
-                // 显隐动画大小变化:
-                // - 在 ClipCorner 之后缩放 corner.offset,让几何真正变小/变大.
-                // - ClipCorner 仍只看 baseAlpha,避免 alphaMask 影响几何尺寸导致 flicker.
-                corner.offset *= visibilitySizeMul;
+	                // ParticleDots uv:
+	                // - 计算基于 visibilitySizeMul 之前的 corner.offset,保证 sizeMul 缩放不会破坏圆点形态.
+	                // - rPx==0 时,uvDot 会非常大,从而让 alphaDot 自然为 0(不可见).
+	                float rPxSafe = max(rPx, 1e-5);
+	                float2 uvDot = corner.offset / (rPxSafe * c);
+
+	                // 显隐动画大小变化:
+	                // - 在 ClipCorner 之后缩放 corner.offset,让几何真正变小/变大.
+	                // - ClipCorner 仍只看 baseAlpha,避免 alphaMask 影响几何尺寸导致 flicker.
+	                corner.offset *= visibilitySizeMul;
 
                 float finalAlpha = baseAlpha;
                 if (_VisibilityMode != 0)
@@ -750,33 +772,44 @@ Shader "Gsplat/Standard"
                     finalAlpha = baseAlpha * visibilityAlphaMask;
                 }
 
-                o.vertex = center.proj + float4(corner.offset.x, _ProjectionParams.x * corner.offset.y, 0, 0);
-                o.color = float4(max(color.rgb, float3(0, 0, 0)), finalAlpha);
-                o.uv = corner.uv;
-                return o;
-            }
+	                o.vertex = center.proj + float4(corner.offset.x, _ProjectionParams.x * corner.offset.y, 0, 0);
+	                o.color = float4(max(color.rgb, float3(0, 0, 0)), finalAlpha);
+	                o.uvGauss = corner.uv;
+	                o.uvDot = uvDot;
+	                return o;
+	            }
 
-            float4 frag(v2f i) : SV_Target
-            {
-                float A = dot(i.uv, i.uv);
-                if (A > 1.0) discard;
-                float styleBlend = saturate(_RenderStyleBlend);
+	            float4 frag(v2f i) : SV_Target
+	            {
+	                float styleBlend = saturate(_RenderStyleBlend);
 
-                // Gaussian: 旧核形态.
-                float alphaGauss = exp(-A * 4.0) * i.color.a;
+	                float A_gauss = dot(i.uvGauss, i.uvGauss);
+	                float A_dot = dot(i.uvDot, i.uvDot);
 
-                // ParticleDots: 实心 + 柔边(soft edge).
-                // - kDotFeather 越大,柔边越宽.
-                // - 这里先用常量,保持 API 简洁; 如后续需要再外露成参数.
-                const float kDotFeather = 0.15;
-                float inner = 1.0 - kDotFeather;
-                float inner2 = inner * inner;
-                float alphaDot = (1.0 - smoothstep(inner2, 1.0, A)) * i.color.a;
+	                // 两种核都不可能贡献时才丢弃:
+	                // - 这能保证切换期间不会因为某一种核的裁剪而 pop-in/out.
+	                // - 也能在 styleBlend==0/1 时保持足够接近原先的 discard 行为(只是多做了一点点片元工作).
+	                if (A_gauss > 1.0 && A_dot > 1.0) discard;
 
-                float alpha = lerp(alphaGauss, alphaDot, styleBlend);
-                if (alpha < 1.0 / 255.0) discard;
-                if (_GammaToLinear)
-                    return float4(GammaToLinearSpace(i.color.rgb) * alpha, alpha);
+	                // Gaussian: 旧核形态.
+	                float alphaGauss = 0.0;
+	                if (A_gauss <= 1.0)
+	                    alphaGauss = exp(-A_gauss * 4.0) * i.color.a;
+
+	                // ParticleDots: 实心 + 柔边(soft edge).
+	                // - kDotFeather 越大,柔边越宽.
+	                // - 这里先用常量,保持 API 简洁; 如后续需要再外露成参数.
+	                const float kDotFeather = 0.15;
+	                float inner = 1.0 - kDotFeather;
+	                float inner2 = inner * inner;
+	                float alphaDot = 0.0;
+	                if (A_dot <= 1.0)
+	                    alphaDot = (1.0 - smoothstep(inner2, 1.0, A_dot)) * i.color.a;
+
+	                float alpha = lerp(alphaGauss, alphaDot, styleBlend);
+	                if (alpha < 1.0 / 255.0) discard;
+	                if (_GammaToLinear)
+	                    return float4(GammaToLinearSpace(i.color.rgb) * alpha, alpha);
                 return float4(i.color.rgb * alpha, alpha);
             }
             ENDHLSL

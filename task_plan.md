@@ -564,3 +564,21 @@
   - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
   - total=30, passed=28, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_inspector_buttons_2026-02-26.xml`
+
+### 2026-02-26 13:33:00 +0800
+- 用户新反馈(RenderStyle 切换 pop):
+  - Gaussian -> ParticleDots: 动画尾部有部分远处/靠屏幕外缘的 splat 突然消失.
+  - ParticleDots -> Gaussian: 动画开头同一批 splat 突然出现.
+- 根因:
+  - shader 在 `styleBlend==1` 时跳过 Gaussian corner 计算.
+  - 当 dotCorner 因 frustum cull 不可用时,vertex 会被直接 discard,导致动画头尾 pop.
+- 本轮计划:
+  - [x] Shader: 调整 RenderStyle corner 计算顺序:
+    - 先算 dotCorner.
+    - `styleBlend<1` 或 dotCorner 不可用时才算 gaussCorner 作为兜底几何.
+  - [x] Shader: fragment 增加 `uvDot`(屏幕像素半径归一化),并改为“两种核都不贡献才 discard”,让 pop 变成平滑淡出/淡入.
+  - [x] 回归: 跑 Unity EditMode tests.
+- 回归(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - total=30, passed=28, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_popfix_2026-02-26.xml`
