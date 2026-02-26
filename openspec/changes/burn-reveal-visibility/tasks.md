@@ -119,3 +119,27 @@
 - [x] 19.1 调整 show 的默认宽度参数(仅影响新加组件/Reset 的默认值,不强制迁移旧场景):
   - `ShowRingWidthNormalized` 默认值扩大 10%: `0.06 -> 0.066`
   - `ShowTrailWidthNormalized` 默认值乘以 40%: `0.12 -> 0.048`
+
+## 20. Retraction: "+10%/*40%" refers to splat size (not ring/trail spatial width)
+
+- [x] 20.1 撤回 show 的默认宽度微调,恢复 `ShowRingWidthNormalized=0.06` 与 `ShowTrailWidthNormalized=0.12`.
+- [x] 20.2 增加“粒子大小(高斯基元尺寸)”调参项,并由 shader 在 ring/tail 阶段使用它,避免 ring 前沿全是很小的点点:
+  - 新增 runtime 字段: `ShowSplatMinScale/ShowRingSplatMinScale/ShowTrailSplatMinScale/HideSplatMinScale`
+  - 新增 shader uniforms: `_VisibilityShowMinScale/_VisibilityShowRingMinScale/_VisibilityShowTrailMinScale/_VisibilityHideMinScale`
+- [x] 20.3 更新 OpenSpec design/spec 与 `CHANGELOG.md`,并跑 Unity EditMode tests 回归.
+
+## 21. Tuning: hide afterglow should linger longer (alpha + size)
+
+- [x] 21.1 调整 hide 的 afterglow 余辉:
+  - alpha fade: 对 hide 的 passed 做轻量 easing(先慢后快),让余辉存在时间更长.
+  - size shrink: 拆成两段:
+    - 前沿到来前预收缩到一个 afterglow size.
+    - 前沿扫过后在 tail 内再慢慢 shrink 到最终 `HideSplatMinScale`,避免 glow 一过就直接变到极小.
+- [x] 21.2 更新 OpenSpec/CHANGELOG/四文件记录,并跑 Unity EditMode tests 回归.
+
+## 22. Tuning: hide warp MUST NOT push trail to the outer rim
+
+- [x] 22.1 在 `Runtime/Shaders/Gsplat.shader` 限制 hide 阶段 warp 的径向外推分量:
+  - 允许切向扭曲与径向内咬(更像烟雾流动/被吸入燃烧中心).
+  - 禁止径向外推,避免把“内侧拖尾(afterglow)”视觉上推到外圈,造成 "trail 在外" 的错觉.
+- [x] 22.2 更新 OpenSpec/CHANGELOG/四文件记录,并跑 Unity EditMode tests 回归.

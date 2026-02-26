@@ -166,6 +166,21 @@
 - **WHEN** hide 动画推进,且某个 splat 从“未燃烧”进入“将消失”
 - **THEN** 该 splat 的屏幕尺寸 MUST 从正常平滑缩小到极小
 
+### Requirement: Splat min-size SHOULD be configurable (ring/tail separated for show)
+系统 SHOULD 提供粒子大小(高斯基元尺寸)的可调参数,并避免把“空间宽度”和“粒子大小”混淆:
+
+- 系统 SHOULD 提供一个 show 的基础最小尺寸(用于“从极小开始长大”),例如 `ShowSplatMinScale`.
+- 系统 SHOULD 允许 show 的 ring 与 tail 拥有不同的最小尺寸,例如:
+  - `ShowRingSplatMinScale`: 让燃烧前沿更可读,避免 ring 阶段全是小点点.
+  - `ShowTrailSplatMinScale`: 控制内侧 afterglow/tail 的粒子粗细,通常建议比 ring 更小.
+- 系统 SHOULD 提供一个 hide 的最小尺寸参数(例如 `HideSplatMinScale`),用于控制燃烧阶段缩到多小.
+
+#### Scenario: Ring readability improves without changing spatial widths
+- **GIVEN** 用户启用了显隐动画
+- **WHEN** 用户调大 `ShowRingSplatMinScale`
+- **THEN** show 的 ring 前沿粒子 SHOULD 更容易看清(不再全是很小的点点)
+- **AND** ring/trail 的径向空间宽度(`ShowRingWidthNormalized/ShowTrailWidthNormalized`) SHOULD 不需要被迫调大才能获得可读性
+
 ### Requirement: Noise MUST visibly warp splat positions (space distortion particles)
 系统 MUST 支持一种“扭曲空间一样”的噪波效果,其关键特征是:
 
@@ -180,6 +195,20 @@
 - **THEN** splat 的位移扭曲 MUST 明显变弱且趋于稳定
 - **WHEN** hide 动画推进到后半段
 - **THEN** splat 的位移扭曲 MUST 更明显且更碎屑化
+
+### Requirement: Hide warp SHOULD NOT push the afterglow trail to the outer rim
+系统 SHOULD 在 hide 阶段避免出现 “拖尾看起来跑到外圈” 的错觉:
+
+- reveal/burn 的 passed/ring 判定 MAY 继续基于未扭曲的位置(避免阈值抖动).
+- 但 hide 阶段的 position warp SHOULD 禁止“径向外推”分量:
+  - 允许切向扭曲(围绕中心旋涡/烟雾流动).
+  - 允许径向内咬(更像被吸入燃烧中心).
+  - 不允许径向外推过前沿 ring,以保证 afterglow trail 观感稳定地保持在 ring 的内侧.
+
+#### Scenario: Trail stays inside the ring even with strong warp
+- **GIVEN** hide 动画正在播放且 `WarpStrength` 较大
+- **WHEN** afterglow/tail 区域出现明显位移扭曲
+- **THEN** afterglow/tail SHOULD 仍主要位于前沿 ring 的内侧(不会被位移推到外圈)
 
 ### Requirement: Visibility noise mode MUST be selectable (dropdown)
 系统 MUST 提供一个可切换的噪声模式,用于对比与调参:
@@ -241,3 +270,16 @@
 - **GIVEN** show/hide 动画正在播放
 - **WHEN** `_VisibilityProgress` 从 0 递增到 1
 - **THEN** 燃烧环半径的推进 MUST 呈现 `easeInOutQuad` 的非线性速度曲线
+
+### Requirement: Hide afterglow SHOULD linger behind the glow front (not vanish immediately)
+系统 SHOULD 在 hide 阶段让 glow 前沿扫过后的 afterglow(余辉)更“拖尾”,避免出现“glow 一过,余辉几乎立刻全没”的突兀感:
+
+- hide 的 alpha fade SHOULD 在前段更慢,尾段更快(例如对 passed 做轻量 ease-in).
+- hide 的 size shrink SHOULD 避免在前沿刚扫过时就立刻收敛到最终极小尺寸:
+  - 在前沿附近 SHOULD 保持一个较小但仍可读的 afterglow size.
+  - 在 tail 更深处再逐步 shrink 到最终 min size,配合 alpha 慢慢消失.
+
+#### Scenario: Afterglow remains visible after the front passes
+- **GIVEN** hide 动画正在播放
+- **WHEN** glow 前沿刚扫过某个 splat(该 splat 刚进入 tail 区域)
+- **THEN** 该 splat 的 afterglow SHOULD 仍然可见一段时间,不会立刻消失为“几乎看不到”

@@ -79,6 +79,10 @@ namespace Gsplat
         static readonly int k_visibilityMaxRadius = Shader.PropertyToID("_VisibilityMaxRadius");
         static readonly int k_visibilityRingWidth = Shader.PropertyToID("_VisibilityRingWidth");
         static readonly int k_visibilityTrailWidth = Shader.PropertyToID("_VisibilityTrailWidth");
+        static readonly int k_visibilityShowMinScale = Shader.PropertyToID("_VisibilityShowMinScale");
+        static readonly int k_visibilityShowRingMinScale = Shader.PropertyToID("_VisibilityShowRingMinScale");
+        static readonly int k_visibilityShowTrailMinScale = Shader.PropertyToID("_VisibilityShowTrailMinScale");
+        static readonly int k_visibilityHideMinScale = Shader.PropertyToID("_VisibilityHideMinScale");
 	        static readonly int k_visibilityGlowColor = Shader.PropertyToID("_VisibilityGlowColor");
 	        static readonly int k_visibilityGlowIntensity = Shader.PropertyToID("_VisibilityGlowIntensity");
 	        static readonly int k_visibilityShowGlowStartBoost = Shader.PropertyToID("_VisibilityShowGlowStartBoost");
@@ -262,12 +266,14 @@ namespace Gsplat
         //   2) 计算 center/maxRadius/ringWidth/trailWidth
         //   3) 决定 mode/progress
         // ----------------------------------------------------------------
-	        public void SetVisibilityUniforms(int mode, int noiseMode, float progress, Vector3 centerModel, float maxRadius,
-	            float ringWidth, float trailWidth, Color glowColor, float glowIntensity,
-	            float showGlowStartBoost, float showGlowSparkleStrength, float hideGlowStartBoost,
-	            float noiseStrength, float noiseScale, float noiseSpeed, float warpStrength, float timeSeconds)
-	        {
-	            m_propertyBlock ??= new MaterialPropertyBlock();
+        public void SetVisibilityUniforms(int mode, int noiseMode, float progress, Vector3 centerModel, float maxRadius,
+            float ringWidth, float trailWidth,
+            float showMinScale, float showRingMinScale, float showTrailMinScale, float hideMinScale,
+            Color glowColor, float glowIntensity,
+            float showGlowStartBoost, float showGlowSparkleStrength, float hideGlowStartBoost,
+            float noiseStrength, float noiseScale, float noiseSpeed, float warpStrength, float timeSeconds)
+        {
+            m_propertyBlock ??= new MaterialPropertyBlock();
 
             // mode: 0=off,1=show,2=hide
             if (mode != 1 && mode != 2)
@@ -291,6 +297,28 @@ namespace Gsplat
                 ringWidth = 0.0f;
             if (float.IsNaN(trailWidth) || float.IsInfinity(trailWidth) || trailWidth < 0.0f)
                 trailWidth = 0.0f;
+
+            // 粒子最小尺寸(相对正常尺寸):
+            // - 允许为 0(几乎不可见),但不允许 NaN/Inf.
+            if (float.IsNaN(showMinScale) || float.IsInfinity(showMinScale))
+                showMinScale = 0.0f;
+            showMinScale = Mathf.Clamp01(showMinScale);
+
+            if (float.IsNaN(showRingMinScale) || float.IsInfinity(showRingMinScale))
+                showRingMinScale = showMinScale;
+            showRingMinScale = Mathf.Clamp01(showRingMinScale);
+            if (showRingMinScale < showMinScale)
+                showRingMinScale = showMinScale;
+
+            if (float.IsNaN(showTrailMinScale) || float.IsInfinity(showTrailMinScale))
+                showTrailMinScale = showMinScale;
+            showTrailMinScale = Mathf.Clamp01(showTrailMinScale);
+            if (showTrailMinScale < showMinScale)
+                showTrailMinScale = showMinScale;
+
+            if (float.IsNaN(hideMinScale) || float.IsInfinity(hideMinScale))
+                hideMinScale = 0.0f;
+            hideMinScale = Mathf.Clamp01(hideMinScale);
 
 	            if (float.IsNaN(glowIntensity) || float.IsInfinity(glowIntensity) || glowIntensity < 0.0f)
 	                glowIntensity = 0.0f;
@@ -326,6 +354,10 @@ namespace Gsplat
             m_propertyBlock.SetFloat(k_visibilityMaxRadius, maxRadius);
             m_propertyBlock.SetFloat(k_visibilityRingWidth, ringWidth);
 	            m_propertyBlock.SetFloat(k_visibilityTrailWidth, trailWidth);
+            m_propertyBlock.SetFloat(k_visibilityShowMinScale, showMinScale);
+            m_propertyBlock.SetFloat(k_visibilityShowRingMinScale, showRingMinScale);
+            m_propertyBlock.SetFloat(k_visibilityShowTrailMinScale, showTrailMinScale);
+            m_propertyBlock.SetFloat(k_visibilityHideMinScale, hideMinScale);
 	            m_propertyBlock.SetColor(k_visibilityGlowColor, glowColor);
 	            m_propertyBlock.SetFloat(k_visibilityGlowIntensity, glowIntensity);
 	            m_propertyBlock.SetFloat(k_visibilityShowGlowStartBoost, showGlowStartBoost);

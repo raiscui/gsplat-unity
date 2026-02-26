@@ -675,3 +675,82 @@
 ### 预期观感变化
 - ring 更厚: 前沿存在感更强.
 - trail 更短: 前沿扫过后更快稳定为完全可见,内部更快变亮,减少“半透明带太宽”的混浊感.
+
+---
+
+## 2026-02-25 23:20:00 +0800: 撤回默认宽度调参,改为“粒子大小”调参(ring/tail)
+
+### 用户澄清
+- 上一轮提到的 “+10%/*40%” 指的是高斯基元(粒子)大小,不是 ring/trail 的径向空间宽度.
+
+### 落地改动
+- 恢复 show 的默认空间宽度(避免混淆):
+  - `ShowRingWidthNormalized=0.06`
+  - `ShowTrailWidthNormalized=0.12`
+- 新增粒子大小参数并下发到 shader:
+  - Runtime 字段:
+    - `ShowSplatMinScale`
+    - `ShowRingSplatMinScale`
+    - `ShowTrailSplatMinScale`
+    - `HideSplatMinScale`
+  - Shader uniforms:
+    - `_VisibilityShowMinScale/_VisibilityShowRingMinScale/_VisibilityShowTrailMinScale/_VisibilityHideMinScale`
+- shader show 分支增加 ring/tail 的 size floor:
+  - ring 前沿与 tail/afterglow 不再被 `passed≈0` 锁死在极小尺寸,避免“全是小点点”.
+
+### 回归(证据)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=28, passed=26, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_particle_size_tuning_2026-02-25_2317.xml`
+
+---
+
+## 2026-02-26 00:10:00 +0800: hide 余辉增强(更久 + 尺寸不立刻极小)
+
+### 用户反馈
+- hide 的 glow(前沿)扫过后,余辉粒子存在时间偏短/尺寸偏小.
+- 体感: glow 一过,后面的余辉几乎就全没了.
+
+### 根因判断
+- hide 的 alpha/余辉此前直接使用线性 `visible=1-passed` 与“到达前沿就 shrink 到最终 minScale”:
+  - 衰减节奏偏快,视觉上像“断尾”.
+  - 粒子尺寸在前沿扫过时就立刻收敛到极小,导致余辉更难被看见.
+
+### 落地改动(Shader)
+- `Runtime/Shaders/Gsplat.shader`:
+  1) alpha/tail:
+     - hide 使用 `passedForFade = passed^2`(轻量 ease-in),让余辉衰减前段更慢,尾段更快.
+  2) size:
+     - hide 的 shrink 拆成两段:
+       - 前沿到来前: 预收缩到 `hideAfterglowScale`(由 `HideSplatMinScale*2` 派生).
+       - 前沿扫过后: 在 tail 内用 `passedForFade` 再慢慢 shrink 到最终 `HideSplatMinScale`.
+
+### 回归(证据)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=28, passed=26, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_hide_afterglow_linger_2026-02-25_2336.xml`
+
+---
+
+## 2026-02-26 00:50:00 +0800: hide trail 看起来跑到外圈 -> 禁止 warp 径向外推
+
+### 用户反馈
+- hide 时 `HideTrailWidthNormalized` 对应的拖尾区域体感仍在外圈.
+- 期望: trail 在 `HideRingWidthNormalized` 的内侧(前沿 ring 在外,拖尾在内).
+
+### 根因判断
+- passed/ring 的判定刻意不受 warp 影响(避免阈值抖动导致 flicker).
+- 但当 `WarpStrength` 较大时,warp 里包含了“径向外推”的分量:
+  - 内侧拖尾(afterglow)区域的 splat 可能被位移推到外圈.
+  - 肉眼会产生 "trail 跑到 ring 外侧" 的错觉.
+
+### 落地改动
+- `Runtime/Shaders/Gsplat.shader`:
+  - 在 hide 阶段,对 warpVec 做径向分量裁剪:
+    - 允许切向扭曲与径向内咬.
+    - 禁止径向外推(dot(warpVec, radial) > 0 的部分被移除).
+
+### 回归(证据)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=28, passed=26, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_hide_trail_inside_ring_warp_clamp_2026-02-26_0029.xml`

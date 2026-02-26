@@ -94,23 +94,54 @@ namespace Gsplat
 
         [Range(0.0f, 1.0f)]
         [FormerlySerializedAs("RingWidthNormalized")]
-        [Tooltip("show: 燃烧环宽度(相对 maxRadius 的比例).")]
-        public float ShowRingWidthNormalized = 0.066f;
+        [Tooltip("show: 燃烧环宽度(径向空间宽度,相对 maxRadius 的比例).\n" +
+                 "注意: 这不是粒子大小,它只影响“燃烧前沿在空间中有多厚”.")]
+        public float ShowRingWidthNormalized = 0.06f;
 
         [Range(0.0f, 1.0f)]
         [FormerlySerializedAs("TrailWidthNormalized")]
-        [Tooltip("show: 燃烧拖尾宽度(相对 maxRadius 的比例).\n" +
-                 "它决定被扫过区域“慢慢透明/消失”的距离尺度.")]
-        public float ShowTrailWidthNormalized = 0.048f;
+        [Tooltip("show: 燃烧拖尾宽度(径向空间宽度,相对 maxRadius 的比例).\n" +
+                 "它决定被扫过区域“慢慢透明/消失”的距离尺度.\n" +
+                 "注意: 这不是粒子大小,它只影响“拖尾在空间中有多宽”.")]
+        public float ShowTrailWidthNormalized = 0.12f;
 
         [Range(0.0f, 1.0f)]
-        [Tooltip("hide: 燃烧环宽度(相对 maxRadius 的比例).")]
+        [Tooltip("hide: 燃烧环宽度(径向空间宽度,相对 maxRadius 的比例).")]
         public float HideRingWidthNormalized = 0.06f;
 
         [Range(0.0f, 1.0f)]
-        [Tooltip("hide: 燃烧拖尾宽度(相对 maxRadius 的比例).\n" +
+        [Tooltip("hide: 燃烧拖尾宽度(径向空间宽度,相对 maxRadius 的比例).\n" +
                  "它决定被扫过区域“慢慢透明/消失”的距离尺度.")]
         public float HideTrailWidthNormalized = 0.12f;
+
+        [Range(0.0f, 1.0f)]
+        [Tooltip("show: 高斯基元(粒子)最小尺寸(相对正常尺寸).\n" +
+                 "说明:\n" +
+                 "- 该参数控制 show 阶段 splat 从“极小”长到正常的起点.\n" +
+                 "- 值越小,\"从无到有\"越明显,但 ring 前沿更容易看成小点点.\n" +
+                 "- 值越大,更容易看清 ring,但“从极小开始”的感觉会变弱.")]
+        public float ShowSplatMinScale = 0.001f;
+
+        [Range(0.0f, 1.0f)]
+        [Tooltip("show: 燃烧前沿 ring 阶段的粒子最小尺寸(相对正常尺寸).\n" +
+                 "说明:\n" +
+                 "- 用于解决 \"ring 阶段全是很小的点点\" 的体感.\n" +
+                 "- 它只影响 ring 前沿附近,不会改变已稳定显示区域(最终仍会长到 1.0).")]
+        public float ShowRingSplatMinScale = 0.033f;
+
+        [Range(0.0f, 1.0f)]
+        [Tooltip("show: 内侧 afterglow/tail 阶段的粒子最小尺寸(相对正常尺寸).\n" +
+                 "说明:\n" +
+                 "- 用于控制余辉/拖尾区域的粒子“粗细”.\n" +
+                 "- 建议小于 ShowRingSplatMinScale,让前沿更突出,拖尾更细腻.")]
+        public float ShowTrailSplatMinScale = 0.0132f;
+
+        [Range(0.0f, 1.0f)]
+        [Tooltip("hide: 燃烧期间的粒子最小尺寸(相对正常尺寸).\n" +
+                 "说明:\n" +
+                 "- 值越小,燃烧时越快变小.\n" +
+                 "- 但过小会让 \"看起来消失太快\" 更明显,通常需要配合 alpha trail 一起调参.")]
+        public float HideSplatMinScale = 0.06f;
 
         [Tooltip("燃烧发光颜色.")]
         public Color GlowColor = new(1.0f, 0.45f, 0.1f, 1.0f);
@@ -646,6 +677,10 @@ namespace Gsplat
                 maxRadius: maxRadius,
                 ringWidth: ringWidth,
                 trailWidth: trailWidth,
+                showMinScale: ShowSplatMinScale,
+                showRingMinScale: ShowRingSplatMinScale,
+                showTrailMinScale: ShowTrailSplatMinScale,
+                hideMinScale: HideSplatMinScale,
                 glowColor: GlowColor,
                 glowIntensity: glowIntensity,
                 showGlowStartBoost: ShowGlowStartBoost,

@@ -54,6 +54,14 @@ Shader "Gsplat/Standard"
             float _VisibilityMaxRadius; // model space
             float _VisibilityRingWidth; // model space
             float _VisibilityTrailWidth; // model space
+            // 粒子大小(高斯基元尺寸)控制:
+            // - 注意: 这不是 ring/trail 的“空间宽度”.
+            //   ShowRingWidthNormalized/ShowTrailWidthNormalized 控制的是径向空间宽度,
+            //   而这里的 MinScale 控制的是 corner.offset 的缩放(等价于屏幕上 splat 的大小).
+            float _VisibilityShowMinScale; // 0..1
+            float _VisibilityShowRingMinScale; // 0..1
+            float _VisibilityShowTrailMinScale; // 0..1
+            float _VisibilityHideMinScale; // 0..1
             float4 _VisibilityGlowColor; // rgb used
             float _VisibilityGlowIntensity;
             float _VisibilityShowGlowStartBoost;
@@ -355,13 +363,27 @@ Shader "Gsplat/Standard"
 
                     // passed=1 表示“燃烧环已扫过该 splat”,passed=0 表示“尚未到达”.
                     float passed = saturate((-edgeDistForFade) / trailWidth);
-                    float visible = (_VisibilityMode == 1) ? passed : (1.0 - passed);
+
+                    // hide 余辉更“拖尾”:
+                    // - 用户反馈: glow 一过,余辉粒子几乎就全没了.
+                    // - 根因: hide 的 visible/tail 直接用线性(1-passed)衰减时,会显得过快/过短.
+                    // - 处理: 对 hide 的 passed 做一个轻量 ease-in(平方),让衰减在前段更慢,尾段更快.
+                    //   这样余辉存在时间更长,但 passed=1 时仍能完全烧尽(不引入 lingering).
+                    float passedForFade = passed;
+                    float passedForTail = passed;
+                    if (_VisibilityMode == 2)
+                    {
+                        passedForFade = passed * passed;
+                        passedForTail = passedForFade;
+                    }
+
+                    float visible = (_VisibilityMode == 1) ? passed : (1.0 - passedForFade);
                     float noiseWeight = (_VisibilityMode == 1) ? (1.0 - passed) : passed;
 
                     // 内侧 afterglow/tail:
                     // - 只出现在边界内侧(edgeDistNoisy<=0),并朝内逐渐衰减.
                     // - 乘以(1-ring)避免前沿过曝,并保证“前沿 ring 永远更亮”.
-                    float tailInside = (1.0 - passed) * step(0.0, -edgeDistNoisy);
+                    float tailInside = (1.0 - passedForTail) * step(0.0, -edgeDistNoisy);
                     tailInside *= (1.0 - ring);
 
                     // 灰烬颗粒感: hide 后半程更强.
@@ -459,10 +481,18 @@ Shader "Gsplat/Standard"
                     //
                     // 设计:
                     // - 用 passed 作为每个 splat 的局部进度,让“被燃烧环扫过”的区域自然变大/变小.
-                    // - show 时设置一个很小的 minScale,避免 progress 刚开始时 ring 过于不可见.
+                    // - show 时设置一个很小的 minScale,并额外提供 ring/tail 的 size floor,
+                    //   避免用户反馈的“ring 阶段全是很小的点点”.
+                    //
+                    // 注意:
+                    // - ShowRingWidthNormalized/ShowTrailWidthNormalized 控制的是径向空间宽度(环在空间里有多厚),
+                    //   不是粒子大小.
+                    // - 这里的 scale 才是“粒子大小”(corner.offset 的缩放).
                     // --------------------------------------------------------
-                    float minScaleShow = 0.01;
-                    float minScaleHide = 0.06;
+                    float minScaleShow = saturate(_VisibilityShowMinScale);
+                    float minScaleHide = saturate(_VisibilityHideMinScale);
+                    float showRingMinScale = max(saturate(_VisibilityShowRingMinScale), minScaleShow);
+                    float showTrailMinScale = max(saturate(_VisibilityShowTrailMinScale), minScaleShow);
                     if (_VisibilityMode == 1)
                     {
                         // show:
@@ -470,26 +500,51 @@ Shader "Gsplat/Standard"
                         float tGrow = saturate(passed);
                         tGrow = pow(tGrow, 0.5);
                         tGrow = smoothstep(0.0, 1.0, tGrow);
-                        visibilitySizeMul = lerp(minScaleShow, 1.0, tGrow);
+
+                        float baseSize = lerp(minScaleShow, 1.0, tGrow);
+
+                        // ring/tail 的 size floor:
+                        // - ring 在外侧,passed 往往接近 0,因此仅靠 baseSize 会出现“全是小点点”.
+                        // - 用 ring/tailInside 作为权重,给它们一个更大的最小尺寸,让燃烧前沿更可读.
+                        float ringSizeFloor = lerp(minScaleShow, showRingMinScale, ring);
+                        float tailSizeFloor = lerp(minScaleShow, showTrailMinScale, tailInside);
+
+                        visibilitySizeMul = max(baseSize, max(ringSizeFloor, tailSizeFloor));
                     }
                     else
                     {
                         // hide:
-                        // - 目标: 先迅速缩到“比较小但仍可见”的 size,再主要依赖 alpha trail 慢慢消失.
+                        // - 目标: 让“余辉粒子”在 glow 扫过后仍能存在一段时间(且尺寸不要立刻变到极小).
                         // - 解决用户反馈:
-                        //   1) 燃烧(glow)阶段 splat 仍偏大 -> shrink 更早触发.
-                        //   2) size 过早接近 0 导致“看起来消失太快” -> minScaleHide 保持非 0.
+                        //   1) glow 一过,余辉几乎全没了 -> 在 tail 内把 shrink 拉长(到更靠后才变到最终 min).
+                        //   2) 进入 glow 时仍希望已经明显变小 -> 仍保留在前沿到来前的预收缩.
                         //
                         // shrinkBand:
                         // - 允许比 ringWidth 更宽一点,让 shrink 在 glow 前就提前开始.
                         float shrinkBand = max(ringWidth, trailWidth * 0.35);
                         shrinkBand = max(shrinkBand, 1e-5);
 
-                        // tShrink=0: 远离燃烧前沿(尺寸保持正常)
-                        // tShrink=1: 到达或进入燃烧前沿(尺寸快速变小)
-                        float tShrink = saturate((shrinkBand - edgeDistForFade) / shrinkBand);
-                        tShrink = EaseOutCirc(tShrink);
-                        visibilitySizeMul = lerp(1.0, minScaleHide, tShrink);
+                        // hideAfterglowScale:
+                        // - 在燃烧前沿附近(余辉区域)保持一个“更可读”的 size.
+                        // - 最终仍会在 tail 末端收敛到 minScaleHide(由 passedForFade 驱动).
+                        // - 这里先用一个简单的派生规则(×2)作为默认行为,后续若需要可再拆成独立参数.
+                        float hideAfterglowScale = min(1.0, max(minScaleHide, minScaleHide * 2.0));
+
+                        // 预收缩(前沿到来前):
+                        // - 0: 远离前沿(尺寸保持正常)
+                        // - 1: 到达前沿(已缩到 afterglowScale)
+                        float tApproach = saturate((shrinkBand - edgeDistForFade) / shrinkBand);
+                        tApproach = EaseOutCirc(tApproach);
+                        float preScale = lerp(1.0, hideAfterglowScale, tApproach);
+
+                        // tail 内继续 shrink(前沿扫过后):
+                        // - 使用 passedForFade(带 easing)让余辉阶段缩小更慢,避免“glow 一过就全没了”.
+                        float insideScale = lerp(hideAfterglowScale, minScaleHide, passedForFade);
+
+                        // burned=0: 前沿未到,用 preScale
+                        // burned=1: 已被扫过,用 insideScale
+                        float burned = step(0.0, -edgeDistForFade);
+                        visibilitySizeMul = lerp(preScale, insideScale, burned);
                     }
 
                     // --------------------------------------------------------
@@ -540,6 +595,20 @@ Shader "Gsplat/Standard"
 
                             warpVec = tangent * warpSignedA + bitangent * warpSignedB;
                             warpVec += radial * (warp01a * 2.0 - 1.0) * 0.45;
+                        }
+
+                        // hide 语义修正: trail 在内侧,不应被 warp 推到外圈
+                        // - 当前 reveal/burn 的判定(passed/ring)刻意不受 warp 影响(避免阈值抖动).
+                        // - 但如果 warp 把“内侧拖尾区域”的 splat 往径向外侧推,肉眼会产生
+                        //   "trail 跑到外圈" 的错觉(尤其在 warpStrength 较大时更明显).
+                        // - 因此在 hide 模式下,我们禁止 warpVec 的“径向外推”分量:
+                        //   - 允许切向扭曲(旋涡/烟雾流动)
+                        //   - 允许径向内咬(更像被吸进燃烧中心)
+                        //   - 但不允许往外推过前沿 ring
+                        if (_VisibilityMode == 2)
+                        {
+                            float outward = max(0.0, dot(warpVec, radial));
+                            warpVec -= radial * outward;
                         }
 
                         warpVec = normalize(warpVec + 1e-5);

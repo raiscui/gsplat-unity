@@ -15,11 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `VisibilityNoiseMode` dropdown for the burn-ring visibility animation to switch between `ValueSmoke` (default), `CurlSmoke` (curl-like warp field), and `HashLegacy` (legacy comparison).
 - Added `ShowGlowStartBoost` for the burn-ring visibility animation, and tuned show/hide glow so the burn front ring stays on the outer side and brighter (boost), with an inward-decaying afterglow tail (brighter interior, less abrupt outer rim).
 - Added `ShowGlowSparkleStrength` to modulate the show ring glow with curl-noise sparkle/twinkle ("embers" flicker).
+- Added burn-ring visibility animation particle-size tuning: `ShowSplatMinScale`, `ShowRingSplatMinScale`, `ShowTrailSplatMinScale`, and `HideSplatMinScale` (separates "spatial ring width" from "splat size", and reduces the "tiny dots" look on the burn front).
 - Tuned hide splat size shrink to follow a faster-then-slower (easeOutCirc-like) curve, keeping a non-zero minimum size to avoid "disappearing too fast" during the burn tail.
 
 ### Changed
 
-- Changed default show widths for the burn-ring visibility animation (new components / Reset only): `ShowRingWidthNormalized` `0.06 -> 0.066`, `ShowTrailWidthNormalized` `0.12 -> 0.048`.
+- Tuned burn-ring hide afterglow to linger longer behind the glow front (eased fade timing + two-stage shrink, avoids the "glow passes and everything vanishes" look).
+- Tuned burn-ring hide warp so it cannot push splats outward past the burn front (keeps the afterglow trail visually inside the ring even with strong `WarpStrength`).
 
 ### Fixed
 

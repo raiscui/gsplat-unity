@@ -178,3 +178,70 @@
 
 ### 备注
 - 该改动只影响“新加组件/Reset”的默认值,不会自动迁移已有 Prefab/场景里已序列化的对象参数.
+
+## 2026-02-25 23:20:00 +0800: 撤回默认宽度微调,改为“粒子大小”微调(ring/tail)
+
+### 用户澄清
+- 之前的 “ShowRingWidthNormalized 大 10% / ShowTrailWidthNormalized *40%” 目标其实是粒子大小,不是 ring/trail 的径向空间宽度.
+
+### 落地改动
+- 撤回 show 的默认宽度改动,恢复默认值:
+  - `Runtime/GsplatRenderer.cs`: `ShowRingWidthNormalized=0.06`, `ShowTrailWidthNormalized=0.12`
+  - `Runtime/GsplatSequenceRenderer.cs`: `ShowRingWidthNormalized=0.06`, `ShowTrailWidthNormalized=0.12`
+- 新增“粒子大小”调参项,把“空间宽度”和“粒子大小”语义彻底拆开:
+  - `Runtime/GsplatRenderer.cs`/`Runtime/GsplatSequenceRenderer.cs`:
+    - `ShowSplatMinScale`
+    - `ShowRingSplatMinScale`
+    - `ShowTrailSplatMinScale`
+    - `HideSplatMinScale`
+  - `Runtime/GsplatRendererImpl.cs`: 新增 4 个对应 shader uniform 下发.
+  - `Runtime/Shaders/Gsplat.shader`: show 分支对 ring/tail 增加 size floor,避免 ring 前沿全是很小的点点.
+- OpenSpec/Changelog 同步:
+  - `openspec/changes/burn-reveal-visibility/*`(tasks/design/spec)
+  - `CHANGELOG.md`
+
+### 回归(证据型)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=28, passed=26, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_particle_size_tuning_2026-02-25_2317.xml`
+
+## 2026-02-26 00:10:00 +0800: hide 余辉(afterglow)更久 + 尺寸不立刻极小
+
+### 用户反馈
+- hide 的 glow 前沿扫过后,余辉粒子存在时间偏短/尺寸偏小.
+- 体感: glow 一过,后面的余辉几乎就全没了.
+
+### 落地改动
+- `Runtime/Shaders/Gsplat.shader`:
+  - alpha/tail: hide 使用 `passedForFade = passed^2`(轻量 ease-in),让余辉衰减前段更慢,尾段更快.
+  - size: hide shrink 拆成两段:
+    - 前沿到来前: 预收缩到 `hideAfterglowScale`(由 `HideSplatMinScale*2` 派生).
+    - 前沿扫过后: 在 tail 内用 `passedForFade` 再慢慢 shrink 到最终 `HideSplatMinScale`.
+- 同步更新:
+  - `openspec/changes/burn-reveal-visibility/*`(tasks/design/spec)
+  - `CHANGELOG.md`
+
+### 回归(证据型)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=28, passed=26, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_hide_afterglow_linger_2026-02-25_2336.xml`
+
+## 2026-02-26 00:50:00 +0800: hide trail 看起来在外圈 -> warp 禁止径向外推
+
+### 用户反馈
+- hide 时 `HideTrailWidthNormalized` 对应的拖尾区域体感仍在外圈.
+- 希望拖尾稳定在 `HideRingWidthNormalized` 的内侧(前沿 ring 在外,拖尾在内).
+
+### 落地改动
+- `Runtime/Shaders/Gsplat.shader`:
+  - 在 hide 阶段对 warpVec 做“径向外推裁剪”:
+    - 允许切向扭曲与径向内咬(保持烟雾流动感).
+    - 禁止径向外推(避免把内侧 afterglow/tail 的 splat 位移到外圈,造成 "trail 在外" 错觉).
+- 同步更新:
+  - `openspec/changes/burn-reveal-visibility/*`(tasks/design/spec)
+  - `CHANGELOG.md`
+
+### 回归(证据型)
+- Unity 6000.3.8f1 EditMode tests:
+  - total=28, passed=26, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_hide_trail_inside_ring_warp_clamp_2026-02-26_0029.xml`

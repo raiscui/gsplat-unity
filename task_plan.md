@@ -483,3 +483,41 @@
     - `ShowTrailWidthNormalized`: `0.12 -> 0.048`
   - [x] 更新 OpenSpec/CHANGELOG/四文件记录.
   - [ ](可选) 若你希望“自动迁移已有 Prefab/场景里仍是旧默认值的对象”,再做一次显式 migration(当前未做,避免升级后意外改动旧场景观感).
+
+### 2026-02-25 23:10:00 +0800
+- 用户撤回说明:
+  - 上一轮提到的 “ShowRingWidthNormalized 大 10% / ShowTrailWidthNormalized *40%” 实际指的是“高斯基元(粒子)大小”,不是 ring/trail 的径向空间宽度.
+- 本轮计划:
+  - [x] 撤回 show 的默认宽度微调(恢复 `0.06/0.12`),避免把“空间宽度”和“粒子大小”混淆.
+  - [x] 为 show/hide 增加“粒子大小”调参项,并让 shader 在 ring/tail 阶段使用它,避免 ring 前沿全是很小的点点.
+  - [x] 更新 OpenSpec/CHANGELOG/notes/WORKLOG 记录,并跑 Unity EditMode tests 回归.
+- 验证(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_particle_size_tuning_2026-02-25_2317.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+### 2026-02-25 23:30:00 +0800
+- 用户新反馈(hide 余辉/afterglow):
+  - hide 的 glow(前沿)扫过后,余辉粒子存在时间偏短/尺寸偏小.
+  - 体感: glow 一过,后面的余辉几乎就全没了.
+- 本轮计划:
+  - [x] shader: hide 的 alpha fade 对 passed 做轻量 easing(先慢后快),让余辉更“拖尾”.
+  - [x] shader: hide 的 size shrink 拆成“到达前沿时先 shrink 到 afterglow size,随后在 tail 内再慢慢 shrink 到最终 min”,避免一过前沿就直接变到极小.
+  - [x] 更新 OpenSpec/CHANGELOG/notes/WORKLOG 记录,并跑 Unity EditMode tests 回归.
+- 验证(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_hide_afterglow_linger_2026-02-25_2336.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2
+
+### 2026-02-26 00:25:00 +0800
+- 用户新反馈(hide ring/trail 相对位置):
+  - 体感: `HideTrailWidthNormalized` 对应的拖尾区域看起来仍在外圈.
+  - 期望: hide 的 trail 应该在 `HideRingWidthNormalized` 的内侧(前沿 ring 在外,拖尾在内).
+- 本轮计划:
+  - [x] shader: 限制 hide 阶段的 warp 不允许把 splat 往径向外侧推(避免位移把“内侧拖尾”推到外圈,造成错觉).
+  - [ ](如仍不稳) hide 的 tailInside 判定改用更稳态的 `edgeDistForFade`(与 fade/shrink 同源),减少 ring 抖动导致的相对位置错觉.
+  - [x] 更新 OpenSpec/CHANGELOG/notes/WORKLOG 记录,并跑 Unity EditMode tests 回归.
+- 验证(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_burn_reveal_visibility_hide_trail_inside_ring_warp_clamp_2026-02-26_0029.xml`
+  - 汇总: total=28, passed=26, failed=0, skipped=2

@@ -351,11 +351,11 @@
 - curl-like 噪声场在空间上连续且带旋涡感,用它做亮度调制更像“火星在流动的气流里跳动”,
   比纯 hash 抖动更自然,也更接近“星火闪烁”的观感.
 
-### 19) 默认参数微调: show 的 ring 更厚,trail 更短
+### 19) (撤回) 默认参数微调: show 的 ring 更厚,trail 更短
 
 **Decision:**
 
-- 调整 show 的默认参数(仅影响“新加组件/Reset”,不对已有序列化对象做自动迁移):
+- (已撤回) 调整 show 的默认参数(仅影响“新加组件/Reset”,不对已有序列化对象做自动迁移):
   - `ShowRingWidthNormalized`: `0.06 -> 0.066`(+10%).
   - `ShowTrailWidthNormalized`: `0.12 -> 0.048`(×0.4).
 
@@ -365,3 +365,72 @@
 - trail 更短会让 reveal 在前沿扫过后更快稳定为“完全可见”,从而:
   - 内部更快变亮/变实(减少“外侧亮但内部发暗”的体感).
   - 降低长拖尾带来的“半透明区域过宽”的混浊感.
+
+**Retraction:**
+
+- 用户后来澄清: 这里的 “+10%/*40%” 需求指的是“高斯基元(粒子)大小”,不是 ring/trail 的径向空间宽度.
+- 因此最终实现选择:
+  - 恢复 show 的默认宽度为 `0.06/0.12`,避免混淆.
+  - 新增粒子大小参数,用 size floor 去解决“ring 阶段全是小点点”的问题(见下一节).
+
+### 20) 粒子大小微调: ring/tail 的最小尺寸分离(避免小点点)
+
+**Decision:**
+
+- 恢复 show 的默认空间宽度:
+  - `ShowRingWidthNormalized=0.06`
+  - `ShowTrailWidthNormalized=0.12`
+- 新增/下发 4 个粒子大小参数(相对正常尺寸,0..1):
+  - `ShowSplatMinScale`: show 的基础最小尺寸(用于“从极小开始”).
+  - `ShowRingSplatMinScale`: show 的 ring 前沿最小尺寸(用于 ring 更可读).
+  - `ShowTrailSplatMinScale`: show 的 tail/afterglow 最小尺寸(用于控制拖尾粗细).
+  - `HideSplatMinScale`: hide 的最小尺寸(用于控制燃烧阶段缩到多小).
+- shader 侧:
+  - show: 在原有 `passed -> grow` 的基础上,对 ring/tail 额外施加 size floor:
+    - `ringSizeFloor`: 由 `ring` 权重把 size 拉到 `ShowRingSplatMinScale`.
+    - `tailSizeFloor`: 由 `tailInside` 权重把 size 拉到 `ShowTrailSplatMinScale`.
+  - hide: 继续使用现有 `easeOutCirc` shrink,并把最小值改为 `HideSplatMinScale` 可调.
+
+**Why:**
+
+- 用户反馈的核心不是 “ring 在空间里太薄/太厚”,而是:
+  - ring 前沿可见时,由于 `passed≈0` 导致 size 仍贴近极小,视觉上变成“很小的点点”.
+- 通过把“空间宽度”(ring/trail width)与“粒子大小”(splat min scale)拆开:
+  - 参数语义更清楚,不再容易误解.
+  - ring 前沿能保持更可读的粒子大小,同时仍保留“从极小开始长大”的动态过程.
+
+### 21) hide 余辉增强: afterglow 更久 + 尺寸不要立刻极小
+
+**Decision:**
+
+- 调整 hide 的 afterglow(余辉)体验,目标是让 glow 扫过后“余辉仍能存在一段时间”,而不是一过就没:
+  1) alpha fade: 对 hide 的 passed 做轻量 ease-in(平方),让衰减前段更慢,尾段更快.
+     - 直观效果: 余辉存在时间更长,但不改变 passed=1 时必须完全烧尽的约束.
+  2) size shrink: 拆为两段:
+     - 前沿到来前: 预收缩到一个 afterglow size(让进入 glow 时已明显变小).
+     - 前沿扫过后: 在 tail 内再慢慢 shrink 到最终 `HideSplatMinScale`,避免 glow 一过就直接变到极小.
+- afterglow size 先使用 `HideSplatMinScale` 的派生规则(×2)作为默认,减少新增参数数量.
+  - 若后续需要更精细控制(例如 ring 更小但余辉更大),再拆成独立参数.
+
+**Why:**
+
+- 用户反馈的关键体验是: hide 的 glow 前沿扫过之后,余辉粒子“几乎立刻全没了”.
+- 通过对 hide 的 alpha/size 都做“先慢后快 + 分段收敛”的节奏,可以同时满足:
+  - 进入 glow 前就变小(燃烧感更强).
+  - glow 扫过后仍有余辉拖尾(更像燃烧后余烬,不会突兀断掉).
+
+### 22) hide warp 防外推: 拖尾保持在 ring 内侧
+
+**Decision:**
+
+- 在 hide 阶段,限制 position warp 的“径向外推”分量:
+  - 允许切向扭曲(旋涡/烟雾流动).
+  - 允许径向内咬(更像被吸入燃烧中心).
+  - 但禁止径向外推(不把 splat 往外圈推).
+
+**Why:**
+
+- reveal/burn 的 passed/ring 判定刻意不受 warp 影响,以避免阈值抖动带来的 flicker.
+- 但当 warpStrength 较大时,如果 warp 把“内侧拖尾(afterglow)”的 splat 往径向外侧推,
+  肉眼会产生 "HideTrail 在外圈" 的错觉(看起来像拖尾跑到了前沿 ring 外侧).
+- 通过在 hide 阶段只禁止“径向外推”,可以保留烟雾式的切向流动,同时让拖尾位置更稳态地保持在 ring 的内侧.
