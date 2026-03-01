@@ -988,3 +988,24 @@
 ### 观感调整(亮度/形状/深度配色)
 - 现象: LiDAR 点云在余辉衰减时容易显得“透明发灰”,且圆点不符合当前需求.
 - 修复: `GsplatLidar.shader` 改为 additive blend(且不污染 alpha),点形改为正方形(软边),Depth 配色改为 cyan -> red.
+
+## 2026-03-02 00:29:57 +0800: 修复 LiDAR Depth 色带走向错误(cyan -> blue -> purple -> red)
+
+### 现象
+- `LidarColorMode=Depth` 时,虽然整体是 cyan -> red,但中间过渡出现了 blue/purple(更像冷色圈),观感不符合常见“深度热力图”.
+
+### 根因
+- 之前用 HSV 做 hue 渐变时,red 端点被编码为 hue=1.0(360°)而不是 hue=0.0.
+- 因此 hue 会沿 0.5(cyan) -> 1.0(red) 这条路径插值,自然经过 blue/purple.
+
+### 修复
+- `Runtime/Shaders/GsplatLidar.shader`:
+  - 移除 HSV hue 插值.
+  - 改为分段线性渐变: cyan -> green -> yellow -> red,确保色带路径稳定且不经过蓝/紫.
+- `README.md`/`CHANGELOG.md`: 同步 Depth 色带描述,避免“实现与文档预期不一致”.
+
+### 验证(证据型)
+- Unity 6000.3.8f1,最小工程 `_tmp_gsplat_pkgtests`:
+  - 汇总: total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_colormap_2026-03-02_002839_noquit.xml`
+- Commit: `278742e`

@@ -175,3 +175,16 @@
 - Unity 6000.3.8f1,EditMode tests:
   - total=33, passed=31, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_shader_square_2026-03-01_235423.xml`
+
+## 2026-03-02 00:29:57 +0800
+- 修正 LiDAR 的 Depth 色带路径:
+  - 原实现虽然是 cyan -> red,但因 hue 端点处理导致走了 cyan -> blue -> purple -> red.
+  - 现改为更可控的“深度热力图”常用路径: cyan -> green -> yellow -> red(避免蓝/紫过渡).
+- 同步文档:
+  - `README.md`/`CHANGELOG.md` 更新 Depth 配色描述.
+
+### 回归(证据)
+- Unity 6000.3.8f1,EditMode tests:
+  - total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_colormap_2026-03-02_002839_noquit.xml`
+- Commit: `278742e`

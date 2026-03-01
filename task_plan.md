@@ -747,7 +747,8 @@
   - 我们之前用 HSV 做 hue 插值时,red 端被当成了 hue=1.0(360°),而不是 hue=0.0.
   - 于是 hue 会沿着 0.5(cyan) -> 1.0(red) 这条路径走,自然经过 blue/purple.
 - 修正计划:
-  - [ ] Shader: Depth 色带改为可控的分段色带(cyan -> green -> yellow -> red),避免蓝/紫过渡.
-  - [ ] Docs: README/CHANGELOG 同步文案,让预期与实现一致.
-  - [ ] 回归: Unity EditMode tests(确保编译与用例都稳定).
-  - [ ] git commit.
+  - [x] Shader: Depth 色带改为可控的分段色带(cyan -> green -> yellow -> red),避免蓝/紫过渡.
+  - [x] Docs: README/CHANGELOG 同步文案,让预期与实现一致.
+  - [x] 回归: Unity EditMode tests(确保编译与用例都稳定).
+    - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_colormap_2026-03-02_002839_noquit.xml`
+  - [x] git commit: `278742e`(fix: LiDAR depth colormap).
