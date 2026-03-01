@@ -679,3 +679,10 @@
     - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_particle_dots_lidar_scan_2026-03-01_204400.log`
 - 下一步(马上做):
   - [ ] git commit: 提交本次变更(含 `.meta`).
+
+### 2026-03-01 20:49:39 +0800
+- 已完成 git 提交:
+  - `25de60a` `feat: LiDAR scan visualization`
+- 当前状态:
+  - OpenSpec change `particle-dots-lidar-scan` apply 24/24 已完成,且已提交到 git.
+  - 若你希望收尾归档 OpenSpec change,下一步可以执行 `$openspec-archive-change particle-dots-lidar-scan`.
