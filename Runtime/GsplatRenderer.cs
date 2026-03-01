@@ -131,21 +131,13 @@ namespace Gsplat
                  "默认 -30 度.")]
         public float LidarDownFovDeg = -30.0f;
 
-        [Min(0)]
-        [Tooltip("上半部分线束数量(用于\"上少下多\").\n" +
+        [Min(1)]
+        [Tooltip("竖直线束数量(BeamCount).\n" +
                  "说明:\n" +
-                 "- v1 固定总线束数为 128.\n" +
-                 "- 该值与 DownBeams 会在 OnValidate 中被规范化,确保 UpBeams + DownBeams == 128.\n" +
-                 "- 默认 16.")]
-        public int LidarUpBeams = 16;
-
-        [Min(0)]
-        [Tooltip("下半部分线束数量(用于\"上少下多\").\n" +
-                 "说明:\n" +
-                 "- v1 固定总线束数为 128.\n" +
-                 "- 该值与 UpBeams 会在 OnValidate 中被规范化,确保 UpBeams + DownBeams == 128.\n" +
-                 "- 默认 112.")]
-        public int LidarDownBeams = 112;
+                 "- 不再拆分 UpBeams/DownBeams,而是在 [DownFovDeg..UpFovDeg] 内做匀角度采样.\n" +
+                 "- 你只需要控制总线数与上下视场,即可得到\"上下统一\"的竖直分布.\n" +
+                 "- 默认 128.")]
+        public int LidarBeamCount = 128;
 
         [Min(0.0f)]
         [Tooltip("有效距离下限(米).\n" +
@@ -180,6 +172,14 @@ namespace Gsplat
                  "会与余辉亮度共同作用.\n" +
                  "默认 1.")]
         public float LidarIntensity = 1.0f;
+
+        [Range(0.0f, 1.0f)]
+        [Tooltip("LiDAR 采样时的最小 splat opacity 阈值.\n" +
+                 "说明:\n" +
+                 "- 该阈值用于过滤掉几乎不可见的 splats,避免 first return 命中\"透明噪声外壳\",导致看起来像\"包了一层\".\n" +
+                 "- 该值越大,点云越干净,但可能出现更多空洞.\n" +
+                 "- 默认 1/255(与主 splat shader 的 discard 阈值对齐).")]
+        public float LidarMinSplatOpacity = 1.0f / 255.0f;
 
         [Tooltip("当 EnableLidarScan=true 时,是否隐藏 splat 的 sort/draw(仅显示 LiDAR 点云).\n" +
                  "说明:\n" +
@@ -2741,11 +2741,11 @@ namespace Gsplat
                 return;
 
             var azBins = Mathf.Max(LidarAzimuthBins, 1);
-            var beamCount = Mathf.Max(LidarUpBeams + LidarDownBeams, 1);
+            var beamCount = Mathf.Max(LidarBeamCount, 1);
 
             m_lidarScan ??= new GsplatLidarScan();
             m_lidarScan.EnsureRangeImageBuffers(azBins, beamCount);
-            m_lidarScan.EnsureLutBuffers(azBins, LidarUpFovDeg, LidarDownFovDeg, LidarUpBeams, LidarDownBeams);
+            m_lidarScan.EnsureLutBuffers(azBins, LidarUpFovDeg, LidarDownFovDeg, beamCount);
         }
 
         void TickLidarRangeImageIfNeeded()
@@ -2791,9 +2791,19 @@ namespace Gsplat
             var modelToLidar = LidarOrigin.worldToLocalMatrix * transform.localToWorldMatrix;
 
             var needsSplatId = LidarColorMode == GsplatLidarColorMode.SplatColorSH0;
-            if (m_lidarScan.TryRebuildRangeImage(settings.ComputeShader, m_renderer.PositionBuffer,
+            if (m_lidarScan.TryRebuildRangeImage(settings.ComputeShader,
+                    m_renderer.PositionBuffer,
+                    m_renderer.VelocityBuffer,
+                    m_renderer.TimeBuffer,
+                    m_renderer.DurationBuffer,
+                    m_renderer.ColorBuffer,
+                    m_renderer.Has4D ? 1 : 0,
+                    m_timeNormalizedThisFrame,
+                    GetEffectiveTimeModel(),
+                    GetEffectiveTemporalCutoff(),
+                    LidarMinSplatOpacity,
                     modelToLidar, baseIndex, count,
-                    LidarAzimuthBins, LidarUpBeams, LidarDownBeams,
+                    LidarAzimuthBins, LidarBeamCount,
                     LidarUpFovDeg, LidarDownFovDeg,
                     LidarDepthNear, LidarDepthFar,
                     needsSplatId))
@@ -2835,7 +2845,7 @@ namespace Gsplat
 
             m_lidarScan.RenderPointCloud(settings, targetCam, gameObject.layer, GammaToLinear,
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
-                LidarAzimuthBins, LidarUpBeams, LidarDownBeams,
+                LidarAzimuthBins, LidarBeamCount,
                 LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
                 LidarColorMode, LidarTrailGamma, LidarIntensity,
                 m_renderer.ColorBuffer);
@@ -2863,7 +2873,7 @@ namespace Gsplat
 
             m_lidarScan.RenderPointCloud(settings, camera, gameObject.layer, GammaToLinear,
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
-                LidarAzimuthBins, LidarUpBeams, LidarDownBeams,
+                LidarAzimuthBins, LidarBeamCount,
                 LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
                 LidarColorMode, LidarTrailGamma, LidarIntensity,
                 m_renderer.ColorBuffer);
@@ -2904,7 +2914,7 @@ namespace Gsplat
             // - 默认值按 OpenSpec 收敛:
             //   - RotationHz=5,UpdateHz=10,AzimuthBins=2048
             //   - UpFovDeg=+10,DownFovDeg=-30
-            //   - UpBeams=16,DownBeams=112(total=128)
+            //   - BeamCount=128
             //   - DepthNear=1m,DepthFar=200m
             //   - PointRadius=2px,TrailGamma=2,Intensity=1
 
@@ -2926,11 +2936,13 @@ namespace Gsplat
             LidarUpFovDeg = Mathf.Clamp(LidarUpFovDeg, 0.0f, 89.0f);
             LidarDownFovDeg = Mathf.Clamp(LidarDownFovDeg, -89.0f, 0.0f);
 
-            var up = LidarUpBeams;
-            var down = LidarDownBeams;
-            GsplatUtils.NormalizeLidarUpDownBeamsToFixedTotal(ref up, ref down);
-            LidarUpBeams = up;
-            LidarDownBeams = down;
+            // BeamCount:
+            // - 只保留一个总线束数,竖直方向按 [DownFov..UpFov] 匀角度采样.
+            // - clamp 上限主要为了避免误填导致 range image 过大而瞬间卡死.
+            if (LidarBeamCount < 1)
+                LidarBeamCount = GsplatUtils.k_LidarDefaultBeamCount;
+            if (LidarBeamCount > 512)
+                LidarBeamCount = 512;
 
             if (float.IsNaN(LidarDepthNear) || float.IsInfinity(LidarDepthNear) || LidarDepthNear <= 0.0f)
                 LidarDepthNear = 1.0f;
@@ -2949,6 +2961,10 @@ namespace Gsplat
 
             if (float.IsNaN(LidarIntensity) || float.IsInfinity(LidarIntensity) || LidarIntensity < 0.0f)
                 LidarIntensity = 1.0f;
+
+            if (float.IsNaN(LidarMinSplatOpacity) || float.IsInfinity(LidarMinSplatOpacity) || LidarMinSplatOpacity < 0.0f)
+                LidarMinSplatOpacity = 1.0f / 255.0f;
+            LidarMinSplatOpacity = Mathf.Clamp01(LidarMinSplatOpacity);
         }
     }
 }

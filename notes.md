@@ -957,3 +957,29 @@
   - 结果: total=33, passed=31, failed=0, skipped=2
   - XML:
     - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_particle_dots_lidar_scan_2026-03-01_204400.xml`
+
+### 2026-03-01 22:12:00 +0800 - LiDAR BeamCount 统一 + “厚壳”偏移修正
+现象:
+- LiDAR 点云比高斯点云更“外扩”,像外面包了一层厚壳,远处更明显.
+
+根因:
+- compute 存的是 `|pos|^2`(到 LiDAR 原点的欧氏距离),但渲染重建点位用的是离散 bin center 射线方向 `d`.
+- 旧实现等价于渲染 `p' = d * |pos|`,但沿射线的量测距离应是 `depth = dot(pos,d) = |pos| * cos(theta)`.
+- 因为 `cos(theta) <= 1`,所以用 `|pos|` 放回射线上会把点推得更远,形成外壳.
+
+修正:
+- API: 移除 Up/Down beams,统一为 `LidarBeamCount`.
+- LUT: 竖直方向在 `[LidarDownFovDeg..LidarUpFovDeg]` 做匀角度采样(上下统一).
+- compute: range image 改为存 `depth^2`,其中 `depth=dot(posLidar,dirBinCenter)`; 并在 compute 侧绑定同一套 LUT,确保采样/重建一致.
+
+回归(证据):
+- Unity 6000.3.8f1,EditMode tests: total=33, passed=31, failed=0, skipped=2
+- XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_beamcount_shellfix_2026-03-01_221012.xml`
+
+### 2026-03-01 22:52:00 +0800 - 仍有“包一层”: 采样可见性对齐
+补充根因:
+- LiDAR first return 如果不做“渲染可见性过滤”,会命中时间窗外或 opacity 极低的 splat(渲染里几乎不可见),形成透明外壳.
+
+修正:
+- compute 对齐主 shader 的 4D 时间核裁剪(window/gaussian)与速度位移.
+- 增加 `LidarMinSplatOpacity`(默认 1/255)过滤低 opacity splat,减少外壳噪声.

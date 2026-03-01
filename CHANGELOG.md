@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Tuned burn-ring hide afterglow to linger longer behind the glow front (eased fade timing + two-stage shrink, avoids the "glow passes and everything vanishes" look).
 - Tuned burn-ring hide warp so it cannot push splats outward past the burn front (keeps the afterglow trail visually inside the ring even with strong `WarpStrength`).
+- LiDAR scan visualization now uses a single `LidarBeamCount` (no Up/Down split) and samples vertical beam directions uniformly over `[LidarDownFovDeg..LidarUpFovDeg]` (more down-beams naturally come from a larger downward FOV range).
 
 ### Fixed
 
@@ -35,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed burn-ring visibility animation (Show/Hide) in Editor Edit Mode appearing to "not play" unless the viewport repaints (e.g., mouse movement), by requesting Editor repaints while the animation is in progress.
 - Fixed the burn-ring hide animation sometimes leaving a few splats lingering near the end due to outward edge jitter, by making fade/shrink use a more stable edge distance (ring/glow still jitters).
 - Fixed RenderStyle switching (Gaussian <-> ParticleDots) popping for splats near the screen edge (those culled by the dot frustum cull at the transition endpoints): they now smoothly fade in/out instead of abruptly disappearing/appearing at the start/end of the animation.
+- Fixed LiDAR point cloud looking "too far" / like a thick outer shell by storing the projected depth onto the bin-center ray (instead of the Euclidean distance), making sampling and reconstruction consistent.
 
 ## [1.1.4] - 2026-02-23
 

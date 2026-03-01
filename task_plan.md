@@ -686,3 +686,45 @@
 - 当前状态:
   - OpenSpec change `particle-dots-lidar-scan` apply 24/24 已完成,且已提交到 git.
   - 若你希望收尾归档 OpenSpec change,下一步可以执行 `$openspec-archive-change particle-dots-lidar-scan`.
+
+### 2026-03-01 21:47:41 +0800
+- 用户新反馈与新需求:
+  1) LiDAR 的竖直线束分布不要再拆成 `LidarUpBeams/LidarDownBeams`,希望上下统一,只保留一个 BeamCount.
+  2) LiDAR 点云看起来离高斯点云太远,像在外面包了一层厚壳,需要解释原因并修正.
+- 初步诊断(why):
+  - 当前 range image 存的是 `|pos|`(到 LiDAR 原点的欧氏距离),但渲染时用的是"bin center 的离散射线方向".
+  - 当点不在射线中心方向上时,把 `|pos|` 强行放到射线上会把点推到更远的位置,视觉上就像外面包了一层壳.
+- 本轮计划(准备落地修正):
+  - [x] 1) API/Inspector: 用 `LidarBeamCount` 替代 `LidarUpBeams/LidarDownBeams`,竖直分布按 `[DownFovDeg..UpFovDeg]` 匀角度采样生成 LUT.
+  - [x] 2) first return range 语义修正: range image 存"沿离散射线方向的 depth"(projection),而不是 `|pos|`,消除厚壳偏移.
+  - [x] 3) 更新 compute/LUT/Editor/Tests/Docs,跑 EditMode tests 回归.
+
+### 2026-03-01 22:12:00 +0800
+- 已完成本轮修正:
+  - API/Inspector: 移除 Up/Down beams,统一为 `LidarBeamCount`.
+  - LUT: 竖直方向改为在 `[LidarDownFovDeg..LidarUpFovDeg]` 做匀角度采样(上下统一).
+  - compute: range image 由存 `|pos|^2` 改为存 `depth^2`,其中 `depth=dot(posLidar,dirBinCenter)`(消除“厚壳”外推).
+  - Tests/Docs: 已同步更新 EditMode tests 与 README 文案.
+- 回归(证据):
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_beamcount_shellfix_2026-03-01_221012.xml`
+- 下一步:
+  - git commit: 等你确认后,我再提交这一轮改动.
+
+### 2026-03-01 22:52:00 +0800
+- 用户反馈: LiDAR 点云仍然有“包一层”的观感.
+- 进一步根因分析:
+  - 仅修正 `|pos|` 外推还不够.
+  - LiDAR first return 采样如果不对齐渲染可见性,会命中一些:
+    - 4D 时间窗外(渲染会 discard)的 splats
+    - 或者 opacity 极低(渲染几乎不可见)的透明噪声 splats
+  - 这些 splats 在渲染里不明显,但在 LiDAR 里会被当作“最近障碍”,于是形成一层“透明外壳”.
+- 修正策略:
+  - compute 侧采样对齐渲染:
+    - 4D: window/gaussian 时间核裁剪 + 速度位移(与主 shader 一致)
+    - opacity: 增加 `LidarMinSplatOpacity` 阈值过滤(默认 1/255)
+  - Inspector: 暴露 `LidarMinSplatOpacity`,便于按资产噪声水平调参.
+- 回归(证据):
+  - Unity 6000.3.8f1,EditMode tests: total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_opacity_filter_2026-03-01_225104.xml`

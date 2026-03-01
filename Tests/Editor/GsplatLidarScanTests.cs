@@ -38,8 +38,7 @@ namespace Gsplat.Tests
             r.LidarUpFovDeg = float.PositiveInfinity;
             r.LidarDownFovDeg = float.NaN;
 
-            r.LidarUpBeams = 0;
-            r.LidarDownBeams = 0;
+            r.LidarBeamCount = 0;
 
             r.LidarDepthNear = 1.0f;
             r.LidarDepthFar = 0.5f;
@@ -47,6 +46,7 @@ namespace Gsplat.Tests
             r.LidarPointRadiusPixels = float.NegativeInfinity;
             r.LidarTrailGamma = -1.0f;
             r.LidarIntensity = float.PositiveInfinity;
+            r.LidarMinSplatOpacity = float.NaN;
         }
 
         static void SetLidarFieldsToInvalidValues(GsplatSequenceRenderer r)
@@ -62,8 +62,7 @@ namespace Gsplat.Tests
             r.LidarUpFovDeg = float.PositiveInfinity;
             r.LidarDownFovDeg = float.NaN;
 
-            r.LidarUpBeams = 0;
-            r.LidarDownBeams = 0;
+            r.LidarBeamCount = 0;
 
             r.LidarDepthNear = 1.0f;
             r.LidarDepthFar = 0.5f;
@@ -71,6 +70,7 @@ namespace Gsplat.Tests
             r.LidarPointRadiusPixels = float.NegativeInfinity;
             r.LidarTrailGamma = -1.0f;
             r.LidarIntensity = float.PositiveInfinity;
+            r.LidarMinSplatOpacity = float.NaN;
         }
 
         [Test]
@@ -91,7 +91,7 @@ namespace Gsplat.Tests
             Assert.AreEqual(10.0f, r.LidarUpFovDeg);
             Assert.AreEqual(-30.0f, r.LidarDownFovDeg);
 
-            Assert.AreEqual(GsplatUtils.k_LidarDefaultBeamCount, r.LidarUpBeams + r.LidarDownBeams);
+            Assert.AreEqual(GsplatUtils.k_LidarDefaultBeamCount, r.LidarBeamCount);
 
             Assert.AreEqual(1.0f, r.LidarDepthNear);
             Assert.AreEqual(2.0f, r.LidarDepthFar);
@@ -99,6 +99,7 @@ namespace Gsplat.Tests
             Assert.AreEqual(2.0f, r.LidarPointRadiusPixels);
             Assert.AreEqual(2.0f, r.LidarTrailGamma);
             Assert.AreEqual(1.0f, r.LidarIntensity);
+            Assert.AreEqual(1.0f / 255.0f, r.LidarMinSplatOpacity, 1e-6f);
         }
 
         [Test]
@@ -112,8 +113,9 @@ namespace Gsplat.Tests
             Assert.AreEqual(5.0f, r.LidarRotationHz);
             Assert.AreEqual(10.0f, r.LidarUpdateHz);
             Assert.AreEqual(2048, r.LidarAzimuthBins);
-            Assert.AreEqual(GsplatUtils.k_LidarDefaultBeamCount, r.LidarUpBeams + r.LidarDownBeams);
+            Assert.AreEqual(GsplatUtils.k_LidarDefaultBeamCount, r.LidarBeamCount);
             Assert.AreEqual(2.0f, r.LidarDepthFar);
+            Assert.AreEqual(1.0f / 255.0f, r.LidarMinSplatOpacity, 1e-6f);
         }
 
         [Test]

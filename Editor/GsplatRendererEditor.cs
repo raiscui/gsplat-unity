@@ -23,14 +23,14 @@ namespace Gsplat.Editor
                 nameof(GsplatRenderer.LidarAzimuthBins),
                 nameof(GsplatRenderer.LidarUpFovDeg),
                 nameof(GsplatRenderer.LidarDownFovDeg),
-                nameof(GsplatRenderer.LidarUpBeams),
-                nameof(GsplatRenderer.LidarDownBeams),
+                nameof(GsplatRenderer.LidarBeamCount),
                 nameof(GsplatRenderer.LidarDepthNear),
                 nameof(GsplatRenderer.LidarDepthFar),
                 nameof(GsplatRenderer.LidarPointRadiusPixels),
                 nameof(GsplatRenderer.LidarColorMode),
                 nameof(GsplatRenderer.LidarTrailGamma),
                 nameof(GsplatRenderer.LidarIntensity),
+                nameof(GsplatRenderer.LidarMinSplatOpacity),
                 nameof(GsplatRenderer.HideSplatsWhenLidarEnabled));
             
             if (serializedObject.FindProperty(nameof(GsplatRenderer.AsyncUpload)).boolValue)
@@ -78,20 +78,13 @@ namespace Gsplat.Editor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarAzimuthBins)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarUpFovDeg)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDownFovDeg)));
-                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarUpBeams)));
-                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDownBeams)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarBeamCount)));
 
                 var azBins = Mathf.Max(serializedObject.FindProperty(nameof(GsplatRenderer.LidarAzimuthBins)).intValue, 0);
-                var upBeams = Mathf.Max(serializedObject.FindProperty(nameof(GsplatRenderer.LidarUpBeams)).intValue, 0);
-                var downBeams = Mathf.Max(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDownBeams)).intValue, 0);
-                var beamCount = upBeams + downBeams;
+                var beamCount = Mathf.Max(serializedObject.FindProperty(nameof(GsplatRenderer.LidarBeamCount)).intValue, 0);
                 var pointCount = (long)beamCount * azBins;
                 EditorGUILayout.LabelField(
                     $"有效网格: {beamCount} beams x {azBins} azBins (约 {pointCount:N0} 点)");
-                EditorGUILayout.HelpBox(
-                    "提示: v1 固定总线束数为 128.\n" +
-                    "当你修改 UpBeams/DownBeams 时,Runtime 会自动归一化,确保 UpBeams+DownBeams==128(上少下多).",
-                    MessageType.None);
 
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField("Timing", EditorStyles.boldLabel);
@@ -103,6 +96,7 @@ namespace Gsplat.Editor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarColorMode)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthNear)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthFar)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarMinSplatOpacity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarPointRadiusPixels)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarTrailGamma)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarIntensity)));

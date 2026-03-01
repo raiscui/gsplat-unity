@@ -129,13 +129,14 @@ Enable it in the Inspector:
 
 Default scanning setup (as discussed in the spec):
 
-- Grid: `128 beams` (normalized from `LidarUpBeams + LidarDownBeams`) x `2048 azimuth bins`
+- Grid: `LidarBeamCount = 128` beams x `2048 azimuth bins`
 - Update strategy: `LidarUpdateHz = 10` (full 360 range image rebuild every 0.1s)
 - Scan head visualization: `LidarRotationHz = 5` (brightness front + 1-revolution afterglow)
 - Color modes:
   - `Depth` with `LidarDepthNear = 1m`, `LidarDepthFar = 200m`
   - `SplatColorSH0` (samples the hit splat base color from SH0)
 - Dot size: `LidarPointRadiusPixels` (default `2px` radius)
+- Noise filter: `LidarMinSplatOpacity` (default `1/255`, filters near-invisible splats to avoid a "transparent shell" look)
 
 API example:
 

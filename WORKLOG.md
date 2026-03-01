@@ -134,3 +134,33 @@
   - total=33, passed=31, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_particle_dots_lidar_scan_2026-03-01_204400.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_particle_dots_lidar_scan_2026-03-01_204400.log`
+
+## 2026-03-01 22:12:00 +0800
+- LiDAR: 竖直线束不再拆分 Up/Down,统一为 `LidarBeamCount`,并在 `[LidarDownFovDeg..LidarUpFovDeg]` 匀角度采样生成竖直 LUT.
+- 修复 LiDAR 点云“厚壳”偏移: compute 侧存储 `depth^2 = dot(posLidar,dirBinCenter)^2`,替代旧的 `|pos|^2`,并在 compute 侧绑定 LUT 保持与渲染重建一致.
+
+### 变更内容
+- Runtime:
+  - `Runtime/GsplatRenderer.cs`/`Runtime/GsplatSequenceRenderer.cs`: 参数改为 `LidarBeamCount`,并同步 clamp/调度/渲染调用.
+  - `Runtime/Lidar/GsplatLidarScan.cs`: LUT 生成改为匀角度采样; compute dispatch 绑定 LUT; range 语义改为 depth 投影.
+- Compute:
+  - `Runtime/Shaders/Gsplat.compute`: 移除 Up/Down beams,增加 `_LidarBeamCount` + LUT buffer,range image 改为 depth^2 归约.
+- Editor/Tests/Docs:
+  - `Editor/GsplatRendererEditor.cs`/`Editor/GsplatSequenceRendererEditor.cs`: 面板只显示 `LidarBeamCount`.
+  - `Tests/Editor/GsplatLidarScanTests.cs`: 更新 clamp 断言适配新字段.
+  - `README.md`: 更新 LiDAR 默认网格描述.
+
+### 回归(证据)
+- Unity 6000.3.8f1,EditMode tests:
+  - total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_beamcount_shellfix_2026-03-01_221012.xml`
+
+## 2026-03-01 22:52:00 +0800
+- LiDAR: 进一步修复“包一层”观感,让 first return 采样对齐渲染可见性:
+  - compute 侧加入 4D 时间核裁剪(window/gaussian)与速度位移(与主 shader 一致),避免命中时间窗外的 splats.
+  - 增加 `LidarMinSplatOpacity`(默认 1/255)过滤低 opacity 的透明噪声 splats,避免形成“透明外壳”.
+
+### 回归(证据)
+- Unity 6000.3.8f1,EditMode tests:
+  - total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_opacity_filter_2026-03-01_225104.xml`

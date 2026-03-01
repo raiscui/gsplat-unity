@@ -23,7 +23,9 @@ namespace Gsplat
         // --------------------------------------------------------------------
         // range image:
         // - 每个 cell 对应一个 (beamIndex,azimuthBin).
-        // - minRangeSqBits: float 的 bit 表示(asuint(rangeSq)),用于 atomic min(只适用于非负数).
+        // - minRangeSqBits: float 的 bit 表示(asuint(depthSq)),用于 atomic min(只适用于非负数).
+        //   - depth 的语义是: 点到“bin center 射线”的投影距离(dot(pos,dirCenter)).
+        //   - 这样渲染时把值放回同一条离散射线上不会形成“厚壳”外推.
         // - minSplatId: 与 minRange 对齐的 splat id(用于 SplatColorSH0 模式).
         // --------------------------------------------------------------------
         public GraphicsBuffer MinRangeSqBitsBuffer { get; private set; }
@@ -47,8 +49,6 @@ namespace Gsplat
         int m_cachedLutAzimuthBins;
         int m_cachedLutBeamCount;
 
-        int m_cachedUpBeams;
-        int m_cachedDownBeams;
         float m_cachedUpFovDeg;
         float m_cachedDownFovDeg;
 
@@ -77,19 +77,25 @@ namespace Gsplat
 
         // Compute 参数的 property id(避免字符串查找).
         static readonly int k_positionBuffer = Shader.PropertyToID("_PositionBuffer");
+        static readonly int k_velocityBuffer = Shader.PropertyToID("_VelocityBuffer");
+        static readonly int k_timeBuffer = Shader.PropertyToID("_TimeBuffer");
+        static readonly int k_durationBuffer = Shader.PropertyToID("_DurationBuffer");
         static readonly int k_lidarMinRangeSqBits = Shader.PropertyToID("_LidarMinRangeSqBits");
         static readonly int k_lidarMinSplatId = Shader.PropertyToID("_LidarMinSplatId");
         static readonly int k_lidarMatrixModelToLidar = Shader.PropertyToID("_LidarMatrixModelToLidar");
         static readonly int k_lidarCellCount = Shader.PropertyToID("_LidarCellCount");
         static readonly int k_lidarAzimuthBins = Shader.PropertyToID("_LidarAzimuthBins");
-        static readonly int k_lidarUpBeams = Shader.PropertyToID("_LidarUpBeams");
-        static readonly int k_lidarDownBeams = Shader.PropertyToID("_LidarDownBeams");
         static readonly int k_lidarUpFovRad = Shader.PropertyToID("_LidarUpFovRad");
         static readonly int k_lidarDownFovRad = Shader.PropertyToID("_LidarDownFovRad");
         static readonly int k_lidarDepthNearSq = Shader.PropertyToID("_LidarDepthNearSq");
         static readonly int k_lidarDepthFarSq = Shader.PropertyToID("_LidarDepthFarSq");
+        static readonly int k_lidarMinSplatOpacity = Shader.PropertyToID("_LidarMinSplatOpacity");
         static readonly int k_lidarSplatBaseIndex = Shader.PropertyToID("_LidarSplatBaseIndex");
         static readonly int k_lidarSplatCount = Shader.PropertyToID("_LidarSplatCount");
+        static readonly int k_has4D = Shader.PropertyToID("_Has4D");
+        static readonly int k_timeNormalized = Shader.PropertyToID("_TimeNormalized");
+        static readonly int k_timeModel = Shader.PropertyToID("_TimeModel");
+        static readonly int k_temporalCutoff = Shader.PropertyToID("_TemporalCutoff");
 
         const int k_lidarThreads = 256; // 与 compute shader 内的 LIDAR_GROUP_SIZE 保持一致
 
@@ -178,19 +184,17 @@ namespace Gsplat
             m_lastRangeImageUpdateRealtime = -1.0;
         }
 
-        public void EnsureLutBuffers(int azimuthBins, float upFovDeg, float downFovDeg, int upBeams, int downBeams)
+        public void EnsureLutBuffers(int azimuthBins, float upFovDeg, float downFovDeg, int beamCount)
         {
             // 说明:
             // - LUT 的尺寸规则:
             //   - azSinCos: azimuthBins
-            //   - beamSinCos: beamCount(=upBeams+downBeams)
+            //   - beamSinCos: beamCount
             // - LUT 的内容规则:
             //   - az: [-pi,pi) 的 bin center.
-            //   - beam: 分段线性(上/下)的 bin center,实现“上少下多”.
+            //   - beam: 在 [downFov..upFov] 的 bin center 做匀角度采样(上下统一).
             azimuthBins = Mathf.Max(azimuthBins, 1);
-            upBeams = Mathf.Max(upBeams, 0);
-            downBeams = Mathf.Max(downBeams, 0);
-            var beamCount = Mathf.Max(upBeams + downBeams, 1);
+            beamCount = Mathf.Max(beamCount, 1);
 
             var needRecreateBuffers = !LutValid ||
                                       AzSinCosBuffer.count != azimuthBins ||
@@ -208,22 +212,18 @@ namespace Gsplat
             var needRegen = m_cachedLutAzimuthBins != azimuthBins ||
                             m_cachedLutBeamCount != beamCount ||
                             m_cachedUpFovDeg != upFovDeg ||
-                            m_cachedDownFovDeg != downFovDeg ||
-                            m_cachedUpBeams != upBeams ||
-                            m_cachedDownBeams != downBeams;
+                            m_cachedDownFovDeg != downFovDeg;
 
             if (!needRegen)
                 return;
 
             EnsureAzSinCos(azimuthBins);
-            EnsureBeamSinCos(upFovDeg, downFovDeg, upBeams, downBeams, beamCount);
+            EnsureBeamSinCos(upFovDeg, downFovDeg, beamCount);
 
             m_cachedLutAzimuthBins = azimuthBins;
             m_cachedLutBeamCount = beamCount;
             m_cachedUpFovDeg = upFovDeg;
             m_cachedDownFovDeg = downFovDeg;
-            m_cachedUpBeams = upBeams;
-            m_cachedDownBeams = downBeams;
 
             // 方向映射发生变化时,range image 的语义也改变了,下一次应立即重建.
             m_lastRangeImageUpdateRealtime = -1.0;
@@ -269,7 +269,7 @@ namespace Gsplat
         // --------------------------------------------------------------------
         public bool RenderPointCloud(GsplatSettings settings, Camera camera, int layer, bool gammaToLinear,
             Matrix4x4 lidarLocalToWorld, float lidarTime, float rotationHz,
-            int azimuthBins, int upBeams, int downBeams,
+            int azimuthBins, int beamCount,
             float depthNear, float depthFar, float pointRadiusPixels,
             GsplatLidarColorMode colorMode, float trailGamma, float intensity,
             GraphicsBuffer splatColorBuffer)
@@ -293,9 +293,7 @@ namespace Gsplat
                 return false;
 
             azimuthBins = Mathf.Max(azimuthBins, 1);
-            upBeams = Mathf.Max(upBeams, 0);
-            downBeams = Mathf.Max(downBeams, 0);
-            var beamCount = Mathf.Max(upBeams + downBeams, 1);
+            beamCount = Mathf.Max(beamCount, 1);
             var cellCount = Mathf.Max(azimuthBins * beamCount, 1);
 
             var instanceSize = Mathf.Max((int)settings.SplatInstanceSize, 1);
@@ -350,16 +348,34 @@ namespace Gsplat
         // - 由上层按 UpdateHz 调度调用.
         // - 当 `needsSplatId=false` 时,会跳过 ResolveMinSplatId(Depth 模式更省).
         // --------------------------------------------------------------------
-        public bool TryRebuildRangeImage(ComputeShader computeShader, GraphicsBuffer positionBuffer,
+        public bool TryRebuildRangeImage(ComputeShader computeShader,
+            GraphicsBuffer positionBuffer,
+            GraphicsBuffer velocityBuffer,
+            GraphicsBuffer timeBuffer,
+            GraphicsBuffer durationBuffer,
+            GraphicsBuffer colorBuffer,
+            int has4D,
+            float timeNormalized,
+            int timeModel,
+            float temporalCutoff,
+            float minSplatOpacity,
             Matrix4x4 modelToLidar, int splatBaseIndex, int splatCount,
-            int azimuthBins, int upBeams, int downBeams,
+            int azimuthBins, int beamCount,
             float upFovDeg, float downFovDeg, float depthNear, float depthFar,
             bool needsSplatId)
         {
-            if (!RangeImageValid)
+            // 说明:
+            // - compute 侧会用 LUT 的 bin center 方向来计算 depth(投影),以消除“厚壳”偏移.
+            // - 因此这里必须确保 LUT buffers 已准备好,否则 dispatch 可能 invalid.
+            if (!RangeImageValid || !LutValid)
                 return false;
 
-            if (!computeShader || positionBuffer == null || !positionBuffer.IsValid())
+            if (!computeShader ||
+                positionBuffer == null || !positionBuffer.IsValid() ||
+                velocityBuffer == null || !velocityBuffer.IsValid() ||
+                timeBuffer == null || !timeBuffer.IsValid() ||
+                durationBuffer == null || !durationBuffer.IsValid() ||
+                colorBuffer == null || !colorBuffer.IsValid())
                 return false;
 
             // guard: 无图形设备/不支持 compute 时直接跳过,避免刷 error log.
@@ -371,9 +387,7 @@ namespace Gsplat
                 return false;
 
             azimuthBins = Mathf.Max(azimuthBins, 1);
-            upBeams = Mathf.Max(upBeams, 0);
-            downBeams = Mathf.Max(downBeams, 0);
-            var beamCount = Mathf.Max(upBeams + downBeams, 1);
+            beamCount = Mathf.Max(beamCount, 1);
             var cellCount = Mathf.Max(azimuthBins * beamCount, 1);
 
             // depth gate(平方):
@@ -394,29 +408,47 @@ namespace Gsplat
             m_cmd.SetComputeMatrixParam(computeShader, k_lidarMatrixModelToLidar, modelToLidar);
             m_cmd.SetComputeIntParam(computeShader, k_lidarCellCount, cellCount);
             m_cmd.SetComputeIntParam(computeShader, k_lidarAzimuthBins, azimuthBins);
-            m_cmd.SetComputeIntParam(computeShader, k_lidarUpBeams, upBeams);
-            m_cmd.SetComputeIntParam(computeShader, k_lidarDownBeams, downBeams);
+            m_cmd.SetComputeIntParam(computeShader, k_lidarBeamCount, beamCount);
             m_cmd.SetComputeFloatParam(computeShader, k_lidarUpFovRad, upFovDeg * Mathf.Deg2Rad);
             m_cmd.SetComputeFloatParam(computeShader, k_lidarDownFovRad, downFovDeg * Mathf.Deg2Rad);
             m_cmd.SetComputeFloatParam(computeShader, k_lidarDepthNearSq, nearSq);
             m_cmd.SetComputeFloatParam(computeShader, k_lidarDepthFarSq, farSq);
+            m_cmd.SetComputeFloatParam(computeShader, k_lidarMinSplatOpacity, Mathf.Clamp01(minSplatOpacity));
             m_cmd.SetComputeIntParam(computeShader, k_lidarSplatBaseIndex, splatBaseIndex);
             m_cmd.SetComputeIntParam(computeShader, k_lidarSplatCount, splatCount);
+            m_cmd.SetComputeIntParam(computeShader, k_has4D, has4D != 0 ? 1 : 0);
+            m_cmd.SetComputeFloatParam(computeShader, k_timeNormalized, Mathf.Clamp01(timeNormalized));
+            m_cmd.SetComputeIntParam(computeShader, k_timeModel, timeModel);
+            m_cmd.SetComputeFloatParam(computeShader, k_temporalCutoff, Mathf.Max(temporalCutoff, 0.0f));
 
             // 1) Clear:
             m_cmd.SetComputeBufferParam(computeShader, m_kernelClearRangeImage, k_lidarMinRangeSqBits,
                 MinRangeSqBitsBuffer);
             m_cmd.SetComputeBufferParam(computeShader, m_kernelClearRangeImage, k_lidarMinSplatId, MinSplatIdBuffer);
+            // Metal 稳态兜底: 声明的 LUT buffer 也绑定上.
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelClearRangeImage, k_lidarAzSinCos, AzSinCosBuffer);
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelClearRangeImage, k_lidarBeamSinCos, BeamSinCosBuffer);
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelClearRangeImage, k_positionBuffer, positionBuffer);
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelClearRangeImage, k_velocityBuffer, velocityBuffer);
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelClearRangeImage, k_timeBuffer, timeBuffer);
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelClearRangeImage, k_durationBuffer, durationBuffer);
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelClearRangeImage, k_colorBuffer, colorBuffer);
             var groupsCells = DivRoundUp(cellCount, k_lidarThreads);
             m_cmd.DispatchCompute(computeShader, m_kernelClearRangeImage, groupsCells, 1, 1);
 
             // 2) Reduce min range:
             m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_positionBuffer, positionBuffer);
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_velocityBuffer, velocityBuffer);
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_timeBuffer, timeBuffer);
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_durationBuffer, durationBuffer);
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_colorBuffer, colorBuffer);
             m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_lidarMinRangeSqBits,
                 MinRangeSqBitsBuffer);
             // Metal 稳态兜底:
             // - 即便当前 kernel 不使用某个 buffer,也尽量绑定上,避免某些平台/编译器组合出现“声明了但未绑定就 dispatch invalid”.
             m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_lidarMinSplatId, MinSplatIdBuffer);
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_lidarAzSinCos, AzSinCosBuffer);
+            m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_lidarBeamSinCos, BeamSinCosBuffer);
             var groupsSplats = DivRoundUp(Mathf.Max(splatCount, 1), k_lidarThreads);
             m_cmd.DispatchCompute(computeShader, m_kernelReduceMinRangeSq, groupsSplats, 1, 1);
 
@@ -424,10 +456,17 @@ namespace Gsplat
             if (needsSplatId)
             {
                 m_cmd.SetComputeBufferParam(computeShader, m_kernelResolveMinSplatId, k_positionBuffer, positionBuffer);
+                m_cmd.SetComputeBufferParam(computeShader, m_kernelResolveMinSplatId, k_velocityBuffer, velocityBuffer);
+                m_cmd.SetComputeBufferParam(computeShader, m_kernelResolveMinSplatId, k_timeBuffer, timeBuffer);
+                m_cmd.SetComputeBufferParam(computeShader, m_kernelResolveMinSplatId, k_durationBuffer, durationBuffer);
+                m_cmd.SetComputeBufferParam(computeShader, m_kernelResolveMinSplatId, k_colorBuffer, colorBuffer);
                 m_cmd.SetComputeBufferParam(computeShader, m_kernelResolveMinSplatId, k_lidarMinRangeSqBits,
                     MinRangeSqBitsBuffer);
                 m_cmd.SetComputeBufferParam(computeShader, m_kernelResolveMinSplatId, k_lidarMinSplatId,
                     MinSplatIdBuffer);
+                m_cmd.SetComputeBufferParam(computeShader, m_kernelResolveMinSplatId, k_lidarAzSinCos, AzSinCosBuffer);
+                m_cmd.SetComputeBufferParam(computeShader, m_kernelResolveMinSplatId, k_lidarBeamSinCos,
+                    BeamSinCosBuffer);
                 m_cmd.DispatchCompute(computeShader, m_kernelResolveMinSplatId, groupsSplats, 1, 1);
             }
 
@@ -454,7 +493,7 @@ namespace Gsplat
             AzSinCosBuffer.SetData(m_azSinCosScratch, 0, 0, azimuthBins);
         }
 
-        void EnsureBeamSinCos(float upFovDeg, float downFovDeg, int upBeams, int downBeams, int beamCount)
+        void EnsureBeamSinCos(float upFovDeg, float downFovDeg, int beamCount)
         {
             if (m_beamSinCosScratch == null || m_beamSinCosScratch.Length != beamCount)
                 m_beamSinCosScratch = new Vector2[beamCount];
@@ -462,32 +501,17 @@ namespace Gsplat
             // 注意:
             // - downFovDeg 通常为负数(例如 -30).
             // - upFovDeg 通常为正数(例如 +10).
-            // - 这里用分段的 bin center 生成,每段覆盖 [0,Fov] 的角域.
+            // - 这里用整体的 bin center 匀角度采样,覆盖 [downFov..upFov].
             var upFovRad = Mathf.Deg2Rad * upFovDeg;
             var downFovRad = Mathf.Deg2Rad * downFovDeg;
 
-            var idx = 0;
-
-            if (upBeams > 0)
+            var denom = Mathf.Max(upFovRad - downFovRad, 1e-6f);
+            var inv = 1.0f / beamCount;
+            for (var i = 0; i < beamCount; i++)
             {
-                var invUp = 1.0f / upBeams;
-                for (var i = 0; i < upBeams; i++, idx++)
-                {
-                    var t = (i + 0.5f) * invUp;
-                    var el = t * upFovRad; // >=0
-                    m_beamSinCosScratch[idx] = new Vector2(Mathf.Sin(el), Mathf.Cos(el));
-                }
-            }
-
-            if (downBeams > 0)
-            {
-                var invDown = 1.0f / downBeams;
-                for (var i = 0; i < downBeams; i++, idx++)
-                {
-                    var t = (i + 0.5f) * invDown;
-                    var el = t * downFovRad; // <=0(通常为负)
-                    m_beamSinCosScratch[idx] = new Vector2(Mathf.Sin(el), Mathf.Cos(el));
-                }
+                var t = (i + 0.5f) * inv;
+                var el = downFovRad + t * denom;
+                m_beamSinCosScratch[i] = new Vector2(Mathf.Sin(el), Mathf.Cos(el));
             }
 
             BeamSinCosBuffer.SetData(m_beamSinCosScratch, 0, 0, beamCount);
@@ -520,8 +544,6 @@ namespace Gsplat
 
             m_cachedLutAzimuthBins = 0;
             m_cachedLutBeamCount = 0;
-            m_cachedUpBeams = 0;
-            m_cachedDownBeams = 0;
             m_cachedUpFovDeg = 0.0f;
             m_cachedDownFovDeg = 0.0f;
         }
