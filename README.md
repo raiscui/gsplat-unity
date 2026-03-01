@@ -133,9 +133,10 @@ Default scanning setup (as discussed in the spec):
 - Update strategy: `LidarUpdateHz = 10` (full 360 range image rebuild every 0.1s)
 - Scan head visualization: `LidarRotationHz = 5` (brightness front + 1-revolution afterglow)
 - Color modes:
-  - `Depth` with `LidarDepthNear = 1m`, `LidarDepthFar = 200m`
+  - `Depth` with `LidarDepthNear = 1m`, `LidarDepthFar = 200m` (cyan -> red depth gradient)
   - `SplatColorSH0` (samples the hit splat base color from SH0)
-- Dot size: `LidarPointRadiusPixels` (default `2px` radius)
+- Point size: `LidarPointRadiusPixels` (default `2px` radius)
+- Rendering: screen-space square points (soft edge), additive blend, brightness controlled by `LidarTrailGamma` + `LidarIntensity`
 - Noise filter: `LidarMinSplatOpacity` (default `1/255`, filters near-invisible splats to avoid a "transparent shell" look)
 
 API example:

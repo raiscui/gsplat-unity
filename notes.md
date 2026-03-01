@@ -983,3 +983,8 @@
 修正:
 - compute 对齐主 shader 的 4D 时间核裁剪(window/gaussian)与速度位移.
 - 增加 `LidarMinSplatOpacity`(默认 1/255)过滤低 opacity splat,减少外壳噪声.
+
+### 2026-03-01 23:56:00 +0800 - LiDAR 点渲染观感调整
+- 点形: 从圆点改为正方形(屏幕空间,软边).
+- Blend: 改为 additive,避免余辉衰减时“透明发灰”.
+- Depth 配色: hue 180°->0° 的 HSV 渐变,即 cyan -> red.

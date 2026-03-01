@@ -984,3 +984,7 @@
 - 如果资产含 4D 或存在大量低 opacity 的噪声 splats,LiDAR first return 可能命中这些“渲染不可见”的点,形成透明外壳.
 - 修复: LiDAR compute 侧对齐渲染可见性(4D 时间核裁剪+速度位移),并加入 `LidarMinSplatOpacity`(默认 1/255)过滤.
 - 验证(证据型): XML `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_opacity_filter_2026-03-01_225104.xml`
+
+### 观感调整(亮度/形状/深度配色)
+- 现象: LiDAR 点云在余辉衰减时容易显得“透明发灰”,且圆点不符合当前需求.
+- 修复: `GsplatLidar.shader` 改为 additive blend(且不污染 alpha),点形改为正方形(软边),Depth 配色改为 cyan -> red.

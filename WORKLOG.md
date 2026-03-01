@@ -164,3 +164,14 @@
 - Unity 6000.3.8f1,EditMode tests:
   - total=33, passed=31, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_opacity_filter_2026-03-01_225104.xml`
+
+## 2026-03-01 23:56:00 +0800
+- LiDAR 点云渲染观感调整:
+  - 点形改为正方形(软边).
+  - additive blend,不再出现“透明发灰”.
+  - Depth 配色改为 cyan -> red 渐变.
+
+### 回归(证据)
+- Unity 6000.3.8f1,EditMode tests:
+  - total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_shader_square_2026-03-01_235423.xml`

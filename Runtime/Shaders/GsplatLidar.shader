@@ -15,7 +15,11 @@ Shader "Gsplat/LiDAR"
         Pass
         {
             ZWrite Off
-            Blend One OneMinusSrcAlpha
+            // LiDAR 点云更接近“发光点”的观感:
+            // - 使用 additive blend,避免 alpha 淡出时变成“透明发灰”.
+            // - 亮度由 shader 内的 strength(含 Trail 与 Intensity)控制.
+            // 注意: alpha 通道保持不变(不做 additive),避免污染 CameraTarget 的 alpha.
+            Blend One One, Zero One
             Cull Off
 
             HLSLPROGRAM
@@ -94,16 +98,24 @@ Shader "Gsplat/LiDAR"
                 float trail01 : TEXCOORD2;
             };
 
-            float3 DepthToJet(float t)
+            float3 HsvToRgb(float3 c)
             {
-                // 一个便宜但观感还不错的 jet-ish 色带.
-                // t=0 -> 蓝, t=1 -> 红.
+                // 来自常见的 hsv2rgb 近似实现:
+                // - h,s,v 均为 [0,1]
+                // - 只用 frac/abs/lerp,便宜且跨平台差异小.
+                float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+                float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
+                return c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
+            }
+
+            float3 DepthToCyanRed(float t)
+            {
+                // 深度惯用渐变(从青到红):
+                // - t=0(近) -> cyan(180°)
+                // - t=1(远) -> red(0°)
                 t = saturate(t);
-                float3 c;
-                c.r = saturate(1.5 - abs(4.0 * t - 3.0));
-                c.g = saturate(1.5 - abs(4.0 * t - 2.0));
-                c.b = saturate(1.5 - abs(4.0 * t - 1.0));
-                return c;
+                float h = lerp(0.5, 0.0, t);
+                return HsvToRgb(float3(h, 1.0, 1.0));
             }
 
             bool InitLidarSource(appdata v, out uint cellId, out uint beamIndex, out uint azBin)
@@ -183,7 +195,7 @@ Shader "Gsplat/LiDAR"
                 {
                     float denom = max(_LidarDepthFar - _LidarDepthNear, 1e-6);
                     float depth01 = saturate((range - _LidarDepthNear) / denom);
-                    baseRgb = DepthToJet(depth01);
+                    baseRgb = DepthToCyanRed(depth01);
                 }
                 else
                 {
@@ -229,26 +241,29 @@ Shader "Gsplat/LiDAR"
 
             float4 frag(v2f i) : SV_Target
             {
-                float A = dot(i.uv, i.uv);
-                if (A > 1.0) discard;
+                // 形状: 正方形点(屏幕空间)
+                float2 a = abs(i.uv);
+                float d = max(a.x, a.y); // Chebyshev distance
+                if (d > 1.0) discard;
 
-                // 实心 + 柔边(与 ParticleDots 保持一致).
-                const float kDotFeather = 0.15;
-                float inner = 1.0 - kDotFeather;
-                float inner2 = inner * inner;
-                float alphaDot = 1.0 - smoothstep(inner2, 1.0, A);
+                // 实心 + 柔边:
+                // - feather 越小越“硬方块”,越大越柔.
+                const float kSquareFeather = 0.10;
+                float inner = 1.0 - kSquareFeather;
+                float alphaShape = 1.0 - smoothstep(inner, 1.0, d);
 
-                float alpha = alphaDot * saturate(i.trail01);
-                if (alpha < 1.0 / 255.0) discard;
-
-                // premultiplied:
-                // - alpha 表示“点的覆盖率 + 扫描余辉衰减”(<=1,避免 Blend 出现负 oneMinusSrcAlpha).
-                // - _LidarIntensity 只作为亮度倍率,允许 >1 做 HDR 亮点(不影响 alpha 稳态).
+                // 强度语义:
+                // - Trail 与 Shape 共同决定点的可见性/覆盖率.
+                // - Intensity 只控制亮度,避免出现“调强度=变透明”的错觉.
+                float trail = saturate(i.trail01);
                 float brightness = max(_LidarIntensity, 0.0);
-                float3 rgb = i.rgb * alpha * brightness;
+                float strength = alphaShape * trail * brightness;
+                if (strength < 1.0 / 255.0) discard;
+
+                float3 rgb = i.rgb * strength;
                 if (_GammaToLinear)
-                    return float4(GammaToLinearSpace(rgb), alpha);
-                return float4(rgb, alpha);
+                    return float4(GammaToLinearSpace(rgb), 1.0);
+                return float4(rgb, 1.0);
             }
             ENDHLSL
         }

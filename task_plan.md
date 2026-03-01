@@ -728,3 +728,15 @@
 - 回归(证据):
   - Unity 6000.3.8f1,EditMode tests: total=33, passed=31, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_opacity_filter_2026-03-01_225104.xml`
+
+### 2026-03-01 23:56:00 +0800
+- 用户新需求(观感):
+  - LiDAR 点云不要“透明发灰”,亮度要更正常.
+  - 点形改为正方形.
+  - Depth 颜色用常见深度渐变: cyan -> red.
+- 落地:
+  - `GsplatLidar.shader` 改为 additive blend(且不污染 alpha 通道),并把点形从圆改为正方形(软边).
+  - Depth 配色改为 HSV 渐变(hue 180°->0°),即 cyan -> red.
+- 回归(证据):
+  - Unity 6000.3.8f1,EditMode tests: total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_shader_square_2026-03-01_235423.xml`
