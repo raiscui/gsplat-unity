@@ -55,6 +55,9 @@ namespace Gsplat
                     settings.Shader =
                         AssetDatabase.LoadAssetAtPath<Shader>(GsplatUtils.k_PackagePath +
                                                               "Runtime/Shaders/Gsplat.shader");
+                    settings.LidarShader =
+                        AssetDatabase.LoadAssetAtPath<Shader>(GsplatUtils.k_PackagePath +
+                                                              "Runtime/Shaders/GsplatLidar.shader");
                     settings.ComputeShader =
                         AssetDatabase.LoadAssetAtPath<ComputeShader>(GsplatUtils.k_PackagePath +
                                                                      "Runtime/Shaders/Gsplat.compute");
@@ -73,6 +76,7 @@ namespace Gsplat
         }
 
         public Shader Shader;
+        public Shader LidarShader;
         public ComputeShader ComputeShader;
         public ComputeShader ShDeltaComputeShader;
 
@@ -142,11 +146,13 @@ namespace Gsplat
         public bool EnableEditorDiagnostics = false;
 
         public Material[] Materials { get; private set; }
+        public Material LidarMaterial { get; private set; }
         public Mesh Mesh { get; private set; }
 
         public bool Valid => Materials?.Length != 0 && Mesh && SplatInstanceSize > 0;
 
         Shader m_prevShader;
+        Shader m_prevLidarShader;
         ComputeShader m_prevComputeShader;
         uint m_prevSplatInstanceSize;
 
@@ -205,17 +211,26 @@ namespace Gsplat
                 foreach (var mat in Materials)
                     DestroyImmediate(mat);
 
-            if (!Shader)
+            if (LidarMaterial)
+                DestroyImmediate(LidarMaterial);
+
+            Materials = null;
+            LidarMaterial = null;
+
+            if (Shader)
             {
-                Materials = null;
-                return;
+                Materials = new Material[4];
+                for (var i = 0; i < 4; ++i)
+                {
+                    Materials[i] = new Material(Shader) { hideFlags = HideFlags.HideAndDontSave };
+                    Materials[i].EnableKeyword($"SH_BANDS_{i}");
+                }
             }
 
-            Materials = new Material[4];
-            for (var i = 0; i < 4; ++i)
+            if (LidarShader)
             {
-                Materials[i] = new Material(Shader) { hideFlags = HideFlags.HideAndDontSave };
-                Materials[i].EnableKeyword($"SH_BANDS_{i}");
+                // LiDAR 点云不依赖 SH keyword,只需要一个材质即可.
+                LidarMaterial = new Material(LidarShader) { hideFlags = HideFlags.HideAndDontSave };
             }
         }
 
@@ -229,11 +244,19 @@ namespace Gsplat
                     AssetDatabase.LoadAssetAtPath<ComputeShader>(GsplatUtils.k_PackagePath +
                                                                  "Runtime/Shaders/GsplatShDelta.compute");
             }
+
+            if (!LidarShader)
+            {
+                LidarShader =
+                    AssetDatabase.LoadAssetAtPath<Shader>(GsplatUtils.k_PackagePath +
+                                                          "Runtime/Shaders/GsplatLidar.shader");
+            }
 #endif
-            if (Shader != m_prevShader)
+            if (Shader != m_prevShader || LidarShader != m_prevLidarShader)
             {
                 CreateMaterials();
                 m_prevShader = Shader;
+                m_prevLidarShader = LidarShader;
             }
 
             if (ComputeShader != m_prevComputeShader)
@@ -254,6 +277,7 @@ namespace Gsplat
         {
             CreateMaterials();
             m_prevShader = Shader;
+            m_prevLidarShader = LidarShader;
             InitSorterSafely(ComputeShader);
             m_prevComputeShader = ComputeShader;
 

@@ -616,3 +616,66 @@
   - [x] 为新增 change 目录与 md 文件补齐 Unity `.meta`(保持与现有 openspec change 一致).
 - 当前状态:
   - OpenSpec: artifacts 已 complete,可进入 apply/implementation 阶段.
+
+### 2026-03-01 17:06:00 +0800
+- 开始实现 OpenSpec change: `particle-dots-lidar-scan`(schema: spec-driven).
+- 目标:
+  - 增加可选的"车载 LiDAR 采集显示"(默认关闭),不影响现有 Gaussian/ParticleDots.
+  - first return(第一回波): 每个 (beam,azBin) 只保留最近距离.
+  - 默认分辨率: 128 beams x 2048 azimuth bins.
+  - 时间语义: RotationHz=5(扫描前沿),UpdateHz=10(0.1s 全量重建),保留 1 圈余辉.
+  - 颜色模式: Depth(1m..200m) / SplatColor(SH0).
+  - 点大小: 2px radius 默认,可调.
+  - 可选: 隐藏 splat 渲染但保留 LiDAR 采样.
+- 本轮计划:
+  - [ ] 1) Runtime: 增加 LiDAR 字段与 clamp.
+  - [ ] 2) Runtime: range image/LUT 资源生命周期.
+  - [ ] 3) Compute: Clear/Reduce/Resolve kernels + UpdateHz 调度.
+  - [ ] 4) Render: LiDAR 点云 shader + draw 提交.
+  - [ ] 5) Editor: Inspector 调参区 + EditMode repaint 驱动.
+  - [ ] 6) Tests/Docs: 最小回归 + README/CHANGELOG.
+  - [ ] 7) 回归验证 + git commit.
+- 当前状态:
+  - apply 0/24 tasks.
+
+### 2026-03-01 20:31:32 +0800
+- 我正在继续推进 OpenSpec change: `particle-dots-lidar-scan` 的 apply 阶段.
+- 当前进展(已落地但尚未提交):
+  - apply tasks 1-4 已完成(14/24).
+  - Runtime 已新增 LiDAR 采集显示的 compute+shader+资源管理,并已在 `GsplatRenderer`/`GsplatSequenceRenderer` 接入:
+    - `Runtime/Lidar/GsplatLidarScan.cs`: range image/LUT/UpdateHz 门禁/compute dispatch/draw 提交.
+    - `Runtime/Shaders/Gsplat.compute`: 新增 Clear/Reduce/Resolve kernels.
+    - `Runtime/Shaders/GsplatLidar.shader`: LiDAR 规则点云圆点渲染(深度色/SH0 采样色,扫描前沿+余辉).
+    - `Runtime/GsplatRenderer.cs`/`Runtime/GsplatSequenceRenderer.cs`: 新增序列化字段,clamp,UpdateHz 调度与渲染提交.
+    - `Runtime/GsplatSettings.cs`: 新增 LiDAR shader/material 引用与自动创建.
+- 之所以还要继续做:
+  - 目前 tasks 5-8 还未完成,包括“隐藏 splat 但 LiDAR 仍可采样”的完整门禁,Inspector 调参区,EditMode 连续刷新,单测与文档.
+- 接下来计划(继续按 tasks.md 逐项完成并勾选):
+  - [ ] 5) splat 隐藏与资源复用: 彻底解耦"保持 splat buffers"与"提交 splat sort/draw",补齐 `GsplatSequenceRenderer` 的门禁.
+  - [ ] 6) Editor: 为两个 Renderer 的 Inspector 增加 LiDAR 调参区,并在 EditMode 下仅在 EnableLidarScan 时驱动受控 Repaint.
+  - [ ] 7) Tests: 增加 EditMode 单测(参数 clamp + UpdateHz 门禁,不跑 GPU).
+  - [ ] 8) Docs: 更新 README/CHANGELOG,并补一份手动验证清单.
+  - [ ] 9) 回归: 跑 Unity EditMode tests,确保无编译错误与行为回归.
+  - [ ] 10) git commit: 提交本次变更(含 `.meta`).
+- 当前状态:
+  - apply 14/24 tasks,remaining 10.
+
+### 2026-03-01 20:47:37 +0800
+- 我已经完成 OpenSpec change `particle-dots-lidar-scan` 的全部实现任务:
+  - apply 24/24 tasks.
+- 关键补齐点(相较于 14/24 时的状态):
+  - `GsplatSequenceRenderer` 补齐 splat sort/draw 与 LiDAR 的解耦门禁,HideSplatsWhenLidarEnabled 时不提交 splat sort/draw,但 LiDAR 正常.
+  - Editor: 两个 Inspector 增加 LiDAR 调参区 + 有效网格提示 + Origin 缺失提示.
+  - EditMode: 启用 LiDAR 时受控驱动 Repaint,保证扫描前沿/余辉连续播放.
+  - Tests: 增加 clamp 与 UpdateHz 门禁回归.
+  - Docs: README/CHANGELOG 更新,补手动验证清单.
+- 回归(证据):
+  - 注意: 主项目当前被另一个 Unity 实例占用(项目锁),因此测试在独立临时项目 `.../_tmp_gsplat_pkgtests` 上执行.
+  - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - total=33, passed=31, failed=0, skipped=2
+  - XML:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_particle_dots_lidar_scan_2026-03-01_204400.xml`
+  - log:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_particle_dots_lidar_scan_2026-03-01_204400.log`
+- 下一步(马上做):
+  - [ ] git commit: 提交本次变更(含 `.meta`).

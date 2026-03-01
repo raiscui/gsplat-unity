@@ -95,3 +95,42 @@
   - BeamCount=128,AzimuthBins=2048,"上少下多"竖直分布.
   - 颜色模式: Depth(1m..200m) / SplatColor(SH0).
   - 点大小: 默认 2px,可调.
+
+## 2026-03-01 20:47:37 +0800
+- 落地 OpenSpec change: `particle-dots-lidar-scan`(apply 24/24 tasks).
+- 新增能力: Experimental "LiDAR scan visualization"(车载风格点云采集观感),默认关闭,不影响原有 Gaussian/ParticleDots.
+
+### 变更内容
+- Runtime:
+  - `Runtime/Lidar/GsplatLidarScan.cs`: LiDAR range image/LUT 生命周期 + UpdateHz 门禁 + compute dispatch + 点云 draw 提交(含 Metal 必绑资源策略).
+  - `Runtime/GsplatRenderer.cs`:
+    - 新增 LiDAR 参数字段 + clamp.
+    - UpdateHz=10 触发 range image 重建,RotationHz=5 做扫描前沿/余辉亮度.
+    - 解耦 splat buffers 与 splat sort/draw: `HideSplatsWhenLidarEnabled=true` 时不提交 splat sort/draw,但 LiDAR compute/draw 正常.
+    - EditMode: 启用 LiDAR 时受控驱动 `RepaintAllViews`,保证扫描前沿连续播放.
+  - `Runtime/GsplatSequenceRenderer.cs`:
+    - 同步 LiDAR 参数/compute/draw.
+    - 同步解耦门禁(显式 `IGsplat.SplatCount` 返回 0 跳过 sorter),HideSplatsWhenLidarEnabled 时仅显示 LiDAR 点云.
+    - EditMode: 同款 repaint 驱动.
+  - `Runtime/GsplatSettings.cs`: 增加 `LidarShader` 与 `LidarMaterial`,用于 LiDAR 点云绘制.
+  - `Runtime/GsplatUtils.cs`: 新增 `GsplatLidarColorMode` 与 beams 归一化工具(固定 total=128,上少下多).
+- Compute/Shader:
+  - `Runtime/Shaders/Gsplat.compute`: 新增 LiDAR kernels:
+    - `ClearRangeImage`
+    - `ReduceMinRangeSq`(first return rangeSq 原子 min)
+    - `ResolveMinSplatId`(两阶段保证 range/id 严格对应,确定性 tie-break).
+  - `Runtime/Shaders/GsplatLidar.shader`: 新增 LiDAR 点云渲染 shader(圆点/圆片,px radius,Depth/SH0 颜色,扫描余辉,Intensity 亮度倍率).
+- Editor:
+  - `Editor/GsplatRendererEditor.cs`/`Editor/GsplatSequenceRendererEditor.cs`:
+    - 增加 LiDAR 调参区(集中展示常用参数,显示有效网格尺寸/点数,Origin 缺失提示).
+- Tests:
+  - `Tests/Editor/GsplatLidarScanTests.cs`: 参数 clamp + UpdateHz 门禁纯逻辑回归(不跑 GPU compute).
+- Docs:
+  - `README.md`: 增加 LiDAR 用法/参数/API 示例 + 手动验证清单.
+  - `CHANGELOG.md`: Unreleased 记录新增 LiDAR 扫描点云能力.
+
+### 回归(证据)
+- Unity 6000.3.8f1,EditMode tests:
+  - total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_particle_dots_lidar_scan_2026-03-01_204400.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_particle_dots_lidar_scan_2026-03-01_204400.log`

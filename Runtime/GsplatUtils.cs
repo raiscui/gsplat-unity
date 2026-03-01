@@ -17,13 +17,71 @@ namespace Gsplat
         ParticleDots = 1
     }
 
+    /// <summary>
+    /// LiDAR 点云颜色模式.
+    /// - Depth: 由距离(DepthNear..DepthFar)映射颜色.
+    /// - SplatColorSH0: 采样 first return 对应 splat 的基础颜色(SH0).
+    /// </summary>
+    public enum GsplatLidarColorMode
+    {
+        Depth = 0,
+        SplatColorSH0 = 1
+    }
+
     public static class GsplatUtils
     {
         public const string k_PackagePath = "Packages/wu.yize.gsplat/";
+        public const int k_LidarDefaultBeamCount = 128;
+        public const int k_LidarDefaultUpBeams = 16;
+        public const int k_LidarDefaultDownBeams = 112;
 
         public static float Sigmoid(float x)
         {
             return 1.0f / (1.0f + Mathf.Exp(-x));
+        }
+
+        // --------------------------------------------------------------------
+        // LiDAR: Up/Down beams 规范化(固定总线束数)
+        // - v1 目标: 固定 total=128,并允许用户用 UpBeams/DownBeams 调整“上少下多”的比例.
+        // - 规则:
+        //   1) clamp 到 [0,total]
+        //   2) 若 sum<=0,回退到默认 16/112
+        //   3) 否则按比例缩放到 sum==total(DownBeams 由 total-up 推导,保证严格相加)
+        // --------------------------------------------------------------------
+        public static void NormalizeLidarUpDownBeamsToFixedTotal(ref int upBeams, ref int downBeams,
+            int totalBeams = k_LidarDefaultBeamCount,
+            int defaultUpBeams = k_LidarDefaultUpBeams,
+            int defaultDownBeams = k_LidarDefaultDownBeams)
+        {
+            totalBeams = Math.Max(totalBeams, 1);
+
+            upBeams = Mathf.Clamp(upBeams, 0, totalBeams);
+            downBeams = Mathf.Clamp(downBeams, 0, totalBeams);
+
+            var sum = upBeams + downBeams;
+            if (sum <= 0)
+            {
+                upBeams = Mathf.Clamp(defaultUpBeams, 0, totalBeams);
+                downBeams = Mathf.Clamp(defaultDownBeams, 0, totalBeams);
+
+                // 默认值也必须保证严格相加.
+                sum = upBeams + downBeams;
+                if (sum != totalBeams)
+                {
+                    upBeams = Mathf.Clamp(upBeams, 0, totalBeams);
+                    downBeams = totalBeams - upBeams;
+                }
+                return;
+            }
+
+            if (sum == totalBeams)
+                return;
+
+            // 按比例缩放:
+            // - 只保留 UpBeams 的比例,DownBeams 由 total-up 推导,避免出现 sum 偏差.
+            var scale = (float)totalBeams / sum;
+            upBeams = Mathf.Clamp(Mathf.RoundToInt(upBeams * scale), 0, totalBeams);
+            downBeams = totalBeams - upBeams;
         }
 
         // --------------------------------------------------------------------

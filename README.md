@@ -115,6 +115,46 @@ r.SetRenderStyle(GsplatRenderStyle.Gaussian, animated: false); // hard switch
 r.SetRenderStyle(GsplatRenderStyle.Gaussian, animated: true, durationSeconds: 0.3f); // custom duration
 ```
 
+### LiDAR scan visualization (experimental)
+
+Both `Gsplat Renderer` and `GsplatSequenceRenderer` include an optional "car-like LiDAR scan" visualization mode.
+
+Instead of rendering the hit splats directly, it renders a **regular point grid** (beam x azimuthBins), while using the splats as the sampling targets ("environment points"). This makes the scan lines look tidy and gives proper **first return** occlusion semantics.
+
+Enable it in the Inspector:
+
+- `EnableLidarScan = true`
+- `LidarOrigin` = a `Transform` that represents the LiDAR pose (position + rotation)
+- Optional: `HideSplatsWhenLidarEnabled = true` to render only the LiDAR point cloud (no splats)
+
+Default scanning setup (as discussed in the spec):
+
+- Grid: `128 beams` (normalized from `LidarUpBeams + LidarDownBeams`) x `2048 azimuth bins`
+- Update strategy: `LidarUpdateHz = 10` (full 360 range image rebuild every 0.1s)
+- Scan head visualization: `LidarRotationHz = 5` (brightness front + 1-revolution afterglow)
+- Color modes:
+  - `Depth` with `LidarDepthNear = 1m`, `LidarDepthFar = 200m`
+  - `SplatColorSH0` (samples the hit splat base color from SH0)
+- Dot size: `LidarPointRadiusPixels` (default `2px` radius)
+
+API example:
+
+```csharp
+var r = GetComponent<GsplatRenderer>();
+r.EnableLidarScan = true;
+r.LidarOrigin = lidarTransform;
+r.HideSplatsWhenLidarEnabled = true;
+r.LidarColorMode = GsplatLidarColorMode.Depth;
+r.LidarPointRadiusPixels = 2.0f;
+```
+
+Manual verification checklist:
+
+- 360-degree scan head rotates at ~`LidarRotationHz` (default 5Hz)
+- 1-revolution trail fades behind the scan head (`LidarTrailGamma`, `LidarIntensity`)
+- `Depth` / `SplatColorSH0` switching works
+- `HideSplatsWhenLidarEnabled=true` stops splat sort/draw while LiDAR still works
+
 ### 4DGS motion model and visibility
 
 When a `Gsplat Asset` contains 4D fields (`Velocities/Times/Durations`), splat centers are evaluated at time `t`:

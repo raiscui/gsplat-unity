@@ -14,7 +14,24 @@ namespace Gsplat.Editor
             serializedObject.Update();
 
             DrawPropertiesExcluding(serializedObject, "m_Script", nameof(GsplatRenderer.UploadBatchSize),
-                nameof(GsplatRenderer.RenderBeforeUploadComplete));
+                nameof(GsplatRenderer.RenderBeforeUploadComplete),
+                // LiDAR: 这里做一个更清晰的调参区,避免字段散落在默认绘制里.
+                nameof(GsplatRenderer.EnableLidarScan),
+                nameof(GsplatRenderer.LidarOrigin),
+                nameof(GsplatRenderer.LidarRotationHz),
+                nameof(GsplatRenderer.LidarUpdateHz),
+                nameof(GsplatRenderer.LidarAzimuthBins),
+                nameof(GsplatRenderer.LidarUpFovDeg),
+                nameof(GsplatRenderer.LidarDownFovDeg),
+                nameof(GsplatRenderer.LidarUpBeams),
+                nameof(GsplatRenderer.LidarDownBeams),
+                nameof(GsplatRenderer.LidarDepthNear),
+                nameof(GsplatRenderer.LidarDepthFar),
+                nameof(GsplatRenderer.LidarPointRadiusPixels),
+                nameof(GsplatRenderer.LidarColorMode),
+                nameof(GsplatRenderer.LidarTrailGamma),
+                nameof(GsplatRenderer.LidarIntensity),
+                nameof(GsplatRenderer.HideSplatsWhenLidarEnabled));
             
             if (serializedObject.FindProperty(nameof(GsplatRenderer.AsyncUpload)).boolValue)
             {
@@ -22,6 +39,78 @@ namespace Gsplat.Editor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.UploadBatchSize)));
                 EditorGUILayout.PropertyField(
                     serializedObject.FindProperty(nameof(GsplatRenderer.RenderBeforeUploadComplete)));
+                EditorGUI.indentLevel--;
+            }
+
+            // ----------------------------------------------------------------
+            // LiDAR 调参区:
+            // - 目标: 把 LiDAR 常用参数集中展示,并提供“有效网格尺寸/点数”的即时反馈,便于用户快速调参.
+            // - 注意: 这些字段的 clamp/归一化逻辑在 Runtime 的 OnValidate/Update 内完成.
+            // ----------------------------------------------------------------
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("LiDAR Scan (Experimental)", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "说明:\n" +
+                "- 这是一个\"车载 LiDAR 采集观感\"的规则点云显示模式.\n" +
+                "- splat 可隐藏但仍作为\"环境采样点\"参与 first return(第一回波).\n" +
+                "- EditMode 下会在启用时自动驱动 Repaint,用于扫描前沿/余辉的连续播放.",
+                MessageType.Info);
+
+            var enableLidarProp = serializedObject.FindProperty(nameof(GsplatRenderer.EnableLidarScan));
+            EditorGUILayout.PropertyField(enableLidarProp);
+
+            if (enableLidarProp.boolValue)
+            {
+                EditorGUI.indentLevel++;
+
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarOrigin)));
+                var originProp = serializedObject.FindProperty(nameof(GsplatRenderer.LidarOrigin));
+                if (originProp.objectReferenceValue == null)
+                {
+                    EditorGUILayout.HelpBox(
+                        "EnableLidarScan=true 但 LidarOrigin 为空.\n" +
+                        "LiDAR 点云不会渲染. 请指定一个 Transform(位置+朝向作为 LiDAR 安装位姿).",
+                        MessageType.Warning);
+                }
+
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("Grid / FOV", EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarAzimuthBins)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarUpFovDeg)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDownFovDeg)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarUpBeams)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDownBeams)));
+
+                var azBins = Mathf.Max(serializedObject.FindProperty(nameof(GsplatRenderer.LidarAzimuthBins)).intValue, 0);
+                var upBeams = Mathf.Max(serializedObject.FindProperty(nameof(GsplatRenderer.LidarUpBeams)).intValue, 0);
+                var downBeams = Mathf.Max(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDownBeams)).intValue, 0);
+                var beamCount = upBeams + downBeams;
+                var pointCount = (long)beamCount * azBins;
+                EditorGUILayout.LabelField(
+                    $"有效网格: {beamCount} beams x {azBins} azBins (约 {pointCount:N0} 点)");
+                EditorGUILayout.HelpBox(
+                    "提示: v1 固定总线束数为 128.\n" +
+                    "当你修改 UpBeams/DownBeams 时,Runtime 会自动归一化,确保 UpBeams+DownBeams==128(上少下多).",
+                    MessageType.None);
+
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("Timing", EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarUpdateHz)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarRotationHz)));
+
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("Visual", EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarColorMode)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthNear)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthFar)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarPointRadiusPixels)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarTrailGamma)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarIntensity)));
+
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("Splat Visibility", EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.HideSplatsWhenLidarEnabled)));
+
                 EditorGUI.indentLevel--;
             }
 

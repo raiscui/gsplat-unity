@@ -886,3 +886,74 @@
 - Unity 6000.3.8f1 EditMode tests:
   - total=30, passed=28, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_popfix_2026-02-26.xml`
+
+---
+
+## 2026-03-01 20:47:37 +0800: LiDAR 采集显示(车载风格)落地记录
+
+### 目标回顾
+- 在 `ParticleDots`(点云视图)基础上,增加一个"看起来像车载 LiDAR 扫描采集"的显示模式.
+- 关键语义:
+  - 规则点云(beam x azimuthBins),让扫描线整齐.
+  - first return(第一回波): 每个 (beam,azBin) 只保留最近距离,体现遮挡/第一回波.
+  - 360 度扫描前沿 + 1 圈余辉,参数:
+    - RotationHz=5Hz(扫描头)
+    - UpdateHz=10Hz(0.1s 全量重建 range image,方案 X)
+  - 颜色模式可切:
+    - Depth(DepthNear=1m..DepthFar=200m)
+    - SplatColor(SH0)(采样命中 splat 的基础色)
+  - 点大小: px radius,默认 2px 可调.
+  - splat 可以完全不显示,仅作为"环境采样点".
+
+### 关键实现点(为什么这样做)
+1) first return 选择 GPU range image 归约
+- 每个 cell 对应一个方向 `(beamIndex, azBin)`.
+- Pass1: 原子 min 归约 `minRangeSqBits(uint)`:
+  - 使用 `rangeSq` 的 float bit 表示,用 `InterlockedMin` 归约,避免 float atomic 的跨平台差异.
+- Pass2: `ResolveMinSplatId` 再遍历 splat:
+  - 只有 `rangeSqBits == minRangeSqBits[cell]` 才写入 `minSplatId[cell]`.
+  - tie-breaker: 取最小 splatId,保证确定性.
+- 这样保证了 SplatColor 模式不会出现"距离更新了但颜色 id 没跟上"的偶发错配.
+
+2) 更新策略选方案 X(10Hz 全量重建) + 渲染阶段做扫描余辉
+- compute 只在 UpdateHz 门禁触发时更新(默认 10Hz).
+- 扫描前沿/余辉不需要额外历史 buffer,仅用当前 time:
+  - `headBin = floor(frac(time * RotationHz) * AzimuthBins)`
+  - `deltaBins = (headBin - azBin + AzimuthBins) % AzimuthBins`
+  - `trail = pow(1 - deltaBins/AzimuthBins, TrailGamma)`
+
+3) 规则点云渲染: LUT + range 重建 world pos
+- LUT:
+  - `azSinCos[AzimuthBins] = (sin,cos)`
+  - `beamSinCos[BeamCount] = (sin(elev),cos(elev))`
+- vertex 从 LUT + range 重建 `dirLocal`,再用 `LidarOrigin.localToWorldMatrix` 得到世界坐标.
+- 点外观: 实心圆点 + 柔边,大小语义为 px radius.
+
+4) 强度(Intensity)语义修正: alpha 稳态,亮度可 >1
+- 为了避免 premul alpha 下 `alpha>1` 导致 Blend 出现负 oneMinusSrcAlpha(画面异常),
+  LiDAR shader 将:
+  - alpha = dotShapeAlpha * trail01(<=1)
+  - rgb = baseRgb * alpha * Intensity(亮度倍率可 >1 用于 HDR 亮点)
+
+5) "隐藏 splat 但保留 LiDAR 采样"的门禁解耦
+- 关键点是把两件事拆开:
+  - 保持/创建 splat buffers(供 LiDAR 采样 Position/Color).
+  - 提交 splat 的 sort/draw(性能开销大,LiDAR-only 时应停掉).
+- 落地策略:
+  - `ShouldSubmitSplatsThisFrame()`:
+    - `EnableGsplatBackend=false` 或 `HideSplatsWhenLidarEnabled=true` 时直接返回 false.
+  - `IGsplat.SplatCount` 显式返回 0(当不提交 splats 时),从根源跳过 sorter 的 compute dispatch.
+  - 仍保留 LiDAR 的 compute/draw 链路正常运行.
+
+6) EditMode 连续刷新(用户体验)
+- LiDAR 扫描前沿是纯时间驱动,EditMode 下如果没有持续 repaint,会“看起来不动”.
+- 复用现有 Editor ticker 机制:
+  - 当 `EnableLidarScan=true && LidarOrigin!=null` 时注册 ticker.
+  - ticker 内按 60fps 节流请求 `QueuePlayerLoopUpdate + RepaintAllViews`.
+
+### 回归(证据)
+- Unity 6000.3.8f1,EditMode tests:
+  - 命令: `Unity -batchmode -nographics -projectPath .../_tmp_gsplat_pkgtests -runTests -testPlatform EditMode -testFilter Gsplat.Tests -testResults ...`
+  - 结果: total=33, passed=31, failed=0, skipped=2
+  - XML:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_particle_dots_lidar_scan_2026-03-01_204400.xml`

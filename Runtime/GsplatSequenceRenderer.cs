@@ -92,6 +92,113 @@ namespace Gsplat
         public float RenderStyleSwitchDurationSeconds = 1.5f;
 
         // --------------------------------------------------------------------
+        // LiDAR 采集显示(车载风格,规则点云)
+        // - 默认关闭,不影响现有 Gaussian/ParticleDots.
+        // - 复用序列后端解码出来的 splat buffers(Position/Color...)作为"环境采样点".
+        // - GPU compute 生成规则 range image(beam x azimuthBin),并具备第一回波(first return)遮挡语义.
+        // --------------------------------------------------------------------
+        [Header("LiDAR Scan (Experimental)")]
+        [Tooltip("是否启用 LiDAR 采集显示.\n" +
+                 "说明:\n" +
+                 "- 默认关闭,不影响现有渲染.\n" +
+                 "- 启用后会额外 dispatch compute(按 UpdateHz)生成 range image,并绘制规则点云.\n" +
+                 "- 如果 LidarOrigin 为空,将不会渲染 LiDAR 点云(并输出一次提示日志).")]
+        public bool EnableLidarScan;
+
+        [Tooltip("LiDAR 原点与朝向.\n" +
+                 "系统将以该 Transform 的 world position/rotation 作为 LiDAR 安装位姿.\n" +
+                 "注意: EnableLidarScan=true 时该字段必须指定.")]
+        public Transform LidarOrigin;
+
+        [Min(0.0f)]
+        [Tooltip("LiDAR 扫描头旋转频率(Hz).\n" +
+                 "说明:\n" +
+                 "- 仅用于渲染阶段的扫描前沿/余辉亮度调制.\n" +
+                 "- 默认 5Hz(1 圈 0.2 秒).\n" +
+                 "- 当值非法或 <=0 时会回退到安全默认值(5Hz).")]
+        public float LidarRotationHz = 5.0f;
+
+        [Min(0.0f)]
+        [Tooltip("LiDAR range image 的更新频率(Hz).\n" +
+                 "说明:\n" +
+                 "- v1 采用方案 X: 每次更新都会全量重建 360 range image.\n" +
+                 "- 默认 10Hz(0.1 秒更新一次).\n" +
+                 "- 当值非法或 <=0 时会回退到安全默认值(10Hz).")]
+        public float LidarUpdateHz = 10.0f;
+
+        [Min(64)]
+        [Tooltip("水平角分辨率(azimuth bins).\n" +
+                 "说明:\n" +
+                 "- 默认 2048.\n" +
+                 "- 该值越大,扫描线越细腻,但 compute 与渲染开销也更高.")]
+        public int LidarAzimuthBins = 2048;
+
+        [Tooltip("竖直视场上界(度,上方,通常为正).\n" +
+                 "默认 +10 度.\n" +
+                 "提示: 车载常见是\"上少下多\",上方视场相对更窄.")]
+        public float LidarUpFovDeg = 10.0f;
+
+        [Tooltip("竖直视场下界(度,下方,通常为负).\n" +
+                 "默认 -30 度.")]
+        public float LidarDownFovDeg = -30.0f;
+
+        [Min(0)]
+        [Tooltip("上半部分线束数量(用于\"上少下多\").\n" +
+                 "说明:\n" +
+                 "- v1 固定总线束数为 128.\n" +
+                 "- 该值与 DownBeams 会在 OnValidate 中被规范化,确保 UpBeams + DownBeams == 128.\n" +
+                 "- 默认 16.")]
+        public int LidarUpBeams = 16;
+
+        [Min(0)]
+        [Tooltip("下半部分线束数量(用于\"上少下多\").\n" +
+                 "说明:\n" +
+                 "- v1 固定总线束数为 128.\n" +
+                 "- 该值与 UpBeams 会在 OnValidate 中被规范化,确保 UpBeams + DownBeams == 128.\n" +
+                 "- 默认 112.")]
+        public int LidarDownBeams = 112;
+
+        [Min(0.0f)]
+        [Tooltip("有效距离下限(米).\n" +
+                 "小于该距离的回波会被忽略.\n" +
+                 "默认 1m.")]
+        public float LidarDepthNear = 1.0f;
+
+        [Min(0.0f)]
+        [Tooltip("有效距离上限(米).\n" +
+                 "大于该距离的回波会被忽略.\n" +
+                 "默认 200m.")]
+        public float LidarDepthFar = 200.0f;
+
+        [Min(0.0f)]
+        [Tooltip("LiDAR 点云的点半径(屏幕像素,px radius).\n" +
+                 "默认 2px,可调.")]
+        public float LidarPointRadiusPixels = 2.0f;
+
+        [Tooltip("LiDAR 点云颜色模式.\n" +
+                 "- Depth: 由距离映射颜色(DepthNear..DepthFar).\n" +
+                 "- SplatColorSH0: 采样 first return 对应 splat 的基础颜色(SH0).")]
+        public GsplatLidarColorMode LidarColorMode = GsplatLidarColorMode.Depth;
+
+        [Min(0.0f)]
+        [Tooltip("扫描余辉曲线指数(TrailGamma).\n" +
+                 "值越大,扫描前沿越锐利,余辉衰减越快.\n" +
+                 "默认 2.")]
+        public float LidarTrailGamma = 2.0f;
+
+        [Min(0.0f)]
+        [Tooltip("LiDAR 点云整体强度倍率.\n" +
+                 "会与余辉亮度共同作用.\n" +
+                 "默认 1.")]
+        public float LidarIntensity = 1.0f;
+
+        [Tooltip("当 EnableLidarScan=true 时,是否隐藏 splat 的 sort/draw(仅显示 LiDAR 点云).\n" +
+                 "说明:\n" +
+                 "- 开启后,仍会保持 splat GPU buffers(用于 LiDAR 采样),但不会提交 splat 的排序与绘制.\n" +
+                 "- 默认关闭,以保持旧行为不变.")]
+        public bool HideSplatsWhenLidarEnabled;
+
+        // --------------------------------------------------------------------
         // 可选: 显隐燃烧环动画(show/hide)
         // - 默认关闭,不影响旧行为与性能.
         // - 序列后端的 decode 也会在 Hidden 状态被停掉,避免“不可见但仍在解码/排序”的浪费.
@@ -290,6 +397,12 @@ namespace Gsplat
             if (m_renderStyleAnimating)
                 return true;
 
+            // LiDAR 扫描前沿(亮度余辉)是纯时间驱动:
+            // - EditMode 下如果没有持续 repaint,会出现“鼠标不动就不动”的错觉.
+            // - 因此当 EnableLidarScan=true 且已指定 Origin 时,我们认为需要 ticker 驱动 Repaint.
+            if (EnableLidarScan && LidarOrigin)
+                return true;
+
             return false;
         }
 
@@ -354,6 +467,10 @@ namespace Gsplat
 
                 r.AdvanceVisibilityStateIfNeeded();
                 r.AdvanceRenderStyleStateIfNeeded();
+
+                // LiDAR 扫描前沿需要持续 repaint 才能看到"旋转"与余辉变化(尤其是 EditMode).
+                if (r.EnableLidarScan && r.LidarOrigin)
+                    r.RequestEditorRepaintForVisibilityAnimation(force: false, reason: "LiDAR");
 
                 // 诊断(可选): 仅在 EnableEditorDiagnostics=true 时记录,并做额外节流.
                 if (GsplatEditorDiagnostics.Enabled)
@@ -442,6 +559,15 @@ namespace Gsplat
 
         GsplatSequenceAsset m_prevAsset;
         GsplatRendererImpl m_renderer;
+
+        // --------------------------------------------------------------------
+        // LiDAR runtime(非序列化):
+        // - 负责 range image/LUT 等 GPU 资源的生命周期管理.
+        // - compute dispatch 与 draw call 会在后续 tasks 中实现,这里先把资源管理打底.
+        // --------------------------------------------------------------------
+        GsplatLidarScan m_lidarScan;
+        bool m_lidarLoggedMissingOrigin;
+
         bool m_disabledDueToError;
         float m_timeNormalizedThisFrame;
         float m_nextRendererRecoveryTime;
@@ -482,14 +608,17 @@ namespace Gsplat
         GraphicsBuffer m_sh3CentroidsBuffer;
 
         public bool Valid =>
-            EnableGsplatBackend &&
-            m_visibilityState != VisibilityAnimState.Hidden &&
+            (EnableGsplatBackend || EnableLidarScan) &&
+            // burn reveal 的 Hidden 本质是“停止 splat 的 sort/draw”.
+            // 但 LiDAR 是独立显示模式: 当 EnableLidarScan=true 时,仍允许组件参与回调链路与点云渲染.
+            (EnableLidarScan || m_visibilityState != VisibilityAnimState.Hidden) &&
             !m_disabledDueToError &&
             SequenceAsset &&
             m_renderer != null &&
             m_decodeCS != null;
 
         public uint SplatCount => SequenceAsset ? m_effectiveSplatCount : 0;
+        uint IGsplat.SplatCount => ShouldSubmitSplatsThisFrame() ? SplatCount : 0;
         uint IGsplat.SplatBaseIndex => 0;
 
         public ISorterResource SorterResource => m_renderer != null ? m_renderer.SorterResource : null;
@@ -517,14 +646,22 @@ namespace Gsplat
             if (!Valid || m_renderer == null || !m_renderer.Valid || !SequenceAsset)
                 return;
 
-            PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
-            PushRenderStyleUniformsForThisFrame();
+            // splat draw:
+            // - HideSplatsWhenLidarEnabled=true 时仅显示 LiDAR 点云,不提交 splat 的 sort/draw.
+            if (ShouldSubmitSplatsThisFrame())
+            {
+                PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
+                PushRenderStyleUniformsForThisFrame();
 
-            var boundsForRender = CalcVisibilityExpandedRenderBounds(SequenceAsset.UnionBounds);
-            m_renderer.RenderForCamera(camera, SplatCount, transform, boundsForRender, gameObject.layer,
-                GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
-                timeModel: 1, temporalCutoff: 0.01f,
-                diagTag: "EditMode.CameraCallback");
+                var boundsForRender = CalcVisibilityExpandedRenderBounds(SequenceAsset.UnionBounds);
+                m_renderer.RenderForCamera(camera, SplatCount, transform, boundsForRender, gameObject.layer,
+                    GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
+                    timeModel: 1, temporalCutoff: 0.01f,
+                    diagTag: "EditMode.CameraCallback");
+            }
+
+            // LiDAR 点云也需要在相机回调链路提交 draw,避免 EditMode 下多次 beginCameraRendering 时闪烁.
+            RenderLidarForCamera(camera);
         }
 
         // 公开 GPU buffers,用于调试/扩展后端(例如 VFX)绑定等场景.
@@ -1013,6 +1150,8 @@ namespace Gsplat
 #endif
             GsplatSorter.Instance.UnregisterGsplat(this);
             DisposeDecodeResources();
+            m_lidarScan?.Dispose();
+            m_lidarScan = null;
             m_renderer?.Dispose();
             m_renderer = null;
             m_prevAsset = null;
@@ -1050,7 +1189,14 @@ namespace Gsplat
             if (!m_renderStyleAnimating)
                 m_renderStyleBlend01 = RenderStyle == GsplatRenderStyle.ParticleDots ? 1.0f : 0.0f;
 
+            // LiDAR(编辑态参数同步):
+            ValidateLidarSerializedFields();
+
             PushRenderStyleUniformsForThisFrame();
+
+            // LiDAR 扫描前沿在 EditMode 需要持续 repaint:
+            // - 这里在 OnValidate 时尝试注册 ticker,避免“打开开关但视图不动”的错觉.
+            RegisterVisibilityEditorTickerIfAnimating();
 
             UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
             // RepaintAllViews 会同时刷新 SceneView/GameView,避免“拖动 Inspector 滑条时 GameView 不更新”的错觉.
@@ -1062,6 +1208,27 @@ namespace Gsplat
         {
             AdvanceVisibilityStateIfNeeded();
             AdvanceRenderStyleStateIfNeeded();
+
+#if UNITY_EDITOR
+            // EditMode 下,LiDAR 扫描前沿/余辉需要持续 repaint 才能看到变化.
+            // - 这里做一次轻量注册,即便用户在脚本里直接改 EnableLidarScan,也能自愈.
+            RegisterVisibilityEditorTickerIfAnimating();
+#endif
+
+            // LiDAR 参数防御:
+            // - Play 模式下用户可能从脚本写入 NaN/Inf/负数.
+            // - 这里仅在启用 LiDAR 时做一次轻量 clamp,保证后续 compute/draw 不会炸.
+            if (EnableLidarScan)
+                ValidateLidarSerializedFields();
+            else if (m_lidarScan != null)
+            {
+                // 资源释放策略:
+                // - LiDAR 默认关闭,因此当用户把开关关掉时,我们选择立即释放 range/LUT buffers,
+                //   避免长时间占用 GPU 内存.
+                // - 下次再打开时会按当前参数重建.
+                m_lidarScan.Dispose();
+                m_lidarScan = null;
+            }
 
             // ----------------------------------------------------------------
             // 稳态恢复: 与 GsplatRenderer 一致,在 Editor/Metal 下 buffer 可能会失效.
@@ -1122,6 +1289,12 @@ namespace Gsplat
                     return;
             }
 
+            // LiDAR GPU 资源准备:
+            // - 这里先完成 buffers/LUT 的创建与重建,为后续 compute/draw 链路打底.
+            // - 注意: `-batchmode -nographics` 下 graphicsDeviceType=Null,必须跳过任何 GPU 资源创建.
+            if (EnableLidarScan && m_renderer != null && m_renderer.Valid)
+                EnsureLidarResources();
+
             if (!Valid)
                 return;
 
@@ -1132,6 +1305,10 @@ namespace Gsplat
             // ----------------------------------------------------------------
             if (!TryDecodeThisFrame())
                 return;
+
+            // LiDAR range image 更新:
+            // - 序列后端的 PositionBuffer 是每帧 decode 生成的,因此 LiDAR 的采样必须发生在 decode 之后.
+            TickLidarRangeImageIfNeeded();
 
 #if UNITY_EDITOR
             var settings = GsplatSettings.Instance;
@@ -1144,13 +1321,21 @@ namespace Gsplat
             else
 #endif
             {
-                PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
-                PushRenderStyleUniformsForThisFrame();
+                if (ShouldSubmitSplatsThisFrame())
+                {
+                    PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
+                    PushRenderStyleUniformsForThisFrame();
 
-                var boundsForRender = CalcVisibilityExpandedRenderBounds(SequenceAsset.UnionBounds);
-                m_renderer.Render(SplatCount, transform, boundsForRender, gameObject.layer,
-                    GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
-                    timeModel: 1, temporalCutoff: 0.01f);
+                    var boundsForRender = CalcVisibilityExpandedRenderBounds(SequenceAsset.UnionBounds);
+                    m_renderer.Render(SplatCount, transform, boundsForRender, gameObject.layer,
+                        GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
+                        timeModel: 1, temporalCutoff: 0.01f);
+                }
+
+                // LiDAR 点云的 Update 渲染路径:
+                // - Play 模式下 sorter 不会在相机回调里补交 draw,因此这里需要从 Update 提交一次.
+                // - EditMode + SRP + ActiveCameraOnly 时,Update 不提交,点云将由 SubmitDrawForCamera 提交.
+                RenderLidarInUpdateIfNeeded();
             }
         }
 
@@ -1345,6 +1530,201 @@ namespace Gsplat
             m_kernelDecodeSH0 = -1;
             m_kernelDecodeSH = -1;
             m_kernelDecodeSHV2 = -1;
+        }
+
+        void ValidateLidarSerializedFields()
+        {
+            // 说明:
+            // - 与 GsplatRenderer 的同名函数保持一致,避免两个组件对同一组字段产生不同语义.
+            // - 这是“字段级别”的参数校验,会直接写回序列化字段.
+
+            if (float.IsNaN(LidarRotationHz) || float.IsInfinity(LidarRotationHz) || LidarRotationHz <= 0.0f)
+                LidarRotationHz = 5.0f;
+
+            if (float.IsNaN(LidarUpdateHz) || float.IsInfinity(LidarUpdateHz) || LidarUpdateHz <= 0.0f)
+                LidarUpdateHz = 10.0f;
+
+            if (LidarAzimuthBins < 64)
+                LidarAzimuthBins = 2048;
+            if (LidarAzimuthBins > 4096)
+                LidarAzimuthBins = 4096;
+
+            if (float.IsNaN(LidarUpFovDeg) || float.IsInfinity(LidarUpFovDeg))
+                LidarUpFovDeg = 10.0f;
+            if (float.IsNaN(LidarDownFovDeg) || float.IsInfinity(LidarDownFovDeg))
+                LidarDownFovDeg = -30.0f;
+            LidarUpFovDeg = Mathf.Clamp(LidarUpFovDeg, 0.0f, 89.0f);
+            LidarDownFovDeg = Mathf.Clamp(LidarDownFovDeg, -89.0f, 0.0f);
+
+            var up = LidarUpBeams;
+            var down = LidarDownBeams;
+            GsplatUtils.NormalizeLidarUpDownBeamsToFixedTotal(ref up, ref down);
+            LidarUpBeams = up;
+            LidarDownBeams = down;
+
+            if (float.IsNaN(LidarDepthNear) || float.IsInfinity(LidarDepthNear) || LidarDepthNear <= 0.0f)
+                LidarDepthNear = 1.0f;
+            if (float.IsNaN(LidarDepthFar) || float.IsInfinity(LidarDepthFar) || LidarDepthFar <= 0.0f)
+                LidarDepthFar = 200.0f;
+            if (LidarDepthFar <= LidarDepthNear)
+                LidarDepthFar = LidarDepthNear + 1.0f;
+
+            if (float.IsNaN(LidarPointRadiusPixels) || float.IsInfinity(LidarPointRadiusPixels))
+                LidarPointRadiusPixels = 2.0f;
+            if (LidarPointRadiusPixels < 0.0f)
+                LidarPointRadiusPixels = 0.0f;
+
+            if (float.IsNaN(LidarTrailGamma) || float.IsInfinity(LidarTrailGamma) || LidarTrailGamma < 0.0f)
+                LidarTrailGamma = 2.0f;
+
+            if (float.IsNaN(LidarIntensity) || float.IsInfinity(LidarIntensity) || LidarIntensity < 0.0f)
+                LidarIntensity = 1.0f;
+        }
+
+        void EnsureLidarResources()
+        {
+            // 重要 guard:
+            // - CI/命令行测试常用 `-batchmode -nographics`,此时 graphicsDeviceType 为 Null.
+            // - 在 Null 设备上创建 GraphicsBuffer/ComputeShader 很容易刷 error log,导致测试失败.
+            if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+                return;
+
+            var azBins = Mathf.Max(LidarAzimuthBins, 1);
+            var beamCount = Mathf.Max(LidarUpBeams + LidarDownBeams, 1);
+
+            m_lidarScan ??= new GsplatLidarScan();
+            m_lidarScan.EnsureRangeImageBuffers(azBins, beamCount);
+            m_lidarScan.EnsureLutBuffers(azBins, LidarUpFovDeg, LidarDownFovDeg, LidarUpBeams, LidarDownBeams);
+        }
+
+        void TickLidarRangeImageIfNeeded()
+        {
+            // 说明:
+            // - v1 采用方案 X: UpdateHz 门禁下,每次全量重建一次 360 range image.
+            // - 序列后端的 PositionBuffer 是每帧 decode 生成的,因此该函数必须在 TryDecodeThisFrame 之后调用.
+            if (!EnableLidarScan || m_lidarScan == null || m_renderer == null || !m_renderer.Valid)
+                return;
+
+            if (!LidarOrigin)
+            {
+                if (!m_lidarLoggedMissingOrigin)
+                {
+                    m_lidarLoggedMissingOrigin = true;
+                    Debug.LogWarning("[Gsplat][Sequence][LiDAR] EnableLidarScan=true 但 LidarOrigin 为空. 请在 Inspector 中指定 LidarOrigin Transform.");
+                }
+                return;
+            }
+
+            m_lidarLoggedMissingOrigin = false;
+
+            var settings = GsplatSettings.Instance;
+            if (!settings || !settings.ComputeShader)
+                return;
+
+            var now = (double)Time.realtimeSinceStartup;
+            if (!m_lidarScan.IsRangeImageUpdateDue(now, LidarUpdateHz))
+                return;
+
+            // sequence 后端目前没有 keyframe segment 子范围,因此采样全量 splats.
+            var count = SplatCount > int.MaxValue ? int.MaxValue : (int)SplatCount;
+            var modelToLidar = LidarOrigin.worldToLocalMatrix * transform.localToWorldMatrix;
+
+            var needsSplatId = LidarColorMode == GsplatLidarColorMode.SplatColorSH0;
+            if (m_lidarScan.TryRebuildRangeImage(settings.ComputeShader, m_renderer.PositionBuffer,
+                    modelToLidar, splatBaseIndex: 0, splatCount: count,
+                    LidarAzimuthBins, LidarUpBeams, LidarDownBeams,
+                    LidarUpFovDeg, LidarDownFovDeg,
+                    LidarDepthNear, LidarDepthFar,
+                    needsSplatId))
+            {
+                m_lidarScan.MarkRangeImageUpdated(now);
+            }
+        }
+
+        void RenderLidarInUpdateIfNeeded()
+        {
+            if (!EnableLidarScan || m_lidarScan == null || m_renderer == null || !m_renderer.Valid)
+                return;
+
+            if (!LidarOrigin)
+                return;
+
+            var settings = GsplatSettings.Instance;
+            if (!settings)
+                return;
+
+#if UNITY_EDITOR
+            // Editor 非 Play + SRP + ActiveCameraOnly:
+            // - draw 由 sorter 的相机回调驱动(见 SubmitDrawForCamera),Update 不提交,避免双绘制.
+            if (!Application.isPlaying &&
+                GsplatSorter.Instance.SortDrivenBySrpCallback &&
+                settings.CameraMode == GsplatCameraMode.ActiveCameraOnly)
+            {
+                return;
+            }
+#endif
+
+            Camera targetCam = null;
+            if (settings.CameraMode == GsplatCameraMode.ActiveCameraOnly)
+            {
+                if (!GsplatSorter.Instance.TryGetActiveCamera(out var cam) || !cam)
+                    return;
+                targetCam = cam;
+            }
+
+            m_lidarScan.RenderPointCloud(settings, targetCam, gameObject.layer, GammaToLinear,
+                LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
+                LidarAzimuthBins, LidarUpBeams, LidarDownBeams,
+                LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
+                LidarColorMode, LidarTrailGamma, LidarIntensity,
+                m_renderer.ColorBuffer);
+        }
+
+        void RenderLidarForCamera(Camera camera)
+        {
+            if (!EnableLidarScan || m_lidarScan == null || m_renderer == null || !m_renderer.Valid)
+                return;
+
+            if (!camera)
+                return;
+
+            if (!LidarOrigin)
+                return;
+
+            if ((camera.cullingMask & (1 << gameObject.layer)) == 0)
+                return;
+
+            var settings = GsplatSettings.Instance;
+            if (!settings)
+                return;
+
+            m_lidarScan.RenderPointCloud(settings, camera, gameObject.layer, GammaToLinear,
+                LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
+                LidarAzimuthBins, LidarUpBeams, LidarDownBeams,
+                LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
+                LidarColorMode, LidarTrailGamma, LidarIntensity,
+                m_renderer.ColorBuffer);
+        }
+
+        bool ShouldSubmitSplatsThisFrame()
+        {
+            // 说明:
+            // - splat 的 sort/draw 与 LiDAR 是解耦的.
+            // - 当用户启用 LiDAR 且要求隐藏 splats 时,这里返回 false,从根源停掉排序与绘制开销.
+            if (!EnableGsplatBackend)
+                return false;
+
+            if (EnableLidarScan && HideSplatsWhenLidarEnabled)
+                return false;
+
+            // burn reveal 的 Hidden 状态表示“完全不可见”,并且应停掉 sort/draw.
+            if (m_visibilityState == VisibilityAnimState.Hidden)
+                return false;
+
+            if (m_disabledDueToError || !SequenceAsset)
+                return false;
+
+            return true;
         }
 
         bool TryCreateOrRecreateDecodeResources()

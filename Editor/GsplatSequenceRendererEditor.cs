@@ -13,7 +13,96 @@ namespace Gsplat.Editor
         {
             serializedObject.Update();
 
-            DrawDefaultInspector();
+            DrawPropertiesExcluding(serializedObject, "m_Script",
+                // LiDAR: 这里做一个更清晰的调参区,避免字段散落在默认绘制里.
+                nameof(GsplatSequenceRenderer.EnableLidarScan),
+                nameof(GsplatSequenceRenderer.LidarOrigin),
+                nameof(GsplatSequenceRenderer.LidarRotationHz),
+                nameof(GsplatSequenceRenderer.LidarUpdateHz),
+                nameof(GsplatSequenceRenderer.LidarAzimuthBins),
+                nameof(GsplatSequenceRenderer.LidarUpFovDeg),
+                nameof(GsplatSequenceRenderer.LidarDownFovDeg),
+                nameof(GsplatSequenceRenderer.LidarUpBeams),
+                nameof(GsplatSequenceRenderer.LidarDownBeams),
+                nameof(GsplatSequenceRenderer.LidarDepthNear),
+                nameof(GsplatSequenceRenderer.LidarDepthFar),
+                nameof(GsplatSequenceRenderer.LidarPointRadiusPixels),
+                nameof(GsplatSequenceRenderer.LidarColorMode),
+                nameof(GsplatSequenceRenderer.LidarTrailGamma),
+                nameof(GsplatSequenceRenderer.LidarIntensity),
+                nameof(GsplatSequenceRenderer.HideSplatsWhenLidarEnabled));
+
+            // ----------------------------------------------------------------
+            // LiDAR 调参区:
+            // - 与 `GsplatRenderer` 的 Inspector 行为保持一致,便于用户在静态/序列资产之间切换时复用调参经验.
+            // - 序列后端会在每帧 decode 完成后再跑 LiDAR 采样,保证采样对应当前帧插值结果.
+            // ----------------------------------------------------------------
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("LiDAR Scan (Experimental)", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(
+                "说明:\n" +
+                "- LiDAR 点云是规则网格(beam x azimuthBin),并具备 first return(第一回波)遮挡语义.\n" +
+                "- HideSplatsWhenLidarEnabled 可让你只看点云(不提交 splat sort/draw),但仍会保留 decode 后的 buffers 供采样.\n" +
+                "- EditMode 下会在启用时自动驱动 Repaint,用于扫描前沿/余辉的连续播放.",
+                MessageType.Info);
+
+            var enableLidarProp = serializedObject.FindProperty(nameof(GsplatSequenceRenderer.EnableLidarScan));
+            EditorGUILayout.PropertyField(enableLidarProp);
+
+            if (enableLidarProp.boolValue)
+            {
+                EditorGUI.indentLevel++;
+
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarOrigin)));
+                var originProp = serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarOrigin));
+                if (originProp.objectReferenceValue == null)
+                {
+                    EditorGUILayout.HelpBox(
+                        "EnableLidarScan=true 但 LidarOrigin 为空.\n" +
+                        "LiDAR 点云不会渲染. 请指定一个 Transform(位置+朝向作为 LiDAR 安装位姿).",
+                        MessageType.Warning);
+                }
+
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("Grid / FOV", EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarAzimuthBins)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarUpFovDeg)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDownFovDeg)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarUpBeams)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDownBeams)));
+
+                var azBins = Mathf.Max(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarAzimuthBins)).intValue, 0);
+                var upBeams = Mathf.Max(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarUpBeams)).intValue, 0);
+                var downBeams = Mathf.Max(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDownBeams)).intValue, 0);
+                var beamCount = upBeams + downBeams;
+                var pointCount = (long)beamCount * azBins;
+                EditorGUILayout.LabelField(
+                    $"有效网格: {beamCount} beams x {azBins} azBins (约 {pointCount:N0} 点)");
+                EditorGUILayout.HelpBox(
+                    "提示: v1 固定总线束数为 128.\n" +
+                    "当你修改 UpBeams/DownBeams 时,Runtime 会自动归一化,确保 UpBeams+DownBeams==128(上少下多).",
+                    MessageType.None);
+
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("Timing", EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarUpdateHz)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarRotationHz)));
+
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("Visual", EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarColorMode)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDepthNear)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDepthFar)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarPointRadiusPixels)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarTrailGamma)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarIntensity)));
+
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("Splat Visibility", EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.HideSplatsWhenLidarEnabled)));
+
+                EditorGUI.indentLevel--;
+            }
 
             // ----------------------------------------------------------------
             // 重要: 在触发按钮型 API 之前,先把 Inspector 中的修改写回到对象字段.

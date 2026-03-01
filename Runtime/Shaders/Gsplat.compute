@@ -6,6 +6,7 @@
 // SPDX-License-Identifier: MIT
 
 #define GROUP_SIZE 1024
+#define LIDAR_GROUP_SIZE 256
 
 // DeviceRadixSort
 #define KEY_FLOAT
@@ -20,6 +21,13 @@
 #pragma kernel Upsweep
 #pragma kernel Scan
 #pragma kernel Downsweep
+
+// --------------------------------------------------------------------
+// LiDAR(first return) range image kernels
+// --------------------------------------------------------------------
+#pragma kernel ClearRangeImage
+#pragma kernel ReduceMinRangeSq
+#pragma kernel ResolveMinSplatId
 
 // GPU sorting needs wave ops
 #pragma require wavebasic
@@ -38,6 +46,146 @@ int _Has4D;
 int _TimeModel; // 1=window(time0+duration), 2=gaussian(mu+sigma)
 float _TemporalCutoff; // gaussian cutoff,例如 0.01
 uint e_baseIndex;
+
+// --------------------------------------------------------------------
+// LiDAR(first return) inputs/outputs
+// - rangeSqBits/min id 都使用 uint:
+//   - rangeSqBits: asuint(rangeSq),用于 atomic min(只适用于非负数).
+//   - minSplatId: 对应 range 的 splatId(二阶段 resolve 保障严格对应).
+// --------------------------------------------------------------------
+RWStructuredBuffer<uint> _LidarMinRangeSqBits;
+RWStructuredBuffer<uint> _LidarMinSplatId;
+
+float4x4 _LidarMatrixModelToLidar;
+int _LidarCellCount;
+int _LidarAzimuthBins;
+int _LidarUpBeams;
+int _LidarDownBeams;
+float _LidarUpFovRad;
+float _LidarDownFovRad;
+float _LidarDepthNearSq;
+float _LidarDepthFarSq;
+int _LidarSplatBaseIndex;
+int _LidarSplatCount;
+
+static const uint kLidarInfBits = 0x7f7fffff; // float max
+static const uint kLidarInvalidId = 0xffffffff;
+
+[numthreads(LIDAR_GROUP_SIZE,1,1)]
+void ClearRangeImage(uint3 id : SV_DispatchThreadID)
+{
+    uint idx = id.x;
+    if (idx >= (uint)_LidarCellCount)
+        return;
+
+    _LidarMinRangeSqBits[idx] = kLidarInfBits;
+    _LidarMinSplatId[idx] = kLidarInvalidId;
+}
+
+bool TryComputeLidarCell(float3 posLidar, out uint outCellIndex, out uint outRangeSqBits)
+{
+    // 兼容 d3d11 编译器的 out 参数初始化要求.
+    outCellIndex = 0;
+    outRangeSqBits = 0;
+
+    // range gate(用平方避免 sqrt):
+    float rangeSq = dot(posLidar, posLidar);
+    if (rangeSq < _LidarDepthNearSq || rangeSq > _LidarDepthFarSq)
+        return false;
+
+    // elevation(竖直角):
+    float h = length(float2(posLidar.x, posLidar.z));
+    float elev = atan2(posLidar.y, max(h, 1e-6));
+    if (elev > _LidarUpFovRad || elev < _LidarDownFovRad)
+        return false;
+
+    // azimuth(水平角): [-pi,pi]
+    float az = atan2(posLidar.x, posLidar.z);
+    float az01 = (az + 3.14159265) * (0.5 / 3.14159265); // (az+pi)/(2pi)
+    az01 = saturate(az01);
+
+    // 映射到 azimuth bin:
+    // - 这里用 floor,与 LUT 的 bin center 配合更稳.
+    uint azBin = (uint)floor(az01 * (float)_LidarAzimuthBins);
+    if (azBin >= (uint)_LidarAzimuthBins)
+        azBin = (uint)_LidarAzimuthBins - 1u;
+
+    // elevation -> beamIndex(上少下多,分段线性):
+    uint beamIndex = 0;
+    if (elev >= 0.0)
+    {
+        if (_LidarUpBeams <= 0)
+            return false;
+        float denom = max(_LidarUpFovRad, 1e-6);
+        float t = saturate(elev / denom);
+        uint b = (uint)min((int)(t * (float)_LidarUpBeams), _LidarUpBeams - 1);
+        beamIndex = b;
+    }
+    else
+    {
+        if (_LidarDownBeams <= 0)
+            return false;
+        float denom = min(_LidarDownFovRad, -1e-6); // 负数
+        float t = saturate(elev / denom); // 负/负 -> 正
+        uint b = (uint)min((int)(t * (float)_LidarDownBeams), _LidarDownBeams - 1);
+        beamIndex = (uint)_LidarUpBeams + b;
+    }
+
+    // cell index:
+    uint cell = beamIndex * (uint)_LidarAzimuthBins + azBin;
+    if (cell >= (uint)_LidarCellCount)
+        return false;
+
+    outCellIndex = cell;
+    outRangeSqBits = asuint(rangeSq);
+    return true;
+}
+
+[numthreads(LIDAR_GROUP_SIZE,1,1)]
+void ReduceMinRangeSq(uint3 id : SV_DispatchThreadID)
+{
+    uint idx = id.x;
+    if (idx >= (uint)_LidarSplatCount)
+        return;
+
+    uint splatId = (uint)(_LidarSplatBaseIndex + (int)idx);
+    float3 posModel = _PositionBuffer[splatId];
+    float3 posLidar = mul(_LidarMatrixModelToLidar, float4(posModel, 1)).xyz;
+
+    uint cell;
+    uint rangeSqBits;
+    if (!TryComputeLidarCell(posLidar, cell, rangeSqBits))
+        return;
+
+    // first return: 每个 cell 只保留最小距离.
+    InterlockedMin(_LidarMinRangeSqBits[cell], rangeSqBits);
+}
+
+[numthreads(LIDAR_GROUP_SIZE,1,1)]
+void ResolveMinSplatId(uint3 id : SV_DispatchThreadID)
+{
+    uint idx = id.x;
+    if (idx >= (uint)_LidarSplatCount)
+        return;
+
+    uint splatId = (uint)(_LidarSplatBaseIndex + (int)idx);
+    float3 posModel = _PositionBuffer[splatId];
+    float3 posLidar = mul(_LidarMatrixModelToLidar, float4(posModel, 1)).xyz;
+
+    uint cell;
+    uint rangeSqBits;
+    if (!TryComputeLidarCell(posLidar, cell, rangeSqBits))
+        return;
+
+    uint minBits = _LidarMinRangeSqBits[cell];
+    if (rangeSqBits != minBits)
+        return;
+
+    // 二阶段 resolve:
+    // - 只在 rangeSqBits 与 minRangeSqBits 匹配时才写入 id,保证颜色与距离来自同一个 splat.
+    // - tie-breaker: 多候选时取最小 splatId(确定性).
+    InterlockedMin(_LidarMinSplatId[cell], splatId);
+}
 
 [numthreads(GROUP_SIZE,1,1)]
 void InitPayload(uint3 id : SV_DispatchThreadID)
