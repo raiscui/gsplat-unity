@@ -98,24 +98,24 @@ Shader "Gsplat/LiDAR"
                 float trail01 : TEXCOORD2;
             };
 
-            float3 HsvToRgb(float3 c)
-            {
-                // 来自常见的 hsv2rgb 近似实现:
-                // - h,s,v 均为 [0,1]
-                // - 只用 frac/abs/lerp,便宜且跨平台差异小.
-                float4 K = float4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
-                float3 p = abs(frac(c.xxx + K.xyz) * 6.0 - K.www);
-                return c.z * lerp(K.xxx, saturate(p - K.xxx), c.y);
-            }
-
             float3 DepthToCyanRed(float t)
             {
-                // 深度惯用渐变(从青到红):
-                // - t=0(近) -> cyan(180°)
-                // - t=1(远) -> red(0°)
+                // 深度惯用渐变(从青到红,不经过蓝/紫):
+                // - 很多“深度热力图”更偏好走 cyan->green->yellow->red,
+                //   这样中间层会更像“热”,不会出现蓝/紫那种偏冷的过渡.
                 t = saturate(t);
-                float h = lerp(0.5, 0.0, t);
-                return HsvToRgb(float3(h, 1.0, 1.0));
+
+                const float3 c0 = float3(0.0, 1.0, 1.0); // cyan
+                const float3 c1 = float3(0.0, 1.0, 0.0); // green
+                const float3 c2 = float3(1.0, 1.0, 0.0); // yellow
+                const float3 c3 = float3(1.0, 0.0, 0.0); // red
+
+                // 3 段线性插值,保证颜色路径稳定可控.
+                if (t < 1.0 / 3.0)
+                    return lerp(c0, c1, t * 3.0);
+                if (t < 2.0 / 3.0)
+                    return lerp(c1, c2, (t - 1.0 / 3.0) * 3.0);
+                return lerp(c2, c3, (t - 2.0 / 3.0) * 3.0);
             }
 
             bool InitLidarSource(appdata v, out uint cellId, out uint beamIndex, out uint azBin)
