@@ -72,3 +72,26 @@
   - total=30, passed=28, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_popfix_2026-02-26.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_renderstyle_popfix_2026-02-26.log`
+
+## 2026-03-01 15:39:48 +0800
+- (仅规格工单) 讨论并收敛了"ParticleDots 车载 LiDAR 采集显示"的目标参数,并创建 OpenSpec change 作为后续实现载体.
+  - 说明:
+    - 本阶段不落地代码.
+    - 高斯基元(splat)可完全不显示,仅作为"环境采样点".
+    - 最终渲染为新生成的规则点云,以获得更整齐的 128 线束环线.
+- 已创建 OpenSpec change:
+  - name: `particle-dots-lidar-scan`
+  - schema: spec-driven
+  - artifacts: proposal -> design/specs -> tasks
+
+## 2026-03-01 15:58:54 +0800
+- (规格工单) 使用 `$openspec-ff-change` 快速生成 `particle-dots-lidar-scan` 的全部 artifacts(4/4),用于后续直接进入实现.
+  - `openspec/changes/particle-dots-lidar-scan/proposal.md`
+  - `openspec/changes/particle-dots-lidar-scan/design.md`
+  - `openspec/changes/particle-dots-lidar-scan/specs/gsplat-lidar-scan-visualization/spec.md`
+  - `openspec/changes/particle-dots-lidar-scan/tasks.md`
+- 关键需求参数(已写入 artifacts):
+  - 360 度,RotationHz=5,UpdateHz=10,1 圈保留+前沿余辉.
+  - BeamCount=128,AzimuthBins=2048,"上少下多"竖直分布.
+  - 颜色模式: Depth(1m..200m) / SplatColor(SH0).
+  - 点大小: 默认 2px,可调.

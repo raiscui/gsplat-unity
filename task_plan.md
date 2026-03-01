@@ -582,3 +582,37 @@
   - Unity 6000.3.8f1,`-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
   - total=30, passed=28, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_renderstyle_popfix_2026-02-26.xml`
+
+### 2026-03-01 15:39:48 +0800
+- 用户新需求(讨论已收敛): ParticleDots(粒子模式)增加"车载 LiDAR 采集"显示效果.
+  - 目标: 高斯基元(splat)可完全不显示,仅作为"环境采样点";最终渲染一套新生成的规则点云,让扫描线更整齐.
+  - 关键语义: 第一回波(遮挡更准确).
+  - 扫描参数:
+    - 360 度.
+    - 5 Hz 旋转(1 圈 0.2s).
+    - 1 圈保留,且有扫描前沿+余辉(扫描头更亮,后方逐渐变暗).
+    - UpdateHz=10Hz(每 0.1s 全量重建一次 range image).
+  - 采样分辨率:
+    - BeamCount=128,竖直分层环,上少下多(竖直视场由我先推荐默认值,后续可调或改 LUT).
+    - AzimuthBins=2048.
+  - 颜色模式:
+    - Depth: DepthNear=1m,DepthFar=200m.
+    - SplatColor: 采集自高斯基元的基础颜色(SH0).
+  - 点大小: 默认 2px,可调.
+  - LiDAR 安装姿态: 由 Transform 真实摆放(位置+朝向).
+
+- 本轮动作(只做规格工单,不落地代码):
+  - [x] 生成一个新的 OpenSpec change,用于承载后续实现与验收.
+  - [x] 显示该 change 的 artifact 状态,并打印第一个 artifact 的 instructions 模板.
+
+### 2026-03-01 15:58:54 +0800
+- 用户指令: `$openspec-ff-change`,希望一次性生成所有 artifacts,快速进入实现阶段.
+- 本轮落地(规格工单完结,仍未开始写实现代码):
+  - [x] 完成 OpenSpec change `particle-dots-lidar-scan` 的全部 artifacts(4/4):
+    - `openspec/changes/particle-dots-lidar-scan/proposal.md`
+    - `openspec/changes/particle-dots-lidar-scan/design.md`
+    - `openspec/changes/particle-dots-lidar-scan/specs/gsplat-lidar-scan-visualization/spec.md`
+    - `openspec/changes/particle-dots-lidar-scan/tasks.md`
+  - [x] 为新增 change 目录与 md 文件补齐 Unity `.meta`(保持与现有 openspec change 一致).
+- 当前状态:
+  - OpenSpec: artifacts 已 complete,可进入 apply/implementation 阶段.
