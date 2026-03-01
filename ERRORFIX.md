@@ -1009,3 +1009,12 @@
   - 汇总: total=33, passed=31, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_colormap_2026-03-02_002839_noquit.xml`
 - Commit: `278742e`
+
+## 2026-03-02 00:37:38 +0800: 需求澄清 - Depth 色带应当经过蓝/紫(青 -> 蓝 -> 紫 -> 红)
+
+### 说明
+- 上一条记录里,我把 "cyan -> blue -> purple -> red" 当成了 bug.
+- 但你最新确认的目标就是这个路径,因此那次“修复”其实是把需求改错了.
+
+### 修复
+- 恢复 Depth 色带为 HSV hue: 0.5(cyan) -> 1.0(red/360°),确保中间经过 blue/purple.

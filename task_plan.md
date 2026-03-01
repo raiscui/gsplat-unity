@@ -752,3 +752,12 @@
   - [x] 回归: Unity EditMode tests(确保编译与用例都稳定).
     - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_colormap_2026-03-02_002839_noquit.xml`
   - [x] git commit: `278742e`(fix: LiDAR depth colormap).
+
+### 2026-03-02 00:37:38 +0800
+- 用户澄清需求: 你要的 Depth 色带就是 "青 -> 蓝 -> 紫 -> 红".
+  - 也就是 HSV hue 走 0.5(cyan) -> 1.0(red/360°) 的那条路径,而不是走 0.5 -> 0.0(经过绿/黄)的路径.
+- 调整策略:
+  - [ ] Shader: Depth 色带恢复为 HSV 渐变(0.5 -> 1.0),确保路径经过 blue/purple.
+  - [ ] Docs: README/CHANGELOG 同步文案描述.
+  - [ ] 回归: Unity EditMode tests.
+  - [ ] git commit.

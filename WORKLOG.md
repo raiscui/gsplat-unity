@@ -188,3 +188,8 @@
   - total=33, passed=31, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_colormap_2026-03-02_002839_noquit.xml`
 - Commit: `278742e`
+
+## 2026-03-02 00:37:38 +0800
+- 需求澄清后修正: Depth 色带目标就是 "青 -> 蓝 -> 紫 -> 红".
+  - 因此把 Depth 色带恢复为 HSV hue 0.5(cyan) -> 1.0(red/360°) 的渐变路径.
+  - 同步回滚 README/CHANGELOG 的文案描述,保持一致.
