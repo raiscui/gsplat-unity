@@ -167,6 +167,15 @@ namespace Gsplat
                  "默认 2px,可调.")]
         public float LidarPointRadiusPixels = 2.0f;
 
+        [Min(0.0f)]
+        [Tooltip("LiDAR show/hide 期间的噪声位移幅度(屏幕像素,px).\n" +
+                 "说明:\n" +
+                 "- 仅在 RadarScan(LiDAR) 播放 show/hide 过渡时生效.\n" +
+                 "- 该值越大,边界附近的粒子扰动越明显.\n" +
+                 "- 设为 0 可禁用位移(只保留明暗噪声).\n" +
+                 "- 默认 6.")]
+        public float LidarShowHideWarpPixels = 6.0f;
+
         [Tooltip("LiDAR 点云颜色模式.\n" +
                  "- Depth: 由距离映射颜色(DepthNear..DepthFar).\n" +
                  "- SplatColorSH0: 采样 first return 对应 splat 的基础颜色(SH0).")]
@@ -1463,6 +1472,84 @@ namespace Gsplat
                 timeSeconds: t);
         }
 
+        void BuildLidarShowHideOverlayForThisFrame(Bounds localBounds,
+            out float gate,
+            out int mode,
+            out float progress,
+            out int sourceMaskMode,
+            out float sourceMaskProgress,
+            out Vector3 centerModel,
+            out float maxRadius,
+            out float ringWidth,
+            out float trailWidth)
+        {
+            gate = 1.0f;
+            mode = 0;
+            progress = 1.0f;
+            sourceMaskMode = (int)VisibilitySourceMaskMode.FullVisible;
+            sourceMaskProgress = 1.0f;
+
+            centerModel = CalcVisibilityCenterModel(localBounds);
+            maxRadius = CalcVisibilityMaxRadius(localBounds, centerModel);
+            ringWidth = maxRadius * Mathf.Clamp01(ShowRingWidthNormalized);
+            trailWidth = maxRadius * Mathf.Clamp01(ShowTrailWidthNormalized);
+
+            if (!EnableVisibilityAnimation)
+            {
+                if (m_visibilityState == VisibilityAnimState.Hidden)
+                {
+                    gate = 0.0f;
+                    sourceMaskMode = (int)VisibilitySourceMaskMode.FullHidden;
+                    sourceMaskProgress = 0.0f;
+                }
+                return;
+            }
+
+            switch (m_visibilityState)
+            {
+                case VisibilityAnimState.Showing:
+                    mode = 1;
+                    progress = Mathf.Clamp01(m_visibilityProgress01);
+                    sourceMaskMode = (int)m_visibilitySourceMaskMode;
+                    sourceMaskProgress = Mathf.Clamp01(m_visibilitySourceMaskProgress01);
+                    ringWidth = maxRadius * Mathf.Clamp01(ShowRingWidthNormalized);
+                    trailWidth = maxRadius * Mathf.Clamp01(ShowTrailWidthNormalized);
+                    break;
+
+                case VisibilityAnimState.Hiding:
+                    mode = 2;
+                    progress = Mathf.Clamp01(m_visibilityProgress01);
+                    sourceMaskMode = (int)m_visibilitySourceMaskMode;
+                    sourceMaskProgress = Mathf.Clamp01(m_visibilitySourceMaskProgress01);
+                    ringWidth = maxRadius * Mathf.Clamp01(HideRingWidthNormalized);
+                    trailWidth = maxRadius * Mathf.Clamp01(HideTrailWidthNormalized);
+                    break;
+
+                case VisibilityAnimState.Hidden:
+                    gate = 0.0f;
+                    sourceMaskMode = (int)VisibilitySourceMaskMode.FullHidden;
+                    sourceMaskProgress = 0.0f;
+                    break;
+
+                default:
+                    sourceMaskMode = (int)VisibilitySourceMaskMode.FullVisible;
+                    sourceMaskProgress = 1.0f;
+                    break;
+            }
+
+            if (sourceMaskMode < (int)VisibilitySourceMaskMode.FullVisible ||
+                sourceMaskMode > (int)VisibilitySourceMaskMode.HideSnapshot)
+            {
+                sourceMaskMode = (int)VisibilitySourceMaskMode.FullVisible;
+                sourceMaskProgress = 1.0f;
+            }
+
+            if (sourceMaskMode == (int)VisibilitySourceMaskMode.FullVisible)
+                sourceMaskProgress = 1.0f;
+            else if (sourceMaskMode == (int)VisibilitySourceMaskMode.FullHidden)
+                sourceMaskProgress = 0.0f;
+        }
+
         Vector3 CalcVisibilityCenterModel(Bounds localBounds)
         {
             if (VisibilityCenter)
@@ -2013,6 +2100,11 @@ namespace Gsplat
             if (LidarPointRadiusPixels < 0.0f)
                 LidarPointRadiusPixels = 0.0f;
 
+            if (float.IsNaN(LidarShowHideWarpPixels) || float.IsInfinity(LidarShowHideWarpPixels) || LidarShowHideWarpPixels < 0.0f)
+                LidarShowHideWarpPixels = 6.0f;
+            if (LidarShowHideWarpPixels > 64.0f)
+                LidarShowHideWarpPixels = 64.0f;
+
             if (float.IsNaN(LidarTrailGamma) || float.IsInfinity(LidarTrailGamma) || LidarTrailGamma < 0.0f)
                 LidarTrailGamma = 2.0f;
 
@@ -2129,6 +2221,21 @@ namespace Gsplat
                 targetCam = cam;
             }
 
+            var localBounds = SequenceAsset ? SequenceAsset.UnionBounds : new Bounds(Vector3.zero, Vector3.one);
+            BuildLidarShowHideOverlayForThisFrame(localBounds,
+                out var showHideGate,
+                out var showHideMode,
+                out var showHideProgress,
+                out var showHideSourceMaskMode,
+                out var showHideSourceMaskProgress,
+                out var showHideCenterModel,
+                out var showHideMaxRadius,
+                out var showHideRingWidth,
+                out var showHideTrailWidth);
+
+            if (showHideGate <= 1.0e-4f && showHideMode == 0)
+                return;
+
             m_lidarScan.RenderPointCloud(settings, targetCam, gameObject.layer, GammaToLinear,
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
                 LidarAzimuthBins, LidarBeamCount,
@@ -2136,7 +2243,13 @@ namespace Gsplat
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
                 LidarTrailGamma, LidarIntensity,
                 LidarDepthOpacity,
-                m_renderer.ColorBuffer);
+                m_renderer.ColorBuffer,
+                transform.worldToLocalMatrix,
+                showHideGate, showHideMode, showHideProgress,
+                showHideSourceMaskMode, showHideSourceMaskProgress,
+                showHideCenterModel, showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
+                (int)VisibilityNoiseMode, NoiseStrength, NoiseScale, NoiseSpeed,
+                LidarShowHideWarpPixels);
         }
 
         void RenderLidarForCamera(Camera camera)
@@ -2157,6 +2270,21 @@ namespace Gsplat
             if (!settings)
                 return;
 
+            var localBounds = SequenceAsset ? SequenceAsset.UnionBounds : new Bounds(Vector3.zero, Vector3.one);
+            BuildLidarShowHideOverlayForThisFrame(localBounds,
+                out var showHideGate,
+                out var showHideMode,
+                out var showHideProgress,
+                out var showHideSourceMaskMode,
+                out var showHideSourceMaskProgress,
+                out var showHideCenterModel,
+                out var showHideMaxRadius,
+                out var showHideRingWidth,
+                out var showHideTrailWidth);
+
+            if (showHideGate <= 1.0e-4f && showHideMode == 0)
+                return;
+
             m_lidarScan.RenderPointCloud(settings, camera, gameObject.layer, GammaToLinear,
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
                 LidarAzimuthBins, LidarBeamCount,
@@ -2164,7 +2292,13 @@ namespace Gsplat
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
                 LidarTrailGamma, LidarIntensity,
                 LidarDepthOpacity,
-                m_renderer.ColorBuffer);
+                m_renderer.ColorBuffer,
+                transform.worldToLocalMatrix,
+                showHideGate, showHideMode, showHideProgress,
+                showHideSourceMaskMode, showHideSourceMaskProgress,
+                showHideCenterModel, showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
+                (int)VisibilityNoiseMode, NoiseStrength, NoiseScale, NoiseSpeed,
+                LidarShowHideWarpPixels);
         }
 
         bool ShouldSubmitSplatsThisFrame()

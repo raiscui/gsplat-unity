@@ -107,14 +107,44 @@ namespace Gsplat
         Shader m_materialShader;
         MaterialPropertyBlock m_propertyBlock;
 
+#if UNITY_EDITOR
+        // ----------------------------------------------------------------
+        // Editor 诊断:
+        // - 用户反馈 "RadarScan show/hide noise 看不到变化" 时,需要先证明:
+        //   1) 实际使用的 shader 是哪一份(AssetDatabase path).
+        //   2) show/hide + noise 参数是否真的非 0 并进入 draw.
+        // - 该日志默认不会刷屏:
+        //   - 只在 show/hide 动画进行中(mode=1/2)才可能打印.
+        //   - 并且有节流(同一段动画最多每 ~1s 打一次,且模式切换必打一次).
+        // ----------------------------------------------------------------
+        double m_debugLastLoggedShowHideRealtime = -1.0;
+        int m_debugLastLoggedShowHideMode;
+        float m_debugLastLoggedShowHideProgress01;
+#endif
+
         static readonly int k_gammaToLinear = Shader.PropertyToID("_GammaToLinear");
         static readonly int k_splatInstanceSize = Shader.PropertyToID("_SplatInstanceSize");
         static readonly int k_lidarBeamCount = Shader.PropertyToID("_LidarBeamCount");
         static readonly int k_lidarMatrixL2W = Shader.PropertyToID("_LidarMatrixL2W");
+        static readonly int k_lidarMatrixW2M = Shader.PropertyToID("_LidarMatrixW2M");
         static readonly int k_lidarPointRadiusPixels = Shader.PropertyToID("_LidarPointRadiusPixels");
         static readonly int k_lidarColorMode = Shader.PropertyToID("_LidarColorMode");
         static readonly int k_lidarColorBlend = Shader.PropertyToID("_LidarColorBlend");
         static readonly int k_lidarVisibility = Shader.PropertyToID("_LidarVisibility");
+        static readonly int k_lidarShowHideGate = Shader.PropertyToID("_LidarShowHideGate");
+        static readonly int k_lidarShowHideMode = Shader.PropertyToID("_LidarShowHideMode");
+        static readonly int k_lidarShowHideProgress = Shader.PropertyToID("_LidarShowHideProgress");
+        static readonly int k_lidarShowHideSourceMaskMode = Shader.PropertyToID("_LidarShowHideSourceMaskMode");
+        static readonly int k_lidarShowHideSourceMaskProgress = Shader.PropertyToID("_LidarShowHideSourceMaskProgress");
+        static readonly int k_lidarShowHideCenterModel = Shader.PropertyToID("_LidarShowHideCenterModel");
+        static readonly int k_lidarShowHideMaxRadius = Shader.PropertyToID("_LidarShowHideMaxRadius");
+        static readonly int k_lidarShowHideRingWidth = Shader.PropertyToID("_LidarShowHideRingWidth");
+        static readonly int k_lidarShowHideTrailWidth = Shader.PropertyToID("_LidarShowHideTrailWidth");
+        static readonly int k_lidarShowHideNoiseMode = Shader.PropertyToID("_LidarShowHideNoiseMode");
+        static readonly int k_lidarShowHideNoiseStrength = Shader.PropertyToID("_LidarShowHideNoiseStrength");
+        static readonly int k_lidarShowHideNoiseScale = Shader.PropertyToID("_LidarShowHideNoiseScale");
+        static readonly int k_lidarShowHideNoiseSpeed = Shader.PropertyToID("_LidarShowHideNoiseSpeed");
+        static readonly int k_lidarShowHideWarpPixels = Shader.PropertyToID("_LidarShowHideWarpPixels");
         static readonly int k_lidarDepthNear = Shader.PropertyToID("_LidarDepthNear");
         static readonly int k_lidarDepthFar = Shader.PropertyToID("_LidarDepthFar");
         static readonly int k_lidarRotationHz = Shader.PropertyToID("_LidarRotationHz");
@@ -267,6 +297,80 @@ namespace Gsplat
             m_lastRangeImageUpdateRealtime = -1.0;
         }
 
+#if UNITY_EDITOR
+        void TryLogShowHideDiagnostics(GsplatSettings settings,
+            float showHideGate, int showHideMode, float showHideProgress,
+            int showHideSourceMaskMode, float showHideSourceMaskProgress,
+            float showHideMaxRadius, float showHideRingWidth, float showHideTrailWidth,
+            int showHideNoiseMode, float showHideNoiseStrength, float showHideNoiseScale, float showHideNoiseSpeed,
+            float showHideWarpPixels)
+        {
+            // 只在过渡期记录,避免正常运行刷屏.
+            if (showHideMode != 1 && showHideMode != 2)
+                return;
+
+            // 强节流: 只在以下情况打印:
+            // 1) mode 变化(新一段动画开始).
+            // 2) progress 显著回退(新一段动画开始).
+            // 3) 距离上次打印超过 1s(用于长动画抽样).
+            var now = (double)Time.realtimeSinceStartup;
+            var progress01 = Mathf.Clamp01(showHideProgress);
+
+            var progressBackJump = progress01 + 0.25f < m_debugLastLoggedShowHideProgress01;
+            var modeChanged = showHideMode != m_debugLastLoggedShowHideMode;
+            var timeDue = m_debugLastLoggedShowHideRealtime < 0.0 || now - m_debugLastLoggedShowHideRealtime > 1.0;
+
+            if (!modeChanged && !progressBackJump && !timeDue)
+                return;
+
+            m_debugLastLoggedShowHideRealtime = now;
+            m_debugLastLoggedShowHideMode = showHideMode;
+            m_debugLastLoggedShowHideProgress01 = progress01;
+
+            var shader = settings ? settings.LidarShader : null;
+            var shaderPath = shader ? UnityEditor.AssetDatabase.GetAssetPath(shader) : "null";
+            var settingsPath = settings ? UnityEditor.AssetDatabase.GetAssetPath(settings) : "null";
+            var matShader = m_materialInstance ? m_materialInstance.shader : null;
+            var matShaderPath = matShader ? UnityEditor.AssetDatabase.GetAssetPath(matShader) : "null";
+
+            var hasNoiseStrengthProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideNoiseStrength))
+                ? 1
+                : 0;
+            var hasNoiseModeProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideNoiseMode))
+                ? 1
+                : 0;
+            var hasWarpPixelsProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideWarpPixels))
+                ? 1
+                : 0;
+            var hasGateProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideGate)) ? 1 : 0;
+            var hasModeProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideMode)) ? 1 : 0;
+            var hasProgressProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideProgress)) ? 1 : 0;
+            var hasVisibilityProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarVisibility)) ? 1 : 0;
+            var hasIntensityProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarIntensity)) ? 1 : 0;
+            var hasDepthOpacityProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarDepthOpacity)) ? 1 : 0;
+
+            Debug.Log(
+                "[Gsplat][LiDAR][ShowHideDiag] " +
+                $"settings={settingsPath} " +
+                $"shader={DescribeShader(shader)} shaderPath={shaderPath} " +
+                $"matShader={DescribeShader(matShader)} matShaderPath={matShaderPath} " +
+                $"gate={showHideGate:0.###} mode={showHideMode} p={progress01:0.###} " +
+                $"srcMode={showHideSourceMaskMode} srcP={Mathf.Clamp01(showHideSourceMaskProgress):0.###} " +
+                $"noise(mode={showHideNoiseMode} str={showHideNoiseStrength:0.###} scale={showHideNoiseScale:0.###} spd={showHideNoiseSpeed:0.###} warpPx={showHideWarpPixels:0.###}) " +
+                $"shape(maxR={showHideMaxRadius:0.###} ringW={showHideRingWidth:0.###} trailW={showHideTrailWidth:0.###}) " +
+                $"hasProp(gate={hasGateProp} mode={hasModeProp} p={hasProgressProp} " +
+                $"vis={hasVisibilityProp} inten={hasIntensityProp} depOp={hasDepthOpacityProp} " +
+                $"noiseMode={hasNoiseModeProp} noiseStr={hasNoiseStrengthProp} warpPx={hasWarpPixelsProp})");
+        }
+
+        static string DescribeShader(Shader shader)
+        {
+            if (!shader)
+                return "null";
+            return $"{shader.name}#{shader.GetInstanceID()}";
+        }
+#endif
+
         // --------------------------------------------------------------------
         // Render: 规则点云绘制
         // --------------------------------------------------------------------
@@ -276,7 +380,12 @@ namespace Gsplat
             float depthNear, float depthFar, float pointRadiusPixels,
             GsplatLidarColorMode colorMode, float colorBlend01, float visibility01,
             float trailGamma, float intensity, float depthOpacity,
-            GraphicsBuffer splatColorBuffer)
+            GraphicsBuffer splatColorBuffer,
+            Matrix4x4 worldToModel, float showHideGate, int showHideMode, float showHideProgress,
+            int showHideSourceMaskMode, float showHideSourceMaskProgress,
+            Vector3 showHideCenterModel, float showHideMaxRadius, float showHideRingWidth, float showHideTrailWidth,
+            int showHideNoiseMode, float showHideNoiseStrength, float showHideNoiseScale, float showHideNoiseSpeed,
+            float showHideWarpPixels)
         {
             if (m_lastRangeImageUpdateRealtime < 0.0)
             {
@@ -320,10 +429,53 @@ namespace Gsplat
             m_propertyBlock.SetInt(k_lidarAzimuthBins, azimuthBins);
             m_propertyBlock.SetInt(k_lidarBeamCount, beamCount);
             m_propertyBlock.SetMatrix(k_lidarMatrixL2W, lidarLocalToWorld);
+            m_propertyBlock.SetMatrix(k_lidarMatrixW2M, worldToModel);
             m_propertyBlock.SetFloat(k_lidarPointRadiusPixels, Mathf.Max(pointRadiusPixels, 0.0f));
             m_propertyBlock.SetInt(k_lidarColorMode, (int)colorMode);
             m_propertyBlock.SetFloat(k_lidarColorBlend, Mathf.Clamp01(colorBlend01));
             m_propertyBlock.SetFloat(k_lidarVisibility, Mathf.Clamp01(visibility01));
+            m_propertyBlock.SetFloat(k_lidarShowHideGate, Mathf.Clamp01(showHideGate));
+            if (showHideMode != 1 && showHideMode != 2)
+                showHideMode = 0;
+            m_propertyBlock.SetInt(k_lidarShowHideMode, showHideMode);
+            m_propertyBlock.SetFloat(k_lidarShowHideProgress, Mathf.Clamp01(showHideProgress));
+            if (showHideSourceMaskMode < 1 || showHideSourceMaskMode > 4)
+                showHideSourceMaskMode = 1;
+            m_propertyBlock.SetInt(k_lidarShowHideSourceMaskMode, showHideSourceMaskMode);
+            m_propertyBlock.SetFloat(k_lidarShowHideSourceMaskProgress, Mathf.Clamp01(showHideSourceMaskProgress));
+            m_propertyBlock.SetVector(k_lidarShowHideCenterModel,
+                new Vector4(showHideCenterModel.x, showHideCenterModel.y, showHideCenterModel.z, 0.0f));
+            m_propertyBlock.SetFloat(k_lidarShowHideMaxRadius,
+                (float.IsNaN(showHideMaxRadius) || float.IsInfinity(showHideMaxRadius) || showHideMaxRadius < 0.0f)
+                    ? 0.0f
+                    : showHideMaxRadius);
+            m_propertyBlock.SetFloat(k_lidarShowHideRingWidth,
+                (float.IsNaN(showHideRingWidth) || float.IsInfinity(showHideRingWidth) || showHideRingWidth < 0.0f)
+                    ? 0.0f
+                    : showHideRingWidth);
+            m_propertyBlock.SetFloat(k_lidarShowHideTrailWidth,
+                (float.IsNaN(showHideTrailWidth) || float.IsInfinity(showHideTrailWidth) || showHideTrailWidth < 0.0f)
+                    ? 0.0f
+                    : showHideTrailWidth);
+            if (showHideNoiseMode < 0 || showHideNoiseMode > 2)
+                showHideNoiseMode = 0;
+            m_propertyBlock.SetInt(k_lidarShowHideNoiseMode, showHideNoiseMode);
+            m_propertyBlock.SetFloat(k_lidarShowHideNoiseStrength,
+                (float.IsNaN(showHideNoiseStrength) || float.IsInfinity(showHideNoiseStrength))
+                    ? 0.0f
+                    : Mathf.Clamp01(showHideNoiseStrength));
+            m_propertyBlock.SetFloat(k_lidarShowHideNoiseScale,
+                (float.IsNaN(showHideNoiseScale) || float.IsInfinity(showHideNoiseScale) || showHideNoiseScale < 0.0f)
+                    ? 0.0f
+                    : showHideNoiseScale);
+            m_propertyBlock.SetFloat(k_lidarShowHideNoiseSpeed,
+                (float.IsNaN(showHideNoiseSpeed) || float.IsInfinity(showHideNoiseSpeed) || showHideNoiseSpeed < 0.0f)
+                    ? 0.0f
+                    : showHideNoiseSpeed);
+            m_propertyBlock.SetFloat(k_lidarShowHideWarpPixels,
+                (float.IsNaN(showHideWarpPixels) || float.IsInfinity(showHideWarpPixels) || showHideWarpPixels < 0.0f)
+                    ? 0.0f
+                    : showHideWarpPixels);
             m_propertyBlock.SetFloat(k_lidarDepthNear, depthNear);
             m_propertyBlock.SetFloat(k_lidarDepthFar, depthFar);
             m_propertyBlock.SetFloat(k_lidarRotationHz, rotationHz);
@@ -334,6 +486,18 @@ namespace Gsplat
 
             // 必绑 buffers(Metal 稳态):
             BindBuffersForRender(splatColorBuffer);
+
+#if UNITY_EDITOR
+            // 诊断: 在 Editor 里用日志证明:
+            // - 我们到底在用哪一份 shader(路径).
+            // - show/hide 的 noise 参数是否真的进入了 draw.
+            TryLogShowHideDiagnostics(settings,
+                showHideGate, showHideMode, showHideProgress,
+                showHideSourceMaskMode, showHideSourceMaskProgress,
+                showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
+                showHideNoiseMode, showHideNoiseStrength, showHideNoiseScale, showHideNoiseSpeed,
+                showHideWarpPixels);
+#endif
 
             var rp = new RenderParams(m_materialInstance)
             {

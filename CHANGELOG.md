@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tuned hide splat size shrink to follow a faster-then-slower (easeOutCirc-like) curve, keeping a non-zero minimum size to avoid "disappearing too fast" during the burn tail.
 - Added `GsplatRenderStyle` (`Gaussian` / `ParticleDots`) and `SetRenderStyle(...)` API for `GsplatRenderer` and `GsplatSequenceRenderer` to switch between standard Gaussian splats and screen-space particle dots (solid discs with a soft edge), with a default animated morph transition (`easeInOutQuart`, `1.5s`) and adjustable `ParticleDotRadiusPixels` (radius in screen pixels).
 - Added an experimental LiDAR scan visualization mode for `GsplatRenderer` and `GsplatSequenceRenderer` (regular `128 x 2048` point grid, first return occlusion via GPU range image, `UpdateHz=10` full rebuild with `RotationHz=5` scan head + 1-revolution afterglow, `Depth` / `SplatColorSH0` color modes, `LidarDepthOpacity` for `Depth` visibility, and `HideSplatsWhenLidarEnabled` to disable splat sort/draw while keeping buffers for LiDAR sampling). Disabled by default.
+- Added `LidarShowHideWarpPixels` to tune RadarScan(LiDAR) show/hide jitter amplitude in screen pixels, decoupled from point size.
 - Added `SetRenderStyleAndRadarScan(...)` API to `GsplatRenderer` and `GsplatSequenceRenderer` for a single-call switch between Gaussian/ParticleDots and RadarScan mode (enables LiDAR + forces ParticleDots when RadarScan is active).
 
 ### Changed
@@ -44,6 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed a black-frame gap when switching `Gaussian/ParticleDots -> RadarScan` with `HideSplatsWhenLidarEnabled=true`, by delaying splat hiding until radar fade-in is nearly complete.
 - Fixed abrupt bright-sphere popping at `Hide` start by making hide ring/trail radius start very small and then ramp up (geometry-first, not transparency-first).
 - Fixed `Show/Hide` interrupt glitches by introducing source-mask compositing: pressing `Hide` during `Show` (or `Show` during `Hide`) now keeps the current visible distribution as a source mask and overlays the new transition on top, avoiding reverse playback and full-frame pops during rapid toggles.
+- Fixed `Show/Hide` not affecting `RadarScan`: LiDAR point-cloud rendering now consumes the same show/hide overlay semantics (`mode/progress/sourceMask`) as `ParticleDots`, so radar mode also gets center-out reveal/burn behavior during visibility transitions.
+- Fixed missing particle-noise feel in `RadarScan` show/hide transitions: LiDAR now forwards `VisibilityNoiseMode/NoiseStrength/NoiseScale/NoiseSpeed` into the show/hide mask path (primary mask, source-mask compositing, and ring glow edge jitter), so radar reveal/burn no longer looks unnaturally "clean" compared to `ParticleDots`.
+- Fixed missing "ParticleDots-like" noise motion in `RadarScan` show/hide by adding edge-weighted screen-space point jitter (noise-driven position warp) during transition, so radar points now exhibit visible granular displacement instead of only brightness-mask noise.
 
 ## [1.1.4] - 2026-02-23
 

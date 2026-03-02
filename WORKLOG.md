@@ -396,3 +396,120 @@
 - 为避免测试文案调整引入误报,再次执行 `Gsplat.Tests`.
 - 结果: total=40, passed=38, failed=0, skipped=2.
 - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_visibility_source_overlay_2026-03-02_1848_noquit.xml`
+
+## 2026-03-03 01:07:00 +0800 - RadarScan 支持 Show/Hide(对齐 ParticleDots)
+
+### 实施内容
+- `Runtime/GsplatRenderer.cs`
+  - 新增 `BuildLidarShowHideOverlayForThisFrame(...)`.
+  - 在 `RenderLidarInUpdateIfNeeded` / `RenderLidarForCamera` 下发 LiDAR show/hide overlay 参数.
+  - Hidden 终态下,`showHideGate=0 && mode=0` 时直接跳过 LiDAR draw.
+
+- `Runtime/GsplatSequenceRenderer.cs`
+  - 同步新增 `BuildLidarShowHideOverlayForThisFrame(...)`.
+  - 同步 LiDAR render 调用参数扩展与 hidden draw skip.
+
+- `Runtime/Lidar/GsplatLidarScan.cs`
+  - `RenderPointCloud(...)` 扩展 show/hide overlay 参数.
+  - 新增 LiDAR shader 属性绑定:
+    - `_LidarMatrixW2M`
+    - `_LidarShowHideGate`
+    - `_LidarShowHideMode`
+    - `_LidarShowHideProgress`
+    - `_LidarShowHideSourceMaskMode`
+    - `_LidarShowHideSourceMaskProgress`
+    - `_LidarShowHideCenterModel`
+    - `_LidarShowHideMaxRadius`
+    - `_LidarShowHideRingWidth`
+    - `_LidarShowHideTrailWidth`
+
+- `Runtime/Shaders/GsplatLidar.shader`
+  - 新增 show/hide overlay uniforms 与 `world->model` 矩阵.
+  - 新增 `EaseInOutQuad` / `EvalLidarShowHideVisibleMask`.
+  - 在 vert 计算 LiDAR show/hide 掩码并支持 source-mask 叠加.
+  - 在 frag 中将 `alpha/brightness` 乘以 show/hide 掩码,并给边缘带轻微 glow boost.
+
+- `Tests/Editor/GsplatVisibilityAnimationTests.cs`
+  - 新增反射 helper:
+    - `BuildLidarShowHideOverlay(...)`
+    - `SetVisibilityStateByName(...)`
+    - `SetVisibilitySourceMaskByName(...)`
+  - 新增测试:
+    - `BuildLidarShowHideOverlay_HiddenState_OutputsGateZero`
+    - `BuildLidarShowHideOverlay_HidingState_OutputsHideModeAndSnapshot`
+
+- `CHANGELOG.md`
+  - 增加 RadarScan show/hide 对齐修复记录.
+
+### 验证
+- Unity EditMode `Gsplat.Tests`
+  - total=42, passed=40, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_showhide_overlay_2026-03-03_0100_noquit.xml`
+
+## 2026-03-03 01:37:00 +0800
+- 修复 `RadarScan` show/hide 缺少粒子 noise 质感的问题.
+
+### 变更内容
+- `Runtime/Shaders/GsplatLidar.shader`
+  - 补齐 show/hide noise 链路:
+    - primary mask 接入 noise.
+    - source-mask(`ShowSnapshot`/`HideSnapshot`)接入同一 noise 语义.
+    - ring glow 前沿改为 noise jitter 边界.
+  - `EvalLidarShowHideVisibleMask` 调整为 show/hide 都受 `ashMul` 影响,与 splat 侧观感更一致.
+- `Tests/Editor/GsplatVisibilityAnimationTests.cs`
+  - 新增 `LidarRenderPointCloud_Signature_ContainsShowHideNoiseParams`.
+  - 通过反射锁定 `RenderPointCloud` 的 noise 参数契约,防止未来回归.
+- `CHANGELOG.md`
+  - 记录 RadarScan show/hide noise 修复说明.
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests`
+  - total=43, passed=41, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_showhide_noise_2026-03-03_0131_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_showhide_noise_2026-03-03_0131.log`
+
+## 2026-03-03 02:06:00 +0800
+- RadarScan show/hide noise 二次增强(提升肉眼可见度):
+  - 提高 LiDAR noise 采样频率.
+  - Curl 模式增加轻量 domain warp + 双层噪声混合.
+  - 边界 jitter 增加最小幅度下限,避免 trail 较小时噪声被吞掉.
+  - ring glow 增加 noise 明暗调制.
+
+### 回归(证据)
+- Unity EditMode `Gsplat.Tests`
+  - total=43, passed=41, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_showhide_noise_tune2_2026-03-03_0204_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_showhide_noise_tune2_2026-03-03_0204.log`
+
+## 2026-03-03 02:14:00 +0800
+- RadarScan show/hide noise 再增强:
+  - LiDAR 路径内部 `noiseStrength` 映射提升到 `x1.6`,保证默认参数也能看出噪声.
+  - 修复一次变量命名冲突隐患(`noiseWeight` -> `noiseWeightJitter`).
+
+### 回归(证据)
+- Unity EditMode `Gsplat.Tests`
+  - total=43, passed=41, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_showhide_noise_tune3_2026-03-03_0213_noquit.xml`
+
+## 2026-03-03 02:22:00 +0800
+- 按 `ParticleDots` 观感补齐 `RadarScan` show/hide 噪声位移效果:
+  - 新增边界粒子位移抖动(screen-space warp),并按 edge/ring/progress 控制权重.
+  - 解决"有遮罩噪声但看不到粒子扰动"的问题.
+
+### 回归(证据)
+- Unity EditMode `Gsplat.Tests`
+  - total=43, passed=41, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_showhide_noise_tune4_2026-03-03_0220_noquit.xml`
+
+## 2026-03-02 19:00:06 +0800
+- LiDAR: 按用户要求把 RadarScan show/hide 的 noise 位移幅度改为可调:
+  - 新增 `GsplatRenderer.LidarShowHideWarpPixels` / `GsplatSequenceRenderer.LidarShowHideWarpPixels`(单位: 屏幕像素).
+  - shader 新增 `_LidarShowHideWarpPixels`,show/hide 的屏幕空间 jitter 不再与点半径耦合.
+- Tests:
+  - 新增 `GsplatLidarShaderPropertyTests`,锁定 LiDAR shader 必须包含 `_LidarShowHideNoise*` + `_LidarShowHideWarpPixels` 属性契约.
+  - 更新 `GsplatLidarScanTests`,覆盖新字段的 clamp 语义(非法值回退到默认 6px).
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests`
+  - total=44, passed=42, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_showhide_warp_pixels_2026-03-02_185824_noquit.xml`

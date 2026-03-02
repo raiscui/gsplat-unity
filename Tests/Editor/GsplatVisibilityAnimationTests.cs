@@ -20,6 +20,9 @@ namespace Gsplat.Tests
         static readonly MethodInfo s_advanceLidarAnimationStateIfNeeded =
             typeof(GsplatRenderer).GetMethod("AdvanceLidarAnimationStateIfNeeded", BindingFlags.Instance | BindingFlags.NonPublic);
 
+        static readonly MethodInfo s_buildLidarShowHideOverlayForThisFrame =
+            typeof(GsplatRenderer).GetMethod("BuildLidarShowHideOverlayForThisFrame", BindingFlags.Instance | BindingFlags.NonPublic);
+
         static readonly FieldInfo s_renderStyleBlend01Field =
             typeof(GsplatRenderer).GetField("m_renderStyleBlend01", BindingFlags.Instance | BindingFlags.NonPublic);
 
@@ -151,6 +154,49 @@ namespace Gsplat.Tests
             Assert.IsNotNull(s_visibilitySourceMaskProgressField,
                 "Expected private field 'm_visibilitySourceMaskProgress01' to exist on GsplatRenderer.");
             return (float)s_visibilitySourceMaskProgressField.GetValue(renderer);
+        }
+
+        static void SetVisibilityStateByName(GsplatRenderer renderer, string stateName)
+        {
+            Assert.IsNotNull(s_visibilityStateField, "Expected private field 'm_visibilityState' to exist on GsplatRenderer.");
+            var enumType = s_visibilityStateField.FieldType;
+            var enumValue = System.Enum.Parse(enumType, stateName);
+            s_visibilityStateField.SetValue(renderer, enumValue);
+        }
+
+        static void SetVisibilityProgress01(GsplatRenderer renderer, float progress01)
+        {
+            Assert.IsNotNull(s_visibilityProgress01Field,
+                "Expected private field 'm_visibilityProgress01' to exist on GsplatRenderer.");
+            s_visibilityProgress01Field.SetValue(renderer, Mathf.Clamp01(progress01));
+        }
+
+        static void SetVisibilitySourceMaskByName(GsplatRenderer renderer, string modeName, float progress01)
+        {
+            Assert.IsNotNull(s_visibilitySourceMaskModeField,
+                "Expected private field 'm_visibilitySourceMaskMode' to exist on GsplatRenderer.");
+            var enumType = s_visibilitySourceMaskModeField.FieldType;
+            var enumValue = System.Enum.Parse(enumType, modeName);
+            s_visibilitySourceMaskModeField.SetValue(renderer, enumValue);
+
+            Assert.IsNotNull(s_visibilitySourceMaskProgressField,
+                "Expected private field 'm_visibilitySourceMaskProgress01' to exist on GsplatRenderer.");
+            s_visibilitySourceMaskProgressField.SetValue(renderer, Mathf.Clamp01(progress01));
+        }
+
+        static (float gate, int mode, float progress, int sourceMode, float sourceProgress, float maxRadius) BuildLidarShowHideOverlay(
+            GsplatRenderer renderer, Bounds localBounds)
+        {
+            Assert.IsNotNull(s_buildLidarShowHideOverlayForThisFrame,
+                "Expected GsplatRenderer.BuildLidarShowHideOverlayForThisFrame to exist.");
+
+            var args = new object[]
+            {
+                localBounds,
+                0.0f, 0, 1.0f, 1, 1.0f, Vector3.zero, 0.0f, 0.0f, 0.0f
+            };
+            s_buildLidarShowHideOverlayForThisFrame.Invoke(renderer, args);
+            return ((float)args[1], (int)args[2], (float)args[3], (int)args[4], (float)args[5], (float)args[7]);
         }
 
         static GsplatAsset CreateMinimalAsset1Splat()
@@ -556,6 +602,83 @@ namespace Gsplat.Tests
 
             Object.DestroyImmediate(go);
             Object.DestroyImmediate(asset);
+        }
+
+        [Test]
+        public void BuildLidarShowHideOverlay_HiddenState_OutputsGateZero()
+        {
+            var go = new GameObject("GsplatVisibilityAnimationTests_LidarOverlay_Hidden");
+            var r = go.AddComponent<GsplatRenderer>();
+            r.EnableVisibilityAnimation = true;
+
+            SetVisibilityStateByName(r, "Hidden");
+            SetVisibilityProgress01(r, 1.0f);
+            SetVisibilitySourceMaskByName(r, "FullHidden", 0.0f);
+
+            var overlay = BuildLidarShowHideOverlay(r, new Bounds(Vector3.zero, Vector3.one));
+            Assert.LessOrEqual(overlay.gate, 1e-6f, "Expected hidden state to hard-gate LiDAR show/hide overlay.");
+            Assert.AreEqual(0, overlay.mode, "Expected hidden steady state to use mode=0.");
+            Assert.AreEqual(2, overlay.sourceMode, "Expected hidden steady state source mode=FullHidden.");
+            Assert.LessOrEqual(overlay.sourceProgress, 1e-6f, "Expected hidden steady state source progress=0.");
+
+            Object.DestroyImmediate(go);
+        }
+
+        [Test]
+        public void BuildLidarShowHideOverlay_HidingState_OutputsHideModeAndSnapshot()
+        {
+            var go = new GameObject("GsplatVisibilityAnimationTests_LidarOverlay_Hiding");
+            var r = go.AddComponent<GsplatRenderer>();
+            r.EnableVisibilityAnimation = true;
+
+            SetVisibilityStateByName(r, "Hiding");
+            SetVisibilityProgress01(r, 0.35f);
+            SetVisibilitySourceMaskByName(r, "ShowSnapshot", 0.72f);
+
+            var overlay = BuildLidarShowHideOverlay(r, new Bounds(Vector3.zero, Vector3.one));
+            Assert.GreaterOrEqual(overlay.gate, 1.0f - 1e-6f, "Expected hiding state to keep LiDAR overlay enabled.");
+            Assert.AreEqual(2, overlay.mode, "Expected hiding state to output hide mode.");
+            Assert.AreEqual(0.35f, overlay.progress, 1e-5f, "Expected hiding state progress to be forwarded.");
+            Assert.AreEqual(3, overlay.sourceMode, "Expected source mask mode=ShowSnapshot in hide interrupt phase.");
+            Assert.AreEqual(0.72f, overlay.sourceProgress, 1e-5f, "Expected source snapshot progress to be forwarded.");
+            Assert.Greater(overlay.maxRadius, 1e-6f, "Expected positive max radius for LiDAR show/hide radial mask.");
+
+            Object.DestroyImmediate(go);
+        }
+
+        [Test]
+        public void LidarRenderPointCloud_Signature_ContainsShowHideNoiseParams()
+        {
+            // 说明:
+            // - Radar show/hide noise 需要从 renderer 透传到 LiDAR shader.
+            // - 这里锁定 GsplatLidarScan.RenderPointCloud 的参数契约,避免后续重构时丢参导致“开关有效但无噪声”.
+            var lidarScanType = typeof(GsplatRenderer).Assembly.GetType("Gsplat.GsplatLidarScan");
+            Assert.IsNotNull(lidarScanType, "Expected runtime type Gsplat.GsplatLidarScan to exist.");
+
+            var renderPointCloud = lidarScanType.GetMethod("RenderPointCloud",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            Assert.IsNotNull(renderPointCloud, "Expected GsplatLidarScan.RenderPointCloud to exist.");
+
+            var parameters = renderPointCloud.GetParameters();
+            var modeIndex = System.Array.FindIndex(parameters, p => p.Name == "showHideNoiseMode");
+            var strengthIndex = System.Array.FindIndex(parameters, p => p.Name == "showHideNoiseStrength");
+            var scaleIndex = System.Array.FindIndex(parameters, p => p.Name == "showHideNoiseScale");
+            var speedIndex = System.Array.FindIndex(parameters, p => p.Name == "showHideNoiseSpeed");
+
+            Assert.GreaterOrEqual(modeIndex, 0, "Expected RenderPointCloud to expose showHideNoiseMode parameter.");
+            Assert.GreaterOrEqual(strengthIndex, 0,
+                "Expected RenderPointCloud to expose showHideNoiseStrength parameter.");
+            Assert.GreaterOrEqual(scaleIndex, 0, "Expected RenderPointCloud to expose showHideNoiseScale parameter.");
+            Assert.GreaterOrEqual(speedIndex, 0, "Expected RenderPointCloud to expose showHideNoiseSpeed parameter.");
+
+            Assert.AreEqual(typeof(int), parameters[modeIndex].ParameterType,
+                "Expected showHideNoiseMode parameter type=int.");
+            Assert.AreEqual(typeof(float), parameters[strengthIndex].ParameterType,
+                "Expected showHideNoiseStrength parameter type=float.");
+            Assert.AreEqual(typeof(float), parameters[scaleIndex].ParameterType,
+                "Expected showHideNoiseScale parameter type=float.");
+            Assert.AreEqual(typeof(float), parameters[speedIndex].ParameterType,
+                "Expected showHideNoiseSpeed parameter type=float.");
         }
 
         [UnityTest]
