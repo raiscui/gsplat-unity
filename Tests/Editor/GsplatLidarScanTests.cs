@@ -46,6 +46,7 @@ namespace Gsplat.Tests
             r.LidarPointRadiusPixels = float.NegativeInfinity;
             r.LidarTrailGamma = -1.0f;
             r.LidarIntensity = float.PositiveInfinity;
+            r.LidarDepthOpacity = float.NaN;
             r.LidarMinSplatOpacity = float.NaN;
         }
 
@@ -70,6 +71,7 @@ namespace Gsplat.Tests
             r.LidarPointRadiusPixels = float.NegativeInfinity;
             r.LidarTrailGamma = -1.0f;
             r.LidarIntensity = float.PositiveInfinity;
+            r.LidarDepthOpacity = float.NaN;
             r.LidarMinSplatOpacity = float.NaN;
         }
 
@@ -99,6 +101,7 @@ namespace Gsplat.Tests
             Assert.AreEqual(2.0f, r.LidarPointRadiusPixels);
             Assert.AreEqual(2.0f, r.LidarTrailGamma);
             Assert.AreEqual(1.0f, r.LidarIntensity);
+            Assert.AreEqual(1.0f, r.LidarDepthOpacity);
             Assert.AreEqual(1.0f / 255.0f, r.LidarMinSplatOpacity, 1e-6f);
         }
 
@@ -115,6 +118,7 @@ namespace Gsplat.Tests
             Assert.AreEqual(2048, r.LidarAzimuthBins);
             Assert.AreEqual(GsplatUtils.k_LidarDefaultBeamCount, r.LidarBeamCount);
             Assert.AreEqual(2.0f, r.LidarDepthFar);
+            Assert.AreEqual(1.0f, r.LidarDepthOpacity);
             Assert.AreEqual(1.0f / 255.0f, r.LidarMinSplatOpacity, 1e-6f);
         }
 

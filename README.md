@@ -135,6 +135,8 @@ Default scanning setup (as discussed in the spec):
 - Color modes:
   - `Depth` with `LidarDepthNear = 1m`, `LidarDepthFar = 200m` (cyan -> blue -> purple -> red depth gradient)
   - `SplatColorSH0` (samples the hit splat base color from SH0)
+- Depth opacity:
+  - `LidarDepthOpacity` (0..1, default `1`, only affects `Depth` mode)
 - Point size: `LidarPointRadiusPixels` (default `2px` radius)
 - Rendering: screen-space square points (soft edge), additive blend, brightness controlled by `LidarTrailGamma` + `LidarIntensity`
 - Noise filter: `LidarMinSplatOpacity` (default `1/255`, filters near-invisible splats to avoid a "transparent shell" look)
@@ -147,6 +149,7 @@ r.EnableLidarScan = true;
 r.LidarOrigin = lidarTransform;
 r.HideSplatsWhenLidarEnabled = true;
 r.LidarColorMode = GsplatLidarColorMode.Depth;
+r.LidarDepthOpacity = 1.0f;
 r.LidarPointRadiusPixels = 2.0f;
 ```
 

@@ -29,6 +29,7 @@ namespace Gsplat.Editor
                 nameof(GsplatSequenceRenderer.LidarColorMode),
                 nameof(GsplatSequenceRenderer.LidarTrailGamma),
                 nameof(GsplatSequenceRenderer.LidarIntensity),
+                nameof(GsplatSequenceRenderer.LidarDepthOpacity),
                 nameof(GsplatSequenceRenderer.LidarMinSplatOpacity),
                 nameof(GsplatSequenceRenderer.HideSplatsWhenLidarEnabled));
 
@@ -83,13 +84,16 @@ namespace Gsplat.Editor
 
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField("Visual", EditorStyles.boldLabel);
-                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarColorMode)));
+                var colorModeProp = serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarColorMode));
+                EditorGUILayout.PropertyField(colorModeProp);
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDepthNear)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDepthFar)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarMinSplatOpacity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarPointRadiusPixels)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarTrailGamma)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarIntensity)));
+                using (new EditorGUI.DisabledScope(colorModeProp.enumValueIndex != (int)GsplatLidarColorMode.Depth))
+                    EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDepthOpacity)));
 
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField("Splat Visibility", EditorStyles.boldLabel);

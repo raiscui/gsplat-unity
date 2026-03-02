@@ -30,6 +30,7 @@ namespace Gsplat.Editor
                 nameof(GsplatRenderer.LidarColorMode),
                 nameof(GsplatRenderer.LidarTrailGamma),
                 nameof(GsplatRenderer.LidarIntensity),
+                nameof(GsplatRenderer.LidarDepthOpacity),
                 nameof(GsplatRenderer.LidarMinSplatOpacity),
                 nameof(GsplatRenderer.HideSplatsWhenLidarEnabled));
             
@@ -93,13 +94,16 @@ namespace Gsplat.Editor
 
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField("Visual", EditorStyles.boldLabel);
-                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarColorMode)));
+                var colorModeProp = serializedObject.FindProperty(nameof(GsplatRenderer.LidarColorMode));
+                EditorGUILayout.PropertyField(colorModeProp);
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthNear)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthFar)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarMinSplatOpacity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarPointRadiusPixels)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarTrailGamma)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarIntensity)));
+                using (new EditorGUI.DisabledScope(colorModeProp.enumValueIndex != (int)GsplatLidarColorMode.Depth))
+                    EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthOpacity)));
 
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField("Splat Visibility", EditorStyles.boldLabel);

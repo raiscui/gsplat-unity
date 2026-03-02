@@ -185,6 +185,14 @@ namespace Gsplat
         public float LidarIntensity = 1.0f;
 
         [Range(0.0f, 1.0f)]
+        [Tooltip("LiDAR Depth 模式下的点云透明度/可见性倍率(0..1).\n" +
+                 "说明:\n" +
+                 "- 仅在 LidarColorMode=Depth 时生效.\n" +
+                 "- 因为点云使用 additive blend,该值表现为对亮度/覆盖率的缩放(更像\"可见性\").\n" +
+                 "- 默认 1(完全显示).")]
+        public float LidarDepthOpacity = 1.0f;
+
+        [Range(0.0f, 1.0f)]
         [Tooltip("LiDAR 采样时的最小 splat opacity 阈值.\n" +
                  "说明:\n" +
                  "- 用于过滤掉几乎不可见的 splats,避免 first return 命中\"透明噪声外壳\".\n" +
@@ -1581,6 +1589,10 @@ namespace Gsplat
             if (float.IsNaN(LidarIntensity) || float.IsInfinity(LidarIntensity) || LidarIntensity < 0.0f)
                 LidarIntensity = 1.0f;
 
+            if (float.IsNaN(LidarDepthOpacity) || float.IsInfinity(LidarDepthOpacity) || LidarDepthOpacity < 0.0f)
+                LidarDepthOpacity = 1.0f;
+            LidarDepthOpacity = Mathf.Clamp01(LidarDepthOpacity);
+
             if (float.IsNaN(LidarMinSplatOpacity) || float.IsInfinity(LidarMinSplatOpacity) || LidarMinSplatOpacity < 0.0f)
                 LidarMinSplatOpacity = 1.0f / 255.0f;
             LidarMinSplatOpacity = Mathf.Clamp01(LidarMinSplatOpacity);
@@ -1692,6 +1704,7 @@ namespace Gsplat
                 LidarAzimuthBins, LidarBeamCount,
                 LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
                 LidarColorMode, LidarTrailGamma, LidarIntensity,
+                LidarDepthOpacity,
                 m_renderer.ColorBuffer);
         }
 
@@ -1718,6 +1731,7 @@ namespace Gsplat
                 LidarAzimuthBins, LidarBeamCount,
                 LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
                 LidarColorMode, LidarTrailGamma, LidarIntensity,
+                LidarDepthOpacity,
                 m_renderer.ColorBuffer);
         }
 

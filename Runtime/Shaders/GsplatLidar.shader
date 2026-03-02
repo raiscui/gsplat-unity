@@ -66,6 +66,7 @@ Shader "Gsplat/LiDAR"
             float _LidarRotationHz;
             float _LidarTrailGamma;
             float _LidarIntensity;
+            float _LidarDepthOpacity;
             float _LidarTime;
 
             StructuredBuffer<uint> _LidarMinRangeSqBits;
@@ -257,7 +258,11 @@ Shader "Gsplat/LiDAR"
                 // - Intensity 只控制亮度,避免出现“调强度=变透明”的错觉.
                 float trail = saturate(i.trail01);
                 float brightness = max(_LidarIntensity, 0.0);
-                float strength = alphaShape * trail * brightness;
+                // DepthOpacity:
+                // - 仅 Depth 模式生效,用于把“深度色彩点云”的可见性从 Intensity 中解耦出来,便于按场景调参.
+                // - 因为点云使用 additive blend,这里的 opacity 实际表现为“亮度/覆盖率”的缩放.
+                float depthOpacity = (_LidarColorMode == 0) ? saturate(_LidarDepthOpacity) : 1.0;
+                float strength = alphaShape * trail * brightness * depthOpacity;
                 if (strength < 1.0 / 255.0) discard;
 
                 float3 rgb = i.rgb * strength;
