@@ -1091,3 +1091,69 @@
     - `SetLidarColorMode_Animated_ReachesTargetBlend`
     - `SetRadarScanEnabled_Animated_FadesOutVisibility`
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_radar_anim_fix_2026-03-02_1612_noquit.xml`
+
+## 2026-03-02 17:12:00 +0800: 修复 Hide 起始亮球突兀(glow burst)
+
+### 现象
+- 点击 `Hide` 后,画面先出现一个突兀的亮色球体,随后才进入正常 burn-out.
+
+### 根因
+- `PlayHide()` 首帧就进入 `Hiding(mode=2)`.
+- shader 对 hide 没有 `progress=0` 的早退保护(show 有,hide 无).
+- hide 路径默认 `HideGlowStartBoost` + `HideGlowIntensity` 较高,导致首帧 ring/glow 视觉爆发.
+
+### 修复
+- `Runtime/Shaders/Gsplat.shader`:
+  - 新增 hide 起始门控 `hideIntroGate = smoothstep(0, 0.12, progress)`.
+  - `ring` 与 hide `glowFactor` 都乘该门控,使其从 0 平滑抬起.
+
+### 验证(证据型)
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests`:
+  - total=38, passed=36, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_hide_glow_intro_gate_2026-03-02_1706_noquit.xml`
+
+## 2026-03-02 17:25:00 +0800: 回撤 hide 透明度门控,改为“从小尺寸开始”
+
+### 背景
+- 上一版通过 hide glow 起始门控降低突兀,但视觉不符合需求.
+- 你明确要求: 球体应从很小开始,而不是靠透明度/亮度抑制.
+
+### 调整
+- `Runtime/Shaders/Gsplat.shader`:
+  - 删除 hide glow 的起始门控乘法.
+  - 新增 hide 几何尺寸门控: 起始阶段缩小 `ringWidth/trailWidth`,随后快速拉到目标宽度.
+
+### 结果
+- hide 首帧不再是“大球突然出现”,改为“小球起步再扩展”.
+
+### 验证(证据型)
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests`:
+  - total=38, passed=36, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_hide_glow_small_start_2026-03-02_1720_noquit.xml`
+
+## 2026-03-02 18:44:00 +0800 - Show/Hide 中断导致可见域翻面(整片突变)
+
+### 问题
+- `Show` 过程中按 `Hide`,或 `Hide` 过程中按 `Show`,会出现“显示不正常”,典型是整片区域瞬时弹出/消失.
+
+### 原因
+- 显隐动画是单通道 `mode + progress`.
+- show/hide 的可见域语义并不对称.
+- 中断时直接切 mode,缺少对“当前可见分布”的承接,导致 mode 切换瞬间语义翻面.
+
+### 修复
+- 状态机增加 source mask 抽象:
+  - `FullVisible` / `FullHidden` / `ShowSnapshot(progress)` / `HideSnapshot(progress)`.
+- 中断处理改为:
+  - 先捕获 source mask.
+  - 再启动目标 mode 的新进度.
+- shader 合成:
+  - show: `max(primary, source)`
+  - hide: `primary * source`
+- show 的 source 保留区补了 size 回拉,保证保留层不被 show minScale 压小.
+
+### 验证
+- Unity EditMode tests: `Gsplat.Tests`
+  - total=40, passed=38, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_visibility_source_overlay_2026-03-02_1808_noquit.xml`
+- 中断回归用例通过,且 source snapshot 断言通过.

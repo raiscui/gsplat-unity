@@ -350,9 +350,25 @@ namespace Gsplat
             Hiding = 3,
         }
 
+        // --------------------------------------------------------------------
+        // source mask:
+        // - 解决 show/hide 中途切换时的整片突变.
+        // - 通过保留“切换前可见分布”做叠加合成.
+        // --------------------------------------------------------------------
+        enum VisibilitySourceMaskMode
+        {
+            None = 0,
+            FullVisible = 1,
+            FullHidden = 2,
+            ShowSnapshot = 3,
+            HideSnapshot = 4,
+        }
+
         VisibilityAnimState m_visibilityState = VisibilityAnimState.Visible;
         float m_visibilityProgress01 = 1.0f;
         float m_visibilityLastAdvanceRealtime = -1.0f;
+        VisibilitySourceMaskMode m_visibilitySourceMaskMode = VisibilitySourceMaskMode.FullVisible;
+        float m_visibilitySourceMaskProgress01 = 1.0f;
 
         // --------------------------------------------------------------------
         // Render style 切换 runtime 状态(非序列化):
@@ -890,12 +906,82 @@ namespace Gsplat
         // --------------------------------------------------------------------
         // Public API: show/hide 显隐控制
         // --------------------------------------------------------------------
+        void SetVisibilitySourceMask(VisibilitySourceMaskMode mode, float progress01 = 1.0f)
+        {
+            m_visibilitySourceMaskMode = mode;
+            if (mode == VisibilitySourceMaskMode.ShowSnapshot || mode == VisibilitySourceMaskMode.HideSnapshot)
+            {
+                if (float.IsNaN(progress01) || float.IsInfinity(progress01))
+                    progress01 = 0.0f;
+                m_visibilitySourceMaskProgress01 = Mathf.Clamp01(progress01);
+            }
+            else
+            {
+                m_visibilitySourceMaskProgress01 = mode == VisibilitySourceMaskMode.FullHidden ? 0.0f : 1.0f;
+            }
+        }
+
+        void CaptureVisibilitySourceMaskForShowTransition()
+        {
+            if (m_visibilityState == VisibilityAnimState.Hiding &&
+                (m_visibilitySourceMaskMode == VisibilitySourceMaskMode.ShowSnapshot ||
+                 m_visibilitySourceMaskMode == VisibilitySourceMaskMode.FullHidden))
+            {
+                return;
+            }
+
+            switch (m_visibilityState)
+            {
+                case VisibilityAnimState.Hidden:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.FullHidden);
+                    break;
+                case VisibilityAnimState.Hiding:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.HideSnapshot, m_visibilityProgress01);
+                    break;
+                case VisibilityAnimState.Showing:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.ShowSnapshot, m_visibilityProgress01);
+                    break;
+                default:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
+                    break;
+            }
+        }
+
+        void CaptureVisibilitySourceMaskForHideTransition()
+        {
+            if (m_visibilityState == VisibilityAnimState.Showing &&
+                (m_visibilitySourceMaskMode == VisibilitySourceMaskMode.HideSnapshot ||
+                 m_visibilitySourceMaskMode == VisibilitySourceMaskMode.FullVisible))
+            {
+                return;
+            }
+
+            switch (m_visibilityState)
+            {
+                case VisibilityAnimState.Visible:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
+                    break;
+                case VisibilityAnimState.Showing:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.ShowSnapshot, m_visibilityProgress01);
+                    break;
+                case VisibilityAnimState.Hiding:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.HideSnapshot, m_visibilityProgress01);
+                    break;
+                default:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.FullHidden);
+                    break;
+            }
+        }
+
         public void SetVisible(bool visible, bool animated = true)
         {
             if (!animated || !EnableVisibilityAnimation)
             {
                 m_visibilityState = visible ? VisibilityAnimState.Visible : VisibilityAnimState.Hidden;
                 m_visibilityProgress01 = 1.0f;
+                SetVisibilitySourceMask(visible
+                    ? VisibilitySourceMaskMode.FullVisible
+                    : VisibilitySourceMaskMode.FullHidden);
                 return;
             }
 
@@ -911,18 +997,17 @@ namespace Gsplat
             {
                 m_visibilityState = VisibilityAnimState.Visible;
                 m_visibilityProgress01 = 1.0f;
+                SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
                 return;
             }
 
             if (m_visibilityState is VisibilityAnimState.Visible or VisibilityAnimState.Showing)
                 return;
 
-            var startProgress = 0.0f;
-            if (m_visibilityState == VisibilityAnimState.Hiding)
-                startProgress = 1.0f - Mathf.Clamp01(m_visibilityProgress01);
-
+            // show 叠加: 先抓 source,再启动新 show.
+            CaptureVisibilitySourceMaskForShowTransition();
             m_visibilityState = VisibilityAnimState.Showing;
-            m_visibilityProgress01 = Mathf.Clamp01(startProgress);
+            m_visibilityProgress01 = 0.0f;
             m_visibilityLastAdvanceRealtime = -1.0f;
 
 #if UNITY_EDITOR
@@ -937,18 +1022,17 @@ namespace Gsplat
             {
                 m_visibilityState = VisibilityAnimState.Hidden;
                 m_visibilityProgress01 = 1.0f;
+                SetVisibilitySourceMask(VisibilitySourceMaskMode.FullHidden);
                 return;
             }
 
             if (m_visibilityState is VisibilityAnimState.Hidden or VisibilityAnimState.Hiding)
                 return;
 
-            var startProgress = 0.0f;
-            if (m_visibilityState == VisibilityAnimState.Showing)
-                startProgress = 1.0f - Mathf.Clamp01(m_visibilityProgress01);
-
+            // hide 叠加: 先抓 source,再启动新 hide.
+            CaptureVisibilitySourceMaskForHideTransition();
             m_visibilityState = VisibilityAnimState.Hiding;
-            m_visibilityProgress01 = Mathf.Clamp01(startProgress);
+            m_visibilityProgress01 = 0.0f;
             m_visibilityLastAdvanceRealtime = -1.0f;
 
 #if UNITY_EDITOR
@@ -962,10 +1046,12 @@ namespace Gsplat
             m_visibilityState = VisibilityAnimState.Visible;
             m_visibilityProgress01 = 1.0f;
             m_visibilityLastAdvanceRealtime = -1.0f;
+            SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
 
             if (!EnableVisibilityAnimation || !PlayShowOnEnable)
                 return;
 
+            SetVisibilitySourceMask(VisibilitySourceMaskMode.FullHidden);
             m_visibilityState = VisibilityAnimState.Showing;
             m_visibilityProgress01 = 0.0f;
 
@@ -1186,32 +1272,39 @@ namespace Gsplat
 
             if (m_visibilityState == VisibilityAnimState.Showing)
             {
-                if (ShowDuration <= 0.0f || float.IsNaN(ShowDuration) || float.IsInfinity(ShowDuration))
+                var duration = ShowDuration;
+                if (duration <= 0.0f || float.IsNaN(duration) || float.IsInfinity(duration))
                 {
                     m_visibilityProgress01 = 1.0f;
                     m_visibilityState = VisibilityAnimState.Visible;
                 }
                 else
                 {
-                    m_visibilityProgress01 = Mathf.Clamp01(m_visibilityProgress01 + dt / ShowDuration);
+                    m_visibilityProgress01 = Mathf.Clamp01(m_visibilityProgress01 + dt / duration);
                     if (m_visibilityProgress01 >= 1.0f)
                         m_visibilityState = VisibilityAnimState.Visible;
                 }
             }
             else if (m_visibilityState == VisibilityAnimState.Hiding)
             {
-                if (HideDuration <= 0.0f || float.IsNaN(HideDuration) || float.IsInfinity(HideDuration))
+                var duration = HideDuration;
+                if (duration <= 0.0f || float.IsNaN(duration) || float.IsInfinity(duration))
                 {
                     m_visibilityProgress01 = 1.0f;
                     m_visibilityState = VisibilityAnimState.Hidden;
                 }
                 else
                 {
-                    m_visibilityProgress01 = Mathf.Clamp01(m_visibilityProgress01 + dt / HideDuration);
+                    m_visibilityProgress01 = Mathf.Clamp01(m_visibilityProgress01 + dt / duration);
                     if (m_visibilityProgress01 >= 1.0f)
                         m_visibilityState = VisibilityAnimState.Hidden;
                 }
             }
+
+            if (m_visibilityState == VisibilityAnimState.Visible)
+                SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
+            else if (m_visibilityState == VisibilityAnimState.Hidden)
+                SetVisibilitySourceMask(VisibilitySourceMaskMode.FullHidden);
 
 #if UNITY_EDITOR
             if (GsplatEditorDiagnostics.Enabled && prevState != m_visibilityState)
@@ -1305,6 +1398,8 @@ namespace Gsplat
 
             var mode = 0;
             var progress = 1.0f;
+            var sourceMode = (int)m_visibilitySourceMaskMode;
+            var sourceProgress = m_visibilitySourceMaskProgress01;
             if (EnableVisibilityAnimation)
             {
                 if (m_visibilityState == VisibilityAnimState.Showing)
@@ -1318,6 +1413,10 @@ namespace Gsplat
                     progress = m_visibilityProgress01;
                 }
             }
+
+            if (float.IsNaN(sourceProgress) || float.IsInfinity(sourceProgress))
+                sourceProgress = 1.0f;
+            sourceProgress = Mathf.Clamp01(sourceProgress);
 
             var centerModel = CalcVisibilityCenterModel(localBounds);
             var maxRadius = CalcVisibilityMaxRadius(localBounds, centerModel);
@@ -1342,6 +1441,8 @@ namespace Gsplat
                 mode: mode,
                 noiseMode: (int)VisibilityNoiseMode,
                 progress: progress,
+                sourceMaskMode: sourceMode,
+                sourceMaskProgress: sourceProgress,
                 centerModel: centerModel,
                 maxRadius: maxRadius,
                 ringWidth: ringWidth,

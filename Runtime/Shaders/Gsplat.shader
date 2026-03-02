@@ -61,6 +61,13 @@ Shader "Gsplat/Standard"
             // - 2: HashLegacy(旧版对照,更碎更抖)
             int _VisibilityNoiseMode;
             float _VisibilityProgress; // 0..1
+            // source mask:
+            // - 1: FullVisible
+            // - 2: FullHidden
+            // - 3: ShowSnapshot(progress)
+            // - 4: HideSnapshot(progress)
+            int _VisibilitySourceMaskMode;
+            float _VisibilitySourceMaskProgress; // 0..1
             float3 _VisibilityCenterModel; // model space
             float _VisibilityMaxRadius; // model space
             float _VisibilityRingWidth; // model space
@@ -195,6 +202,40 @@ Shader "Gsplat/Standard"
                 return sqrt(saturate(1.0 - u * u));
             }
 
+            // ----------------------------------------------------------------
+            // 计算可见性 mask(只返回“可见度”,不包含 ring/tail/glow):
+            // - mode=1: show visible
+            // - mode=2: hide visible
+            // ----------------------------------------------------------------
+            float EvalVisibilityVisibleMask(int mode, float progress, float dist, float maxRadius, float trailWidth,
+                float noiseSigned, float noise01, float noiseStrength)
+            {
+                trailWidth = max(trailWidth, 1e-5);
+                progress = saturate(progress);
+                float progressExpand = EaseInOutQuad(progress);
+                float radius = progressExpand * (maxRadius + trailWidth);
+                float edgeDist = dist - radius;
+
+                float passed0 = saturate((-edgeDist) / trailWidth);
+                float noiseWeight0 = (mode == 1) ? (1.0 - passed0) : passed0;
+                float jitter = noiseStrength * trailWidth * 0.75;
+                float edgeDistNoisy = edgeDist + noiseSigned * jitter * noiseWeight0;
+                float edgeDistForFade = edgeDistNoisy;
+                if (mode == 2)
+                {
+                    float noiseSignedIn = min(noiseSigned, 0.0);
+                    edgeDistForFade = edgeDist + noiseSignedIn * jitter * noiseWeight0;
+                }
+
+                float passed = saturate((-edgeDistForFade) / trailWidth);
+                float passedForFade = (mode == 2) ? (passed * passed) : passed;
+                float visible = (mode == 1) ? passed : (1.0 - passedForFade);
+                float noiseWeight = (mode == 1) ? (1.0 - passed) : passed;
+                float ashMul = saturate(1.0 - noiseStrength * noiseWeight * (1.0 - noise01));
+                visible *= ashMul;
+                return saturate(visible);
+            }
+
 	            struct v2f
 	            {
 	                // Gaussian kernel 的 uv(沿用旧逻辑: 随 RenderStyleBlend 做线性 morph).
@@ -270,6 +311,7 @@ Shader "Gsplat/Standard"
                 float visibilityAlphaMask = 1.0;
                 float3 visibilityGlowAdd = float3(0.0, 0.0, 0.0);
                 float visibilitySizeMul = 1.0;
+                float visibilitySourceKeepWeight = 0.0;
                 float3 modelCenterBase = modelCenter;
                 if (_VisibilityMode != 0)
                 {
@@ -282,6 +324,18 @@ Shader "Gsplat/Standard"
 
                     float trailWidth = max(_VisibilityTrailWidth, 1e-5);
                     float ringWidth = max(_VisibilityRingWidth, 1e-5);
+                    // hide 起始“几何尺寸门控”:
+                    // - 目标: 不靠透明度压亮度,而是让起始 ring/trail 半径从极小开始.
+                    // - 这样按下 Hide 时看到的是“小球逐步长大”,而不是首帧直接出现大球.
+                    if (_VisibilityMode == 2)
+                    {
+                        const float kHideSizeRampEnd = 0.16;
+                        const float kHideStartWidthScale = 0.04;
+                        float hideSizeRamp = smoothstep(0.0, kHideSizeRampEnd, progress);
+                        float widthScale = lerp(kHideStartWidthScale, 1.0, hideSizeRamp);
+                        trailWidth = max(trailWidth * widthScale, 1e-5);
+                        ringWidth = max(ringWidth * widthScale, 1e-5);
+                    }
 
                     // show: 起始时刻(progress=0)必须完全不可见.
                     // 说明: 即便 ringWidth/noise 存在,也不能在 progress=0 时提前“漏出”任何 splat.
@@ -409,19 +463,55 @@ Shader "Gsplat/Standard"
                     float ashMul = saturate(1.0 - _VisibilityNoiseStrength * noiseWeight * (1.0 - noise01));
                     visible *= ashMul;
 
-                    // alphaMask:
+                    // primary alphaMask:
                     // - ring 本身必须可见(发光前沿).
                     // - show: 为了让内侧 afterglow 在刚扫过时“内部更亮”且肉眼可见,
                     //   允许 tailInside 提供一个受限的 alpha 下限(否则 premul alpha 下 glow 会被 alpha 吃掉).
-                    visibilityAlphaMask = max(visible, ring);
+                    float visibilityAlphaPrimary = max(visible, ring);
                     if (_VisibilityMode == 1)
                     {
                         float tailAlpha = tailInside * tailInside;
                         tailAlpha *= 0.45;
-                        visibilityAlphaMask = max(visibilityAlphaMask, tailAlpha);
+                        visibilityAlphaPrimary = max(visibilityAlphaPrimary, tailAlpha);
                     }
 
-                    // 全不可见时直接早退,避免后续计算.
+                    // 叠加 source mask:
+                    // - show: max(source, showPrimary),保留 hide 中断前已可见的区域.
+                    // - hide: source * hidePrimary,避免 show 中断后外圈整片弹出.
+                    int sourceMode = _VisibilitySourceMaskMode;
+                    if (sourceMode < 1 || sourceMode > 4)
+                        sourceMode = 1;
+                    float sourceProgress = saturate(_VisibilitySourceMaskProgress);
+                    float sourceMask = 1.0;
+                    if (sourceMode == 2)
+                    {
+                        sourceMask = 0.0;
+                    }
+                    else if (sourceMode == 3)
+                    {
+                        sourceMask = EvalVisibilityVisibleMask(
+                            1, sourceProgress, dist, maxRadius, trailWidth, noiseSigned, noise01, _VisibilityNoiseStrength);
+                    }
+                    else if (sourceMode == 4)
+                    {
+                        sourceMask = EvalVisibilityVisibleMask(
+                            2, sourceProgress, dist, maxRadius, trailWidth, noiseSigned, noise01, _VisibilityNoiseStrength);
+                    }
+
+                    if (_VisibilityMode == 1)
+                    {
+                        visibilitySourceKeepWeight = saturate(sourceMask - visibilityAlphaPrimary);
+                        visibilityAlphaMask = max(visibilityAlphaPrimary, sourceMask);
+                    }
+                    else
+                    {
+                        visibilitySourceKeepWeight = 0.0;
+                        visibilityAlphaMask = visibilityAlphaPrimary * sourceMask;
+                    }
+
+                    visibilityAlphaMask = saturate(visibilityAlphaMask);
+
+                    // 合成后再早退,避免 source mask 被漏算.
                     if (visibilityAlphaMask <= 0.0)
                     {
                         o.vertex = discardVec;
@@ -564,6 +654,15 @@ Shader "Gsplat/Standard"
                         // burned=1: 已被扫过,用 insideScale
                         float burned = step(0.0, -edgeDistForFade);
                         visibilitySizeMul = lerp(preScale, insideScale, burned);
+                    }
+
+                    // show + sourceKeep:
+                    // - 当 sourceMask 在某些区域比 showPrimary 更大时,这些区域来自“保留层”.
+                    // - 保留层应保持正常粒子尺寸,避免 show 的 minScale 把它们压成小点.
+                    if (_VisibilityMode == 1 && visibilitySourceKeepWeight > 1e-4)
+                    {
+                        float keepToFull = saturate(visibilitySourceKeepWeight * 4.0);
+                        visibilitySizeMul = lerp(visibilitySizeMul, 1.0, keepToFull);
                     }
 
                     // --------------------------------------------------------

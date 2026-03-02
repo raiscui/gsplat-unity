@@ -304,3 +304,95 @@
 - Unity 6000.3.8f1, EditMode tests:
   - total=38, passed=36, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_radar_enter_no_black_2026-03-02_1640_noquit.xml`
+
+## 2026-03-02 17:12:00 +0800
+- 修复 `Hide` 按钮触发时的突兀亮球(glow burst):
+  - 在 `Runtime/Shaders/Gsplat.shader` 的 hide 分支增加 `hideIntroGate`(短时平滑门控).
+  - ring 与 glow 在 hide 起始阶段不再 frame-0 直接满强度出现,改为从 0 平滑抬升.
+- 根因结论(已验证):
+  - 非 `HideDuration` 曲线跳变问题.
+  - 原逻辑在 progress=0 就进入 hide ring/glow 路径,且默认 hide boost/intensity 偏高导致体感突兀.
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode tests:
+  - total=38, passed=36, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_hide_glow_intro_gate_2026-03-02_1706_noquit.xml`
+
+## 2026-03-02 17:25:00 +0800
+- 根据反馈回撤上一版“hide 透明度门控”做法,改为几何优先方案:
+  - `Runtime/Shaders/Gsplat.shader` 在 hide 模式下将 `ringWidth/trailWidth` 做起始缩放.
+  - 起始宽度比例从 `kHideStartWidthScale=0.04` 开始,在短区间内平滑拉到 1.
+  - 结果: hide 触发时球体从很小开始长大,避免首帧大球突兀.
+- 说明:
+  - 本次未通过 alpha 或 glow 透明度掩盖问题,而是直接控制几何范围.
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode tests:
+  - total=38, passed=36, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_hide_glow_small_start_2026-03-02_1720_noquit.xml`
+
+## 2026-03-02 17:35:00 +0800
+- 修复 show/hide 在动画中途快速反复点击时的显示异常:
+  - 旧逻辑: 中断时直接切换 `Showing/Hiding` 模式并做进度镜像,容易出现中途跳态.
+  - 新逻辑: 保持当前模式不变,仅反转进度方向(可中断反向).
+- 实现细节:
+  - `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs` 新增 `m_visibilityProgressDirection`.
+  - `PlayShow/PlayHide` 支持在 `Showing/Hiding` 状态内反向推进而不切换模式.
+  - `AdvanceVisibilityStateIfNeeded` 按方向正反推进并在边界收敛到 `Visible/Hidden`.
+- 测试补强:
+  - `PlayHide_DuringShowing_ReversesInPlaceWithoutModeJump`
+  - `PlayShow_DuringHiding_ReversesInPlaceWithoutModeJump`
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode tests:
+  - total=40, passed=38, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_visibility_interrupt_reverse_2026-03-02_1730_noquit.xml`
+
+## 2026-03-02 18:42:00 +0800 - 修复 Show/Hide 中途切换,改为 source-mask 叠加
+
+### 本次改动
+- `Runtime/GsplatRenderer.cs`
+  - 新增 `VisibilitySourceMaskMode` 与 source runtime 字段.
+  - 新增 `SetVisibilitySourceMask(...)`.
+  - 新增 `CaptureVisibilitySourceMaskForShowTransition()` / `CaptureVisibilitySourceMaskForHideTransition()`.
+  - `PlayShow/PlayHide` 中断逻辑改为“先抓 source,再启动目标动画”.
+  - `AdvanceVisibilityStateIfNeeded` 在终态统一回收 source 到 `FullVisible/FullHidden`.
+  - `PushVisibilityUniformsForThisFrame` 下发 `sourceMaskMode/sourceMaskProgress`.
+
+- `Runtime/GsplatSequenceRenderer.cs`
+  - 与 `GsplatRenderer` 同步 source-mask 叠加逻辑与 uniform 下发.
+
+- `Runtime/GsplatRendererImpl.cs`
+  - `SetVisibilityUniforms` 新增参数:
+    - `sourceMaskMode`
+    - `sourceMaskProgress`
+  - 增加对应 shader property id 并写入 MPB.
+
+- `Runtime/Shaders/Gsplat.shader`
+  - 新增 uniforms:
+    - `_VisibilitySourceMaskMode`
+    - `_VisibilitySourceMaskProgress`
+  - 新增 `EvalVisibilityVisibleMask(...)` 用于 snapshot mask 评估.
+  - 合成规则:
+    - show: `max(primary, source)`
+    - hide: `primary * source`
+  - 保留 show source 覆盖区时,把 `visibilitySizeMul` 回拉到正常尺寸,避免外圈小点化.
+
+- `Tests/Editor/GsplatVisibilityAnimationTests.cs`
+  - 新增 source 字段反射与 helper.
+  - 在两条中断测试中新增断言:
+    - `Show -> Hide` 时 source=`ShowSnapshot`.
+    - `Hide -> Show` 时 source=`HideSnapshot`.
+
+- `CHANGELOG.md`
+  - 更新 `Unreleased -> Fixed`,记录 source-mask 叠加修复语义.
+
+### 验证
+- Unity EditMode `Gsplat.Tests`
+  - total=40, passed=38, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_visibility_source_overlay_2026-03-02_1808_noquit.xml`
+
+### 2026-03-02 18:50:00 +0800 - 二次回归确认
+- 为避免测试文案调整引入误报,再次执行 `Gsplat.Tests`.
+- 结果: total=40, passed=38, failed=0, skipped=2.
+- XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_visibility_source_overlay_2026-03-02_1848_noquit.xml`

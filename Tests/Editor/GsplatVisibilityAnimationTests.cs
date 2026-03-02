@@ -38,6 +38,18 @@ namespace Gsplat.Tests
         static readonly FieldInfo s_lidarVisibilityAnimatingField =
             typeof(GsplatRenderer).GetField("m_lidarVisibilityAnimating", BindingFlags.Instance | BindingFlags.NonPublic);
 
+        static readonly FieldInfo s_visibilityStateField =
+            typeof(GsplatRenderer).GetField("m_visibilityState", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_visibilityProgress01Field =
+            typeof(GsplatRenderer).GetField("m_visibilityProgress01", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_visibilitySourceMaskModeField =
+            typeof(GsplatRenderer).GetField("m_visibilitySourceMaskMode", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_visibilitySourceMaskProgressField =
+            typeof(GsplatRenderer).GetField("m_visibilitySourceMaskProgress01", BindingFlags.Instance | BindingFlags.NonPublic);
+
         static void AdvanceVisibilityState(GsplatRenderer renderer)
         {
             // 说明:
@@ -108,6 +120,37 @@ namespace Gsplat.Tests
             // - `IGsplat.SplatCount` 会走 `ShouldSubmitSplatsThisFrame` 门禁.
             // - 因此它可直接作为“当前帧是否还在提交 splat sort/draw”的证据.
             return ((IGsplat)renderer).SplatCount;
+        }
+
+        static string GetVisibilityStateName(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_visibilityStateField, "Expected private field 'm_visibilityState' to exist on GsplatRenderer.");
+            var stateObj = s_visibilityStateField.GetValue(renderer);
+            Assert.IsNotNull(stateObj, "Expected visibility state enum value to be non-null.");
+            return stateObj.ToString();
+        }
+
+        static float GetVisibilityProgress01(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_visibilityProgress01Field,
+                "Expected private field 'm_visibilityProgress01' to exist on GsplatRenderer.");
+            return (float)s_visibilityProgress01Field.GetValue(renderer);
+        }
+
+        static string GetVisibilitySourceMaskModeName(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_visibilitySourceMaskModeField,
+                "Expected private field 'm_visibilitySourceMaskMode' to exist on GsplatRenderer.");
+            var modeObj = s_visibilitySourceMaskModeField.GetValue(renderer);
+            Assert.IsNotNull(modeObj, "Expected source mask mode enum value to be non-null.");
+            return modeObj.ToString();
+        }
+
+        static float GetVisibilitySourceMaskProgress01(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_visibilitySourceMaskProgressField,
+                "Expected private field 'm_visibilitySourceMaskProgress01' to exist on GsplatRenderer.");
+            return (float)s_visibilitySourceMaskProgressField.GetValue(renderer);
         }
 
         static GsplatAsset CreateMinimalAsset1Splat()
@@ -389,6 +432,127 @@ namespace Gsplat.Tests
             Assert.IsFalse(GetLidarVisibilityAnimating(r), "Expected radar fade-in animation to finish within timeout.");
             Assert.AreEqual(0u, GetSubmittedSplatCount(r),
                 "Expected splat submission to stop after radar fade-in completes when HideSplatsWhenLidarEnabled=true.");
+
+            Object.DestroyImmediate(go);
+            Object.DestroyImmediate(asset);
+        }
+
+        [UnityTest]
+        public IEnumerator PlayHide_DuringShowing_RestartsHideFromZero()
+        {
+            var go = new GameObject("GsplatVisibilityAnimationTests_Interrupt_ShowToHide");
+            go.SetActive(false);
+            var asset = CreateMinimalAsset1Splat();
+            var r = go.AddComponent<GsplatRenderer>();
+
+            r.EnableVisibilityAnimation = true;
+            r.PlayShowOnEnable = false;
+            r.ShowDuration = 0.2f;
+            r.HideDuration = 0.2f;
+            r.GsplatAsset = asset;
+
+            go.SetActive(true);
+            yield return null;
+
+            // 先切到 Hidden,再触发 show.
+            r.SetVisible(false, animated: false);
+            Assert.IsFalse(r.Valid, "Precondition failed: expected hidden state after hard hide.");
+
+            r.PlayShow();
+            Assert.AreEqual("Showing", GetVisibilityStateName(r), "Expected PlayShow to enter Showing state.");
+
+            var t0 = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - t0 < 1.0f)
+            {
+                AdvanceVisibilityState(r);
+                if (GetVisibilityProgress01(r) > 0.2f)
+                    break;
+                yield return null;
+            }
+
+            var beforeReverse = GetVisibilityProgress01(r);
+            Assert.Greater(beforeReverse, 0.0f, "Precondition failed: show progress should have advanced.");
+
+            r.PlayHide();
+            Assert.AreEqual("Hiding", GetVisibilityStateName(r),
+                "Expected hide-interrupt during Showing to restart Hiding mode.");
+            Assert.LessOrEqual(GetVisibilityProgress01(r), 1e-4f,
+                "Expected hide-interrupt during Showing to restart progress near zero.");
+            Assert.AreEqual("ShowSnapshot", GetVisibilitySourceMaskModeName(r),
+                "Expected hide-interrupt during Showing to capture source as ShowSnapshot for compositing.");
+            Assert.Greater(GetVisibilitySourceMaskProgress01(r), 1e-3f,
+                "Expected show snapshot progress to preserve the pre-interrupt visible range.");
+
+            var t1 = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - t1 < 1.0f)
+            {
+                AdvanceVisibilityState(r);
+                if (!r.Valid)
+                    break;
+                yield return null;
+            }
+
+            Assert.IsFalse(r.Valid, "Expected renderer to finish hidden after show->hide interrupt.");
+
+            Object.DestroyImmediate(go);
+            Object.DestroyImmediate(asset);
+        }
+
+        [UnityTest]
+        public IEnumerator PlayShow_DuringHiding_RestartsShowFromZero()
+        {
+            var go = new GameObject("GsplatVisibilityAnimationTests_Interrupt_HideToShow");
+            go.SetActive(false);
+            var asset = CreateMinimalAsset1Splat();
+            var r = go.AddComponent<GsplatRenderer>();
+
+            r.EnableVisibilityAnimation = true;
+            r.PlayShowOnEnable = false;
+            r.ShowDuration = 0.2f;
+            r.HideDuration = 0.2f;
+            r.GsplatAsset = asset;
+
+            go.SetActive(true);
+            yield return null;
+
+            Assert.IsTrue(r.Valid, "Precondition failed: renderer should start visible.");
+
+            r.PlayHide();
+            Assert.AreEqual("Hiding", GetVisibilityStateName(r), "Expected PlayHide to enter Hiding state.");
+
+            var t0 = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - t0 < 1.0f)
+            {
+                AdvanceVisibilityState(r);
+                if (GetVisibilityProgress01(r) > 0.2f)
+                    break;
+                yield return null;
+            }
+
+            var beforeReverse = GetVisibilityProgress01(r);
+            Assert.Greater(beforeReverse, 0.0f, "Precondition failed: hide progress should have advanced.");
+
+            r.PlayShow();
+            Assert.AreEqual("Showing", GetVisibilityStateName(r),
+                "Expected show-interrupt during Hiding to restart Showing mode.");
+            Assert.LessOrEqual(GetVisibilityProgress01(r), 1e-4f,
+                "Expected show-interrupt during Hiding to restart progress near zero.");
+            Assert.AreEqual("HideSnapshot", GetVisibilitySourceMaskModeName(r),
+                "Expected show-interrupt during Hiding to capture source as HideSnapshot for compositing.");
+            Assert.Greater(GetVisibilitySourceMaskProgress01(r), 1e-3f,
+                "Expected hide snapshot progress to preserve the pre-interrupt visible range.");
+
+            var t1 = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - t1 < 1.0f)
+            {
+                AdvanceVisibilityState(r);
+                if (r.Valid && GetVisibilityStateName(r) == "Visible")
+                    break;
+                yield return null;
+            }
+
+            Assert.IsTrue(r.Valid, "Expected renderer to finish visible after hide->show interrupt.");
+            Assert.AreEqual("Visible", GetVisibilityStateName(r), "Expected final state to be Visible.");
 
             Object.DestroyImmediate(go);
             Object.DestroyImmediate(asset);

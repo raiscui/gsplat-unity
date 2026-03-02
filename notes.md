@@ -996,3 +996,87 @@
 - 语义约定: `enableRadarScan=true` 时自动强制 `ParticleDots` + `HideSplatsWhenLidarEnabled=true`.
 - 双向切换: `Gaussian/ParticleDots` 按钮都显式传 `enableRadarScan=false`,实现从雷达模式一键回切.
 - Context7 复核: `OnInspectorGUI` 使用 `serializedObject.Update/ApplyModifiedProperties` + `GUILayout.Button` 的写法与 Unity 6000 manual 示例一致.
+
+## 2026-03-02 16:55:00 +0800 - Hide 起始 glow 球体突兀排查结论
+
+### 现象复盘
+- 触发 `PlayHide()` 后,画面会先出现一个突兀的亮色球体,随后才进入正常 burn-out 过程.
+
+### 关键证据
+1) 进入 hide 的首帧状态
+- `PlayHide()` 把状态直接切到 `Hiding`,并把 `m_visibilityProgress01` 设为 `startProgress`(通常为 0).
+- 代码: `Runtime/GsplatRenderer.cs:2263-2284`.
+
+2) hide 首帧会立即走 mode=2 uniforms
+- `PushVisibilityUniformsForThisFrame()` 在 `Hiding` 时直接下发 `mode=2` + `progress=m_visibilityProgress01`.
+- 同时使用 hide 参数: `HideRingWidthNormalized/HideTrailWidthNormalized/HideGlowIntensity/HideGlowStartBoost`.
+- 代码: `Runtime/GsplatRenderer.cs:2649-2714`.
+
+3) shader 对 show 有 progress=0 早退,但 hide 没有
+- show 分支有 `if (_VisibilityMode == 1 && progress <= 0.0) discard`.
+- hide 分支没有等价 early-return,因此 progress=0 时依然会计算 ring/glow.
+- 代码: `Runtime/Shaders/Gsplat.shader:286-292`.
+
+4) hide 的 glow 在起点就被放大
+- hide 分支: `glowFactor = ring * _VisibilityHideGlowStartBoost + tailInside`.
+- 最终还乘 `HideGlowIntensity`.
+- 默认值: `HideGlowStartBoost=2.0`, `HideGlowIntensity=2.5`.
+- 代码: `Runtime/Shaders/Gsplat.shader:482-494`, `Runtime/GsplatRenderer.cs:298-302`.
+
+5) 这不是“曲线首帧冲太快”
+- 扩散曲线 `EaseInOutQuad` 在 t=0 斜率为 0,曲线本身并不激进.
+- 代码: `Runtime/Shaders/Gsplat.shader:173-180`.
+- 真实原因是: hide 在 progress=0 就进入可见 ring/glow 路径,且 boost/intensity 默认偏高.
+
+6) “没有从最小开始”也是设计现状
+- hide 尺寸逻辑使用 `hideAfterglowScale = max(minScaleHide, minScaleHide*2)`.
+- 默认 `HideSplatMinScale=0.06`,意味着前沿附近默认会维持到约 0.12 的 size floor,不是从极小开始.
+- 代码: `Runtime/Shaders/Gsplat.shader:546-557`, `Runtime/GsplatRenderer.cs:268-273`.
+
+### 结论
+- 你看到的“突兀亮球”主要是 **hide 首帧就触发 glow 前沿 + 高 boost/intensity** 的结果.
+- 不是 `HideDuration` 时间推进异常导致的跳帧.
+
+## 2026-03-02 18:40:00 +0800 - Show/Hide 中断叠加方案(避免整片突变)
+
+### 现象
+- `Show` 动画中途按 `Hide`,或 `Hide` 中途按 `Show` 时,视觉会出现整片突变.
+- 根因不是单纯状态机推进速度,而是 show/hide 在 shader 语义上是两种不同可见性分布:
+  - show: 从中心向外“增加可见”.
+  - hide: 从中心向外“减少可见”.
+- 若中断时直接切换 mode,会发生“可见区域语义翻面”,导致 outside 区域瞬时弹出/消失.
+
+### 根因结论
+- 旧逻辑只有单通道 `_VisibilityMode + _VisibilityProgress`.
+- 中断时无“来源可见分布(source mask)”承接,因此无法在 mode 切换时保持可见域连续.
+
+### 修复策略
+- 引入 source mask 合成语义:
+  1. C# 状态机在中断时先抓取 source mask:
+     - `FullVisible` / `FullHidden` / `ShowSnapshot(progress)` / `HideSnapshot(progress)`.
+  2. shader 增加 source uniform:
+     - `_VisibilitySourceMaskMode`
+     - `_VisibilitySourceMaskProgress`
+  3. 合成规则:
+     - 当前 mode=show: `finalMask = max(showPrimaryMask, sourceMask)`
+     - 当前 mode=hide: `finalMask = hidePrimaryMask * sourceMask`
+- 这样可以在中断时保留当前可见分布,再叠加目标动画,避免整片翻面.
+
+### 兼容与观感细节
+- 保持 hide 的“从小球开始”几何策略不变.
+- 对 show + sourceKeep 场景补了 `visibilitySizeMul -> 1` 的回拉,避免 source 保留层被 show 的小尺寸参数压成小点.
+
+### 验证
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests`:
+  - total=40, passed=38, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_visibility_source_overlay_2026-03-02_1808_noquit.xml`
+- 中断相关用例通过:
+  - `PlayHide_DuringShowing_RestartsHideFromZero`
+  - `PlayShow_DuringHiding_RestartsShowFromZero`
+- 额外断言:
+  - 中断后 source mode 分别为 `ShowSnapshot` / `HideSnapshot`.
+
+### 2026-03-02 18:50:00 +0800 - 验证补充
+- 文案调整后再次回归仍通过:
+  - total=40, passed=38, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_visibility_source_overlay_2026-03-02_1848_noquit.xml`

@@ -986,3 +986,122 @@
 ### 2026-03-02 16:41:00 +0800
 - 进入交付动作: 按你的要求执行 git 提交.
 - 提交范围: 本轮已验证通过的 RadarScan 切换动画修复(含 black frame 细节修复)与对应测试/文档/工作记录.
+
+### 2026-03-02 16:46:00 +0800
+- 新问题排查: Hide 按钮触发时出现突兀的亮色球体(glow burst).
+- 排查目标:
+  - 确认是曲线导致(起始斜率过大)还是起始参数导致(最小半径/强度不是从 0 起步).
+  - 明确 Runtime 与 Shader 两端的责任边界.
+- 本轮动作:
+  - [ ] 定位 hide 动画参数推送链路(进度/环宽/亮度/缩放).
+  - [ ] 定位 shader hide 分支对 glow/ring 的计算路径.
+  - [ ] 给出根因结论和可选修正方案.
+
+## 状态
+**问题定位中**
+- 正在抓取 hide glow 的参数与公式证据.
+
+### 2026-03-02 16:55:00 +0800
+- Hide glow 球体突兀问题已完成定位(仅诊断,未改代码):
+  - [x] 已确认不是 `HideDuration` 进度跳变,`EaseInOutQuad` 起始斜率为 0.
+  - [x] 根因是 hide 在 progress=0 首帧就进入 ring/glow 路径,且默认 `HideGlowStartBoost=2.0`, `HideGlowIntensity=2.5`.
+  - [x] 次因是 hide size floor 并非“从最小开始”,默认会在前沿附近维持较可见的尺寸.
+- 下一步待你选择修正方向后落代码.
+
+## 状态
+**诊断完成,等待修复方案确认**
+- 已有明确根因和对应改法,可直接实现.
+
+### 2026-03-02 17:04:00 +0800
+- 你已选择方案1(起始门控).
+- 即将执行:
+  - 在 `Runtime/Shaders/Gsplat.shader` 的 hide 分支增加起始门控,让 ring/glow 从 0 平滑抬起.
+  - 目标: 消除 `PlayHide()` 首帧亮球突兀.
+  - 完成后运行 `Gsplat.Tests` 回归.
+
+## 状态
+**方案1实现中**
+- 正在修改 hide shader 公式.
+
+### 2026-03-02 17:12:00 +0800
+- 方案1已落地并回归通过:
+  - [x] `Gsplat.shader` hide 分支新增起始门控 `hideIntroGate`.
+  - [x] hide 的 ring 与 glow 都改为从 0 平滑抬起,避免首帧亮球突兀.
+  - [x] 回归: `Gsplat.Tests` total=38, passed=36, failed=0, skipped=2.
+    - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_hide_glow_intro_gate_2026-03-02_1706_noquit.xml`
+
+## 状态
+**本问题修复完成**
+- `Hide` 起始阶段的 glow burst 已改为短时平滑 ramp-in.
+
+### 2026-03-02 17:18:00 +0800
+- 你反馈方案1观感不对,需要回撤并改为“几何从极小开始”,不走透明度门控.
+- 执行计划:
+  - [ ] 回撤上一版 hide 的透明度/亮度起始门控(`hideIntroGate` 对 glow 的乘法路径).
+  - [ ] 改为尺寸门控: hide 起始阶段的 ring/trail 宽度从极小值逐步增长到目标宽度,避免首帧大球.
+  - [ ] 运行 `Gsplat.Tests` 回归并汇报.
+
+## 状态
+**按新视觉目标重做中**
+- 正在改 hide 几何起始尺寸逻辑.
+
+### 2026-03-02 17:25:00 +0800
+- 已按你的反馈完成“回撤 + 重做”:
+  - [x] 撤销 hide 的透明度/亮度起始门控思路.
+  - [x] 改为几何尺寸门控: hide 起始时 ring/trail 半径从极小值开始增长.
+  - [x] 保留 hide 既有 glow 公式,不再通过 alpha 压暗来达成观感.
+  - [x] 回归: `Gsplat.Tests` total=38, passed=36, failed=0, skipped=2.
+    - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_hide_glow_small_start_2026-03-02_1720_noquit.xml`
+
+## 状态
+**按新目标修复完成**
+- hide 起始球体现在是从很小开始,再逐步增长.
+
+### 2026-03-02 17:35:00 +0800
+- "show/hide 中途打断显示异常" 修复完成:
+  - [x] 状态机改造为“当前模式内反向推进”:
+    - `Hide` 打断 `Showing` -> 继续 `Showing` 模式,方向改为回退到 `Hidden`.
+    - `Show` 打断 `Hiding` -> 继续 `Hiding` 模式,方向改为回退到 `Visible`.
+  - [x] `GsplatRenderer` / `GsplatSequenceRenderer` 均已同步.
+  - [x] 新增中断回归测试 2 条并通过.
+  - [x] 回归: `Gsplat.Tests` total=40, passed=38, failed=0, skipped=2.
+    - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_visibility_interrupt_reverse_2026-03-02_1730_noquit.xml`
+
+## 状态
+**快速切换问题已修复**
+- show/hide 可在动画中反复快速切换,不再出现中途跳态异常.
+
+### 2026-03-02 18:08:00 +0800
+- 新需求确认:
+  - 你明确不要“倒退反向”观感,希望 `Show` 与 `Hide` 在中途可叠加切换.
+  - 目标是快速连点时不出现整片突变,尤其避免 `Show -> Hide` 时外圈突然整片弹出.
+- 本轮实施计划:
+  - [ ] 在显隐状态机里引入“source mask(来源遮罩)”语义,中断时保留当前可见分布作为叠加底图.
+  - [ ] shader 增加 source mask 合成: `show` 用 `max(source, show)`; `hide` 用 `source * hide`.
+  - [ ] 同步 `GsplatRenderer` 与 `GsplatSequenceRenderer`.
+  - [ ] 补充 EditMode 回归测试并运行 `Gsplat.Tests` 验证.
+
+## 状态
+**本轮修复进行中**
+- 已完成根因定位,正在进入代码实现.
+
+### 2026-03-02 18:46:00 +0800
+- 本轮实施结果:
+  - [x] 在显隐状态机里引入 source mask 语义,中断时保留当前可见分布.
+  - [x] shader 增加 source 合成(show=max, hide=乘法).
+  - [x] `GsplatRenderer` 与 `GsplatSequenceRenderer` 同步完成.
+  - [x] 回归测试通过并新增 source snapshot 断言.
+  - [x] 四文件记录已追加.
+- 验证结果:
+  - `Gsplat.Tests` total=40, passed=38, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_visibility_source_overlay_2026-03-02_1808_noquit.xml`
+
+## 状态
+**本轮修复完成**
+- Show/Hide 中途切换已改为叠加合成,快速切换稳定性已通过回归验证.
+
+### 2026-03-02 18:50:00 +0800
+- 追加回归(文案同步后):
+  - [x] 再次运行 `Gsplat.Tests` 确认无回归.
+  - 结果: total=40, passed=38, failed=0, skipped=2.
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_visibility_source_overlay_2026-03-02_1848_noquit.xml`

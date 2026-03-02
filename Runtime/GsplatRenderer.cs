@@ -342,9 +342,26 @@ namespace Gsplat
             Hiding = 3,
         }
 
+        // --------------------------------------------------------------------
+        // source mask:
+        // - 解决中途切换时的“语义翻面”问题.
+        // - show/hide 叠加时,新动画会基于 source mask 合成,避免整片突变.
+        // --------------------------------------------------------------------
+        enum VisibilitySourceMaskMode
+        {
+            // 0 保留给“非法/未初始化”兜底,运行时会按 FullVisible 处理.
+            None = 0,
+            FullVisible = 1,
+            FullHidden = 2,
+            ShowSnapshot = 3,
+            HideSnapshot = 4,
+        }
+
         VisibilityAnimState m_visibilityState = VisibilityAnimState.Visible;
         float m_visibilityProgress01 = 1.0f;
         float m_visibilityLastAdvanceRealtime = -1.0f;
+        VisibilitySourceMaskMode m_visibilitySourceMaskMode = VisibilitySourceMaskMode.FullVisible;
+        float m_visibilitySourceMaskProgress01 = 1.0f;
 
         // --------------------------------------------------------------------
         // Render style 切换 runtime 状态(非序列化):
@@ -2209,6 +2226,81 @@ namespace Gsplat
         // --------------------------------------------------------------------
         // Public API: show/hide 显隐控制
         // --------------------------------------------------------------------
+        void SetVisibilitySourceMask(VisibilitySourceMaskMode mode, float progress01 = 1.0f)
+        {
+            // source mask 的 progress 只在 snapshot 模式下有意义.
+            // 其它模式统一归一为 0/1,避免残留脏值污染 shader 合成.
+            m_visibilitySourceMaskMode = mode;
+            if (mode == VisibilitySourceMaskMode.ShowSnapshot || mode == VisibilitySourceMaskMode.HideSnapshot)
+            {
+                if (float.IsNaN(progress01) || float.IsInfinity(progress01))
+                    progress01 = 0.0f;
+                m_visibilitySourceMaskProgress01 = Mathf.Clamp01(progress01);
+            }
+            else
+            {
+                m_visibilitySourceMaskProgress01 = mode == VisibilitySourceMaskMode.FullHidden ? 0.0f : 1.0f;
+            }
+        }
+
+        void CaptureVisibilitySourceMaskForShowTransition()
+        {
+            // show 叠加语义:
+            // - 当前正在 Hiding 且已有 show 源时,沿用旧 source.
+            //   这样可避免快速反复点按时,source 突然退化成“整片可见”导致跳变.
+            if (m_visibilityState == VisibilityAnimState.Hiding &&
+                (m_visibilitySourceMaskMode == VisibilitySourceMaskMode.ShowSnapshot ||
+                 m_visibilitySourceMaskMode == VisibilitySourceMaskMode.FullHidden))
+            {
+                return;
+            }
+
+            switch (m_visibilityState)
+            {
+                case VisibilityAnimState.Hidden:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.FullHidden);
+                    break;
+                case VisibilityAnimState.Hiding:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.HideSnapshot, m_visibilityProgress01);
+                    break;
+                case VisibilityAnimState.Showing:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.ShowSnapshot, m_visibilityProgress01);
+                    break;
+                default:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
+                    break;
+            }
+        }
+
+        void CaptureVisibilitySourceMaskForHideTransition()
+        {
+            // hide 叠加语义:
+            // - 当前正在 Showing 且已有 hide 源时,沿用旧 source.
+            //   这样可避免快速反复点按时,source 突然退化成“整片隐藏”导致跳变.
+            if (m_visibilityState == VisibilityAnimState.Showing &&
+                (m_visibilitySourceMaskMode == VisibilitySourceMaskMode.HideSnapshot ||
+                 m_visibilitySourceMaskMode == VisibilitySourceMaskMode.FullVisible))
+            {
+                return;
+            }
+
+            switch (m_visibilityState)
+            {
+                case VisibilityAnimState.Visible:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
+                    break;
+                case VisibilityAnimState.Showing:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.ShowSnapshot, m_visibilityProgress01);
+                    break;
+                case VisibilityAnimState.Hiding:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.HideSnapshot, m_visibilityProgress01);
+                    break;
+                default:
+                    SetVisibilitySourceMask(VisibilitySourceMaskMode.FullHidden);
+                    break;
+            }
+        }
+
         public void SetVisible(bool visible, bool animated = true)
         {
             // 说明:
@@ -2219,6 +2311,9 @@ namespace Gsplat
             {
                 m_visibilityState = visible ? VisibilityAnimState.Visible : VisibilityAnimState.Hidden;
                 m_visibilityProgress01 = 1.0f;
+                SetVisibilitySourceMask(visible
+                    ? VisibilitySourceMaskMode.FullVisible
+                    : VisibilitySourceMaskMode.FullHidden);
                 return;
             }
 
@@ -2235,20 +2330,21 @@ namespace Gsplat
                 // 动画未启用时,退化为硬切 show.
                 m_visibilityState = VisibilityAnimState.Visible;
                 m_visibilityProgress01 = 1.0f;
+                SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
                 return;
             }
 
-            // 已经在“可见或正在显示”时,不重复触发.
+            // show 过程中再次触发 show,不重复启动.
             if (m_visibilityState is VisibilityAnimState.Visible or VisibilityAnimState.Showing)
                 return;
 
-            // 若当前正在 hide,允许无缝反向.
-            var startProgress = 0.0f;
-            if (m_visibilityState == VisibilityAnimState.Hiding)
-                startProgress = 1.0f - Mathf.Clamp01(m_visibilityProgress01);
-
+            // 叠加触发:
+            // - 先抓取当前可见分布作为 source mask.
+            // - 再启动新的 show 进度.
+            // 这样在 hide -> show 中断时,外圈可见区域会保留,不会整片跳变.
+            CaptureVisibilitySourceMaskForShowTransition();
             m_visibilityState = VisibilityAnimState.Showing;
-            m_visibilityProgress01 = Mathf.Clamp01(startProgress);
+            m_visibilityProgress01 = 0.0f;
 
             // 重置时间基准,避免因停顿导致第一帧 dt 巨大而“瞬间播完”.
             m_visibilityLastAdvanceRealtime = -1.0f;
@@ -2267,20 +2363,21 @@ namespace Gsplat
                 // 动画未启用时,退化为硬切 hide.
                 m_visibilityState = VisibilityAnimState.Hidden;
                 m_visibilityProgress01 = 1.0f;
+                SetVisibilitySourceMask(VisibilitySourceMaskMode.FullHidden);
                 return;
             }
 
-            // 已经在“隐藏或正在隐藏”时,不重复触发.
+            // hide 过程中再次触发 hide,不重复启动.
             if (m_visibilityState is VisibilityAnimState.Hidden or VisibilityAnimState.Hiding)
                 return;
 
-            // 若当前正在 show,允许无缝反向.
-            var startProgress = 0.0f;
-            if (m_visibilityState == VisibilityAnimState.Showing)
-                startProgress = 1.0f - Mathf.Clamp01(m_visibilityProgress01);
-
+            // 叠加触发:
+            // - 先抓取当前可见分布作为 source mask.
+            // - 再启动新的 hide 进度.
+            // 这样在 show -> hide 中断时,外圈不会突然整片弹出.
+            CaptureVisibilitySourceMaskForHideTransition();
             m_visibilityState = VisibilityAnimState.Hiding;
-            m_visibilityProgress01 = Mathf.Clamp01(startProgress);
+            m_visibilityProgress01 = 0.0f;
 
             // 重置时间基准,避免因停顿导致第一帧 dt 巨大而“瞬间播完”.
             m_visibilityLastAdvanceRealtime = -1.0f;
@@ -2297,6 +2394,7 @@ namespace Gsplat
             m_visibilityState = VisibilityAnimState.Visible;
             m_visibilityProgress01 = 1.0f;
             m_visibilityLastAdvanceRealtime = -1.0f;
+            SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
 
             // 只有显式启用该功能时才会自动播放 show.
             if (!EnableVisibilityAnimation || !PlayShowOnEnable)
@@ -2304,6 +2402,7 @@ namespace Gsplat
 
             // 语义: “初始隐藏 -> 播放 show”.
             // - 这里直接进入 Showing,并从 progress=0 开始推进.
+            SetVisibilitySourceMask(VisibilitySourceMaskMode.FullHidden);
             m_visibilityState = VisibilityAnimState.Showing;
             m_visibilityProgress01 = 0.0f;
 
@@ -2530,32 +2629,40 @@ namespace Gsplat
 
             if (m_visibilityState == VisibilityAnimState.Showing)
             {
-                if (ShowDuration <= 0.0f || float.IsNaN(ShowDuration) || float.IsInfinity(ShowDuration))
+                var duration = ShowDuration;
+                if (duration <= 0.0f || float.IsNaN(duration) || float.IsInfinity(duration))
                 {
                     m_visibilityProgress01 = 1.0f;
                     m_visibilityState = VisibilityAnimState.Visible;
                 }
                 else
                 {
-                    m_visibilityProgress01 = Mathf.Clamp01(m_visibilityProgress01 + dt / ShowDuration);
+                    m_visibilityProgress01 = Mathf.Clamp01(m_visibilityProgress01 + dt / duration);
                     if (m_visibilityProgress01 >= 1.0f)
                         m_visibilityState = VisibilityAnimState.Visible;
                 }
             }
             else if (m_visibilityState == VisibilityAnimState.Hiding)
             {
-                if (HideDuration <= 0.0f || float.IsNaN(HideDuration) || float.IsInfinity(HideDuration))
+                var duration = HideDuration;
+                if (duration <= 0.0f || float.IsNaN(duration) || float.IsInfinity(duration))
                 {
                     m_visibilityProgress01 = 1.0f;
                     m_visibilityState = VisibilityAnimState.Hidden;
                 }
                 else
                 {
-                    m_visibilityProgress01 = Mathf.Clamp01(m_visibilityProgress01 + dt / HideDuration);
+                    m_visibilityProgress01 = Mathf.Clamp01(m_visibilityProgress01 + dt / duration);
                     if (m_visibilityProgress01 >= 1.0f)
                         m_visibilityState = VisibilityAnimState.Hidden;
                 }
             }
+
+            // 终态时把 source mask 重置为稳定值,避免下一次动画读到过期 snapshot.
+            if (m_visibilityState == VisibilityAnimState.Visible)
+                SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
+            else if (m_visibilityState == VisibilityAnimState.Hidden)
+                SetVisibilitySourceMask(VisibilitySourceMaskMode.FullHidden);
 
 #if UNITY_EDITOR
             if (GsplatEditorDiagnostics.Enabled && prevState != m_visibilityState)
@@ -2654,6 +2761,8 @@ namespace Gsplat
             // mode: 0=off,1=show,2=hide
             var mode = 0;
             var progress = 1.0f;
+            var sourceMode = (int)m_visibilitySourceMaskMode;
+            var sourceProgress = m_visibilitySourceMaskProgress01;
 
             if (EnableVisibilityAnimation)
             {
@@ -2668,6 +2777,11 @@ namespace Gsplat
                     progress = m_visibilityProgress01;
                 }
             }
+
+            // source snapshot 的 progress 只在 0..1 有效.
+            if (float.IsNaN(sourceProgress) || float.IsInfinity(sourceProgress))
+                sourceProgress = 1.0f;
+            sourceProgress = Mathf.Clamp01(sourceProgress);
 
             var centerModel = CalcVisibilityCenterModel(localBounds);
             var maxRadius = CalcVisibilityMaxRadius(localBounds, centerModel);
@@ -2694,6 +2808,8 @@ namespace Gsplat
                 mode: mode,
                 noiseMode: (int)VisibilityNoiseMode,
                 progress: progress,
+                sourceMaskMode: sourceMode,
+                sourceMaskProgress: sourceProgress,
                 centerModel: centerModel,
                 maxRadius: maxRadius,
                 ringWidth: ringWidth,

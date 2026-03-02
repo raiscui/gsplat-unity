@@ -83,6 +83,8 @@ namespace Gsplat
         static readonly int k_visibilityMode = Shader.PropertyToID("_VisibilityMode");
         static readonly int k_visibilityNoiseMode = Shader.PropertyToID("_VisibilityNoiseMode");
         static readonly int k_visibilityProgress = Shader.PropertyToID("_VisibilityProgress");
+        static readonly int k_visibilitySourceMaskMode = Shader.PropertyToID("_VisibilitySourceMaskMode");
+        static readonly int k_visibilitySourceMaskProgress = Shader.PropertyToID("_VisibilitySourceMaskProgress");
         static readonly int k_visibilityCenterModel = Shader.PropertyToID("_VisibilityCenterModel");
         static readonly int k_visibilityMaxRadius = Shader.PropertyToID("_VisibilityMaxRadius");
         static readonly int k_visibilityRingWidth = Shader.PropertyToID("_VisibilityRingWidth");
@@ -294,9 +296,11 @@ namespace Gsplat
         // - 由上层组件(GsplatRenderer/GsplatSequenceRenderer)负责:
         //   1) 状态机(Showing/Hiding/Hidden/Visible)
         //   2) 计算 center/maxRadius/ringWidth/trailWidth
-        //   3) 决定 mode/progress
+        //   3) 决定 mode/progress + source mask(叠加切换)
         // ----------------------------------------------------------------
-        public void SetVisibilityUniforms(int mode, int noiseMode, float progress, Vector3 centerModel, float maxRadius,
+        public void SetVisibilityUniforms(int mode, int noiseMode, float progress,
+            int sourceMaskMode, float sourceMaskProgress,
+            Vector3 centerModel, float maxRadius,
             float ringWidth, float trailWidth,
             float showMinScale, float showRingMinScale, float showTrailMinScale, float hideMinScale,
             Color glowColor, float glowIntensity,
@@ -319,6 +323,19 @@ namespace Gsplat
             if (float.IsNaN(progress) || float.IsInfinity(progress))
                 progress = 0.0f;
             progress = Mathf.Clamp01(progress);
+
+            // source mask:
+            // - 1=FullVisible,2=FullHidden,3=ShowSnapshot,4=HideSnapshot.
+            // - 0/非法值回退到 FullVisible,避免把整片意外压成 0.
+            if (sourceMaskMode < 1 || sourceMaskMode > 4)
+                sourceMaskMode = 1;
+            if (float.IsNaN(sourceMaskProgress) || float.IsInfinity(sourceMaskProgress))
+                sourceMaskProgress = 1.0f;
+            sourceMaskProgress = Mathf.Clamp01(sourceMaskProgress);
+            if (sourceMaskMode == 1)
+                sourceMaskProgress = 1.0f;
+            else if (sourceMaskMode == 2)
+                sourceMaskProgress = 0.0f;
 
             // 半径/宽度类参数允许为 0(表示几乎无效果),但不允许为 NaN/Inf 或负数.
             if (float.IsNaN(maxRadius) || float.IsInfinity(maxRadius) || maxRadius < 0.0f)
@@ -379,6 +396,8 @@ namespace Gsplat
             m_propertyBlock.SetInteger(k_visibilityMode, mode);
             m_propertyBlock.SetInteger(k_visibilityNoiseMode, noiseMode);
             m_propertyBlock.SetFloat(k_visibilityProgress, progress);
+            m_propertyBlock.SetInteger(k_visibilitySourceMaskMode, sourceMaskMode);
+            m_propertyBlock.SetFloat(k_visibilitySourceMaskProgress, sourceMaskProgress);
             // Shader 侧为 float3,这里用 Vector4 写入 xyz.
             m_propertyBlock.SetVector(k_visibilityCenterModel, new Vector4(centerModel.x, centerModel.y, centerModel.z, 0.0f));
             m_propertyBlock.SetFloat(k_visibilityMaxRadius, maxRadius);
