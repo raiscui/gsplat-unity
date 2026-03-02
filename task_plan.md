@@ -66,3 +66,12 @@
 - [x] Inspector 已暴露该字段(在 LiDAR Visual 区域),可直接调出你想要的“颗粒扰动幅度”。
 - [x] 已在 `_tmp_gsplat_pkgtests` 跑 EditMode tests(`Gsplat.Tests`):
   - total=44, passed=42, failed=0, skipped=2.
+
+## 2026-03-03 00:19:55 +0800 追加需求: RadarScan 噪声语义对齐高斯(CurlSmoke + WarpStrength)
+
+- [x] 按用户要求: LiDAR show/hide 的 noise 模式支持真正的 `CurlSmoke`(curl-like 向量场)。
+- [x] LiDAR show/hide 的屏幕空间 jitter 额外乘上 `WarpStrength`(与高斯语义一致: 0 禁用,>0 增强)。
+- [x] 扩展 LiDAR shader 属性契约单测,覆盖 `_LidarShowHideWarpStrength`。
+- [x] 在 `_tmp_gsplat_pkgtests` 跑 EditMode tests(`Gsplat.Tests`)回归:
+  - total=44, passed=42, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_curl_warpstrength_2026-03-03_002646_noquit.xml`

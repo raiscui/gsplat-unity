@@ -28,6 +28,7 @@ namespace Gsplat.Tests
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideNoiseScale"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideNoiseSpeed"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideWarpPixels"), 0);
+            Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideWarpStrength"), 0);
 
             // Material: HasProperty(int) 必须为 true,否则 Render 时的诊断会显示 hasProp=0.
             var mat = new Material(shader);
@@ -38,6 +39,7 @@ namespace Gsplat.Tests
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideNoiseScale")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideNoiseSpeed")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideWarpPixels")));
+                Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideWarpStrength")));
             }
             finally
             {

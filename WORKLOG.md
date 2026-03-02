@@ -513,3 +513,15 @@
 - Unity 6000.3.8f1, EditMode `Gsplat.Tests`
   - total=44, passed=42, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_showhide_warp_pixels_2026-03-02_185824_noquit.xml`
+
+## 2026-03-03 00:30:00 +0800
+- RadarScan(LiDAR) 的 show/hide noise 语义进一步对齐高斯:
+  - `CurlSmoke` 现在使用 curl-like 向量场(而不是近似的 value noise),整体扰动更像“旋涡/流动”.
+  - show/hide 的屏幕空间 jitter 额外乘上 `WarpStrength`(与高斯语义一致: 0 禁用,>0 增强).
+- Tests:
+  - 更新 `GsplatLidarShaderPropertyTests`,锁定 `_LidarShowHideWarpStrength` 必须存在.
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests`
+  - total=44, passed=42, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_curl_warpstrength_2026-03-03_002646_noquit.xml`

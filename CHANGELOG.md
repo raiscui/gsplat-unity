@@ -48,6 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `Show/Hide` not affecting `RadarScan`: LiDAR point-cloud rendering now consumes the same show/hide overlay semantics (`mode/progress/sourceMask`) as `ParticleDots`, so radar mode also gets center-out reveal/burn behavior during visibility transitions.
 - Fixed missing particle-noise feel in `RadarScan` show/hide transitions: LiDAR now forwards `VisibilityNoiseMode/NoiseStrength/NoiseScale/NoiseSpeed` into the show/hide mask path (primary mask, source-mask compositing, and ring glow edge jitter), so radar reveal/burn no longer looks unnaturally "clean" compared to `ParticleDots`.
 - Fixed missing "ParticleDots-like" noise motion in `RadarScan` show/hide by adding edge-weighted screen-space point jitter (noise-driven position warp) during transition, so radar points now exhibit visible granular displacement instead of only brightness-mask noise.
+- Fixed `CurlSmoke` parity in `RadarScan` show/hide: LiDAR `CurlSmoke` now uses a curl-like vector field, and the screen-space jitter amplitude is scaled by `WarpStrength` (0 disables, higher values increase motion).
 
 ## [1.1.4] - 2026-02-23
 

@@ -145,6 +145,7 @@ namespace Gsplat
         static readonly int k_lidarShowHideNoiseScale = Shader.PropertyToID("_LidarShowHideNoiseScale");
         static readonly int k_lidarShowHideNoiseSpeed = Shader.PropertyToID("_LidarShowHideNoiseSpeed");
         static readonly int k_lidarShowHideWarpPixels = Shader.PropertyToID("_LidarShowHideWarpPixels");
+        static readonly int k_lidarShowHideWarpStrength = Shader.PropertyToID("_LidarShowHideWarpStrength");
         static readonly int k_lidarDepthNear = Shader.PropertyToID("_LidarDepthNear");
         static readonly int k_lidarDepthFar = Shader.PropertyToID("_LidarDepthFar");
         static readonly int k_lidarRotationHz = Shader.PropertyToID("_LidarRotationHz");
@@ -303,7 +304,7 @@ namespace Gsplat
             int showHideSourceMaskMode, float showHideSourceMaskProgress,
             float showHideMaxRadius, float showHideRingWidth, float showHideTrailWidth,
             int showHideNoiseMode, float showHideNoiseStrength, float showHideNoiseScale, float showHideNoiseSpeed,
-            float showHideWarpPixels)
+            float showHideWarpPixels, float showHideWarpStrength)
         {
             // 只在过渡期记录,避免正常运行刷屏.
             if (showHideMode != 1 && showHideMode != 2)
@@ -342,6 +343,9 @@ namespace Gsplat
             var hasWarpPixelsProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideWarpPixels))
                 ? 1
                 : 0;
+            var hasWarpStrengthProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideWarpStrength))
+                ? 1
+                : 0;
             var hasGateProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideGate)) ? 1 : 0;
             var hasModeProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideMode)) ? 1 : 0;
             var hasProgressProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideProgress)) ? 1 : 0;
@@ -356,11 +360,11 @@ namespace Gsplat
                 $"matShader={DescribeShader(matShader)} matShaderPath={matShaderPath} " +
                 $"gate={showHideGate:0.###} mode={showHideMode} p={progress01:0.###} " +
                 $"srcMode={showHideSourceMaskMode} srcP={Mathf.Clamp01(showHideSourceMaskProgress):0.###} " +
-                $"noise(mode={showHideNoiseMode} str={showHideNoiseStrength:0.###} scale={showHideNoiseScale:0.###} spd={showHideNoiseSpeed:0.###} warpPx={showHideWarpPixels:0.###}) " +
+                $"noise(mode={showHideNoiseMode} str={showHideNoiseStrength:0.###} scale={showHideNoiseScale:0.###} spd={showHideNoiseSpeed:0.###} warpPx={showHideWarpPixels:0.###} warpStr={showHideWarpStrength:0.###}) " +
                 $"shape(maxR={showHideMaxRadius:0.###} ringW={showHideRingWidth:0.###} trailW={showHideTrailWidth:0.###}) " +
                 $"hasProp(gate={hasGateProp} mode={hasModeProp} p={hasProgressProp} " +
                 $"vis={hasVisibilityProp} inten={hasIntensityProp} depOp={hasDepthOpacityProp} " +
-                $"noiseMode={hasNoiseModeProp} noiseStr={hasNoiseStrengthProp} warpPx={hasWarpPixelsProp})");
+                $"noiseMode={hasNoiseModeProp} noiseStr={hasNoiseStrengthProp} warpPx={hasWarpPixelsProp} warpStr={hasWarpStrengthProp})");
         }
 
         static string DescribeShader(Shader shader)
@@ -385,7 +389,7 @@ namespace Gsplat
             int showHideSourceMaskMode, float showHideSourceMaskProgress,
             Vector3 showHideCenterModel, float showHideMaxRadius, float showHideRingWidth, float showHideTrailWidth,
             int showHideNoiseMode, float showHideNoiseStrength, float showHideNoiseScale, float showHideNoiseSpeed,
-            float showHideWarpPixels)
+            float showHideWarpPixels, float showHideWarpStrength)
         {
             if (m_lastRangeImageUpdateRealtime < 0.0)
             {
@@ -476,6 +480,10 @@ namespace Gsplat
                 (float.IsNaN(showHideWarpPixels) || float.IsInfinity(showHideWarpPixels) || showHideWarpPixels < 0.0f)
                     ? 0.0f
                     : showHideWarpPixels);
+            m_propertyBlock.SetFloat(k_lidarShowHideWarpStrength,
+                (float.IsNaN(showHideWarpStrength) || float.IsInfinity(showHideWarpStrength) || showHideWarpStrength < 0.0f)
+                    ? 0.0f
+                    : Mathf.Clamp(showHideWarpStrength, 0.0f, 3.0f));
             m_propertyBlock.SetFloat(k_lidarDepthNear, depthNear);
             m_propertyBlock.SetFloat(k_lidarDepthFar, depthFar);
             m_propertyBlock.SetFloat(k_lidarRotationHz, rotationHz);
@@ -496,7 +504,7 @@ namespace Gsplat
                 showHideSourceMaskMode, showHideSourceMaskProgress,
                 showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
                 showHideNoiseMode, showHideNoiseStrength, showHideNoiseScale, showHideNoiseSpeed,
-                showHideWarpPixels);
+                showHideWarpPixels, showHideWarpStrength);
 #endif
 
             var rp = new RenderParams(m_materialInstance)

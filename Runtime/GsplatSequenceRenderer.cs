@@ -2249,7 +2249,7 @@ namespace Gsplat
                 showHideSourceMaskMode, showHideSourceMaskProgress,
                 showHideCenterModel, showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
                 (int)VisibilityNoiseMode, NoiseStrength, NoiseScale, NoiseSpeed,
-                LidarShowHideWarpPixels);
+                LidarShowHideWarpPixels, WarpStrength);
         }
 
         void RenderLidarForCamera(Camera camera)
@@ -2298,7 +2298,7 @@ namespace Gsplat
                 showHideSourceMaskMode, showHideSourceMaskProgress,
                 showHideCenterModel, showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
                 (int)VisibilityNoiseMode, NoiseStrength, NoiseScale, NoiseSpeed,
-                LidarShowHideWarpPixels);
+                LidarShowHideWarpPixels, WarpStrength);
         }
 
         bool ShouldSubmitSplatsThisFrame()

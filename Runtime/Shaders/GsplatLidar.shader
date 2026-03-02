@@ -17,6 +17,7 @@ Shader "Gsplat/LiDAR"
         [HideInInspector] _LidarShowHideNoiseScale("_LidarShowHideNoiseScale", Float) = 0
         [HideInInspector] _LidarShowHideNoiseSpeed("_LidarShowHideNoiseSpeed", Float) = 0
         [HideInInspector] _LidarShowHideWarpPixels("_LidarShowHideWarpPixels", Float) = 6
+        [HideInInspector] _LidarShowHideWarpStrength("_LidarShowHideWarpStrength", Float) = 2
     }
     SubShader
     {
@@ -95,7 +96,7 @@ Shader "Gsplat/LiDAR"
             float _LidarShowHideTrailWidth;
             // show/hide noise:
             // - 语义与 splat 侧 VisibilityNoise* 对齐.
-            // - 0: ValueSmoke, 1: CurlSmoke(这里近似为更快更碎的 value), 2: HashLegacy.
+            // - 0: ValueSmoke, 1: CurlSmoke(curl-like 向量场), 2: HashLegacy.
             int _LidarShowHideNoiseMode;
             float _LidarShowHideNoiseStrength;
             float _LidarShowHideNoiseScale;
@@ -104,6 +105,12 @@ Shader "Gsplat/LiDAR"
             // - 这是“点云粒子抖动/扰动”的可调幅度,用于匹配用户期望的可见程度.
             // - 设计为独立参数,不要与点半径耦合,避免用户调点大小时噪声幅度也被动变化.
             float _LidarShowHideWarpPixels;
+            // show/hide warp 强度倍率(0..3):
+            // - 与高斯 show/hide 的 WarpStrength 语义对齐:
+            //   - 0: 禁用位移扰动.
+            //   - 2: 默认强度.
+            //   - 3: 更强扰动(可能需要更小的 WarpPixels).
+            float _LidarShowHideWarpStrength;
 
             float _LidarDepthNear;
             float _LidarDepthFar;
@@ -188,6 +195,90 @@ Shader "Gsplat/LiDAR"
                 return lerp(nxy0, nxy1, f.z);
             }
 
+            // ----------------------------------------------------------------
+            // Curl-like 噪声场(对齐高斯 show/hide 的 CurlSmoke):
+            // - 用 3 份独立的 value noise 作为 vector potential A(p)=(Ax,Ay,Az),
+            //   然后取 curl(A)=∇×A 得到“旋涡/流动”更明显的向量场.
+            //
+            // 说明:
+            // - 这里复用 ValueNoise 的 hash+fade 形式,无需贴图,可在 model space 稳态复现.
+            // - 该计算相对更重,因此只建议在 show/hide 过渡期间使用.
+            // ----------------------------------------------------------------
+            void ValueNoise3DGrad(float3 p, out float3 grad01)
+            {
+                float3 ip = floor(p);
+                float3 fp = frac(p);
+
+                // fade: f(t)=t^2*(3-2t), f'(t)=6t(1-t)
+                float3 u = fp * fp * (3.0 - 2.0 * fp);
+                float3 du = 6.0 * fp * (1.0 - fp);
+
+                float n000 = Hash13(ip + float3(0.0, 0.0, 0.0));
+                float n100 = Hash13(ip + float3(1.0, 0.0, 0.0));
+                float n010 = Hash13(ip + float3(0.0, 1.0, 0.0));
+                float n110 = Hash13(ip + float3(1.0, 1.0, 0.0));
+                float n001 = Hash13(ip + float3(0.0, 0.0, 1.0));
+                float n101 = Hash13(ip + float3(1.0, 0.0, 1.0));
+                float n011 = Hash13(ip + float3(0.0, 1.0, 1.0));
+                float n111 = Hash13(ip + float3(1.0, 1.0, 1.0));
+
+                // x 方向插值
+                float nx00 = lerp(n000, n100, u.x);
+                float nx10 = lerp(n010, n110, u.x);
+                float nx01 = lerp(n001, n101, u.x);
+                float nx11 = lerp(n011, n111, u.x);
+
+                // y 方向插值
+                float nxy0 = lerp(nx00, nx10, u.y);
+                float nxy1 = lerp(nx01, nx11, u.y);
+
+                // ∂/∂x:
+                // - 只有 u.x 依赖 x,因此只需要对 x 方向的 lerp 求导,再把结果继续按 y/z 插值.
+                float dnx00_dx = (n100 - n000) * du.x;
+                float dnx10_dx = (n110 - n010) * du.x;
+                float dnx01_dx = (n101 - n001) * du.x;
+                float dnx11_dx = (n111 - n011) * du.x;
+                float dnxy0_dx = lerp(dnx00_dx, dnx10_dx, u.y);
+                float dnxy1_dx = lerp(dnx01_dx, dnx11_dx, u.y);
+                float dn_dx = lerp(dnxy0_dx, dnxy1_dx, u.z);
+
+                // ∂/∂y:
+                // - nxy0 = nx00 + (nx10-nx00)*u.y
+                // - nxy1 = nx01 + (nx11-nx01)*u.y
+                float dnxy0_dy = (nx10 - nx00) * du.y;
+                float dnxy1_dy = (nx11 - nx01) * du.y;
+                float dn_dy = lerp(dnxy0_dy, dnxy1_dy, u.z);
+
+                // ∂/∂z:
+                // - noise = nxy0 + (nxy1-nxy0)*u.z
+                float dn_dz = (nxy1 - nxy0) * du.z;
+
+                grad01 = float3(dn_dx, dn_dy, dn_dz);
+            }
+
+            float3 EvalCurlNoise(float3 p)
+            {
+                // 3 个不同 offset 的噪声,作为 vector potential 的三个分量.
+                // 说明: offset 只要足够大且不共线即可,这里选固定常数用于可复现.
+                float3 g1;
+                float3 g2;
+                float3 g3;
+                ValueNoise3DGrad(p + float3(17.13, 31.77, 47.11), g1);
+                ValueNoise3DGrad(p + float3(53.11, 12.77, 9.71), g2);
+                ValueNoise3DGrad(p + float3(29.21, 83.11, 11.73), g3);
+
+                // curl(A) = (∂Az/∂y - ∂Ay/∂z, ∂Ax/∂z - ∂Az/∂x, ∂Ay/∂x - ∂Ax/∂y)
+                //
+                // 注意:
+                // - 这里把 grad 当作 signed 的比例场来用,仅影响尺度不影响方向.
+                // - 我们后续主要用 normalize(curl) 做方向,因此不必过度纠结常数.
+                return float3(
+                    (g3.y - g2.z),
+                    (g1.z - g3.x),
+                    (g2.x - g1.y)
+                );
+            }
+
             float EvalLidarShowHideNoise01(float3 modelPos, float tNoise)
             {
                 float scale = max(_LidarShowHideNoiseScale, 0.0);
@@ -204,7 +295,7 @@ Shader "Gsplat/LiDAR"
                     return Hash13(pBase * 2.2 + tVec * 2.5);
                 }
 
-                // ValueSmoke / CurlSmoke(近似):
+                // ValueSmoke / CurlSmoke:
                 // - 之前频率较低,在常见资产尺度下噪声不明显.
                 // - 这里提高采样频率,并叠加一层轻量 domain warp,让 show/hide 边界有可见颗粒感.
                 float freq = mode == 1 ? 1.35 : 0.95;
@@ -215,12 +306,12 @@ Shader "Gsplat/LiDAR"
                 float noiseStrength = saturate(_LidarShowHideNoiseStrength * 1.6);
                 if (mode == 1 && noiseStrength > 1.0e-4)
                 {
-                    float warpX = ValueNoise3D(pBase * 0.85 + tVec * 1.70 + float3(13.7, 7.3, 19.1));
-                    float warpY = ValueNoise3D(pBase * 0.93 + tVec * 1.90 + float3(29.3, 17.9, 5.7));
-                    float warpZ = ValueNoise3D(pBase * 1.03 + tVec * 2.10 + float3(3.1, 31.7, 11.9));
-                    float3 warpVec = float3(warpX, warpY, warpZ) * 2.0 - 1.0;
+                    // CurlSmoke:
+                    // - 使用 curl-like 向量场做 domain warp,让噪声更像旋涡/流体流动,更少随机抖动感.
+                    float3 curlVec = EvalCurlNoise(pBase * 0.85 + tVec * 1.70 + float3(13.7, 7.3, 19.1));
+                    curlVec = normalize(curlVec + 1.0e-5);
                     float warpAmp = 0.15 + noiseStrength * 0.65;
-                    p += warpVec * warpAmp;
+                    p += curlVec * warpAmp;
                 }
 
                 float n0 = ValueNoise3D(p);
@@ -418,7 +509,8 @@ Shader "Gsplat/LiDAR"
                         }
 
                         float3 modelPos = mul(_LidarMatrixW2M, float4(worldPos, 1.0)).xyz;
-                        float distModel = length(modelPos - _LidarShowHideCenterModel);
+                        float3 deltaModel = modelPos - _LidarShowHideCenterModel;
+                        float distModel = length(deltaModel);
                         float noiseStrength = saturate(_LidarShowHideNoiseStrength);
                         // 说明:
                         // - 用户侧常用的 NoiseStrength 往往在 0.2..0.5 区间.
@@ -475,13 +567,6 @@ Shader "Gsplat/LiDAR"
                         // - 目的: 不仅是边界明暗噪声,还要有明显的“颗粒扰动”观感.
                         if (noiseStrength > 1.0e-4)
                         {
-                            float warp01a = EvalLidarShowHideNoise01(modelPos + float3(17.13, 31.77, 47.11),
-                                tNoise * 1.37 + 0.73);
-                            float warp01b = EvalLidarShowHideNoise01(modelPos + float3(53.11, 12.77, 9.71),
-                                tNoise * 1.91 + 1.19);
-                            float2 warpDir = float2(warp01a * 2.0 - 1.0, warp01b * 2.0 - 1.0);
-                            warpDir = normalize(warpDir + float2(1.0e-4, -1.0e-4));
-
                             float progressExpand = EaseInOutQuad(progress);
                             float radiusShowHide = progressExpand * (maxRadius + trailWidth);
                             float edgeDist = distModel - radiusShowHide;
@@ -494,12 +579,59 @@ Shader "Gsplat/LiDAR"
                             // 位移尺度(屏幕像素):
                             // - 由用户显式调参 `_LidarShowHideWarpPixels` 控制.
                             // - 目的: 把“能否看见噪声扰动”从“点大小/资产尺度”里解耦出来.
-                            float warpPx = noiseStrengthVis * warpWeight * max(_LidarShowHideWarpPixels, 0.0);
+                            float warpStrength = clamp(_LidarShowHideWarpStrength, 0.0, 3.0);
+                            // WarpStrength 的默认值是 2,这里把它归一化到“默认倍率=1”.
+                            float warpStrengthMul = warpStrength * 0.5;
+                            float warpPx = noiseStrengthVis * warpWeight * max(_LidarShowHideWarpPixels, 0.0) * warpStrengthMul;
 
-                            // 让位移的最小幅度不要太小(否则用户会觉得“还是没噪声”).
-                            float warpNoiseMul = lerp(0.65, 1.0, abs(noiseSigned));
-                            float2 warpOffset = warpDir * (warpPx * warpNoiseMul) * (proj.w / _ScreenParams.xy);
-                            proj.xy += warpOffset;
+                            // 当 warpPx 极小时直接跳过,避免浪费 curl/noise 计算.
+                            if (warpPx > 1.0e-5)
+                            {
+                                float2 warpDir = float2(0.0, 1.0);
+                                int noiseMode = _LidarShowHideNoiseMode;
+                                if (noiseMode == 1)
+                                {
+                                    // CurlSmoke:
+                                    // - 用 curl-like 向量场决定位移方向,让抖动更像“流动/旋涡”.
+                                    float3 tVec = float3(tNoise, tNoise * 1.37, tNoise * 1.93);
+                                    float scale = max(_LidarShowHideNoiseScale, 0.0);
+                                    float3 pBase = modelPos * scale;
+                                    float3 curlVec = EvalCurlNoise(pBase * 0.85 + tVec * 1.70 + float3(101.17, 17.31, 9.77));
+
+                                    // 让 curl 更偏向切向(围绕中心转),减少把点推离/推近中心的“径向拉扯”感.
+                                    if (distModel > 1.0e-5)
+                                    {
+                                        float3 radial = deltaModel / distModel;
+                                        curlVec = curlVec - radial * dot(curlVec, radial);
+
+                                        float3 axis = (abs(radial.y) < 0.99) ? float3(0.0, 1.0, 0.0) : float3(1.0, 0.0, 0.0);
+                                        float3 tangent = normalize(cross(axis, radial));
+                                        float3 bitangent = cross(radial, tangent);
+
+                                        float2 dir2 = float2(dot(curlVec, tangent), dot(curlVec, bitangent));
+                                        warpDir = normalize(dir2 + float2(1.0e-4, -1.0e-4));
+                                    }
+                                    else
+                                    {
+                                        float2 dir2 = float2(curlVec.x, curlVec.z);
+                                        warpDir = normalize(dir2 + float2(1.0e-4, -1.0e-4));
+                                    }
+                                }
+                                else
+                                {
+                                    float warp01a = EvalLidarShowHideNoise01(modelPos + float3(17.13, 31.77, 47.11),
+                                        tNoise * 1.37 + 0.73);
+                                    float warp01b = EvalLidarShowHideNoise01(modelPos + float3(53.11, 12.77, 9.71),
+                                        tNoise * 1.91 + 1.19);
+                                    float2 dir2 = float2(warp01a * 2.0 - 1.0, warp01b * 2.0 - 1.0);
+                                    warpDir = normalize(dir2 + float2(1.0e-4, -1.0e-4));
+                                }
+
+                                // 让位移的最小幅度不要太小(否则用户会觉得“还是没噪声”).
+                                float warpNoiseMul = lerp(0.65, 1.0, abs(noiseSigned));
+                                float2 warpOffset = warpDir * (warpPx * warpNoiseMul) * (proj.w / _ScreenParams.xy);
+                                proj.xy += warpOffset;
+                            }
                         }
                     }
                 }
