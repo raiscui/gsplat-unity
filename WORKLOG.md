@@ -268,3 +268,39 @@
   - 结果: total=35, passed=33, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_radar_button_2026-03-02_1516_noquit.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_radar_button_2026-03-02_1516_noquit.log`
+
+## 2026-03-02 16:21:00 +0800
+- 修复你反馈的两处 LiDAR/RenderStyle 切换硬切问题:
+  - `Depth -> SplatColorSH0` 从枚举硬切改为可动画混合(`_LidarColorBlend`).
+  - `RadarScan -> Gaussian/ParticleDots` 从立即关闭改为可见性淡出(`_LidarVisibility` + keep-alive fade-out).
+- Runtime 新增 API:
+  - `SetRadarScanEnabled(bool enableRadarScan, bool animated = true, float durationSeconds = -1.0f)`
+  - `SetLidarColorMode(GsplatLidarColorMode colorMode, bool animated = true, float durationSeconds = -1.0f)`
+- Editor:
+  - `GsplatRendererEditor` / `GsplatSequenceRendererEditor` 的 LiDAR Visual 区新增 `Depth(动画)` / `SplatColor(动画)` 快捷按钮.
+- Shader:
+  - `GsplatLidar.shader` 增加颜色渐变与可见性淡入淡出,并让 DepthOpacity 在颜色过渡时平滑趋近到 1.
+- 测试:
+  - `GsplatVisibilityAnimationTests` 新增 2 条动画推进回归用例并通过.
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode tests:
+  - total=37, passed=35, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_radar_anim_fix_2026-03-02_1612_noquit.xml`
+
+## 2026-03-02 16:30:00 +0800
+- 修复 RadarScan 入场黑场: `Gaussian/ParticleDots -> RadarScan` 时,当 `HideSplatsWhenLidarEnabled=true` 不再立即停 splat.
+- 具体策略:
+  - 在 LiDAR fade-in(目标可见性=1)期间延迟隐藏 splat.
+  - 当雷达可见性接近完成后再执行纯雷达隐藏策略,避免“先黑一帧/几帧”体感.
+- 覆盖范围:
+  - `Runtime/GsplatRenderer.cs`
+  - `Runtime/GsplatSequenceRenderer.cs`
+- 测试:
+  - `Tests/Editor/GsplatVisibilityAnimationTests.cs` 新增:
+    - `SetRenderStyleAndRadarScan_Animated_DelayHideSplatsUntilRadarVisible`
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode tests:
+  - total=38, passed=36, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_radar_enter_no_black_2026-03-02_1640_noquit.xml`

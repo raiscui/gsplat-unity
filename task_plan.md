@@ -917,3 +917,72 @@
 ## 状态
 **已完成**
 - RenderStyle 动画区已支持 RadarScan 按钮与双向切换,并已通过回归测试.
+
+### 2026-03-02 15:33:18 +0800
+- 新反馈处理(增量修复):
+  - 问题1: 雷达点云 `Depth -> SplatColor` 为硬切,缺少颜色过渡动画.
+  - 问题2: `RadarScan -> Gaussian/ParticleDots` 为硬切,缺少雷达效果淡出动画.
+- 增量修复计划:
+  - [ ] Runtime: 增加 LiDAR 颜色混合动画状态(`colorBlend01`)与雷达可见性动画状态(`visibility01`).
+  - [ ] Shader: 增加 `_LidarColorBlend` / `_LidarVisibility` uniform,实现颜色与可见性平滑过渡.
+  - [ ] Editor: 增加 LiDAR 颜色模式动画按钮(`Depth(动画)`/`SplatColor(动画)`).
+  - [ ] Tests: 新增动画状态推进回归用例.
+  - [ ] 回归: 重新跑 `Gsplat.Tests`.
+
+## 状态
+**增量修复进行中**
+- 正在实现 Runtime + Shader 动画状态机.
+
+### 2026-03-02 16:10:00 +0800
+- 继续处理你最新反馈的动画缺口闭环:
+  - 先逐项自检 Runtime/Shader/Editor/Test 的 diff,确认 `Depth<->SplatColor` 和 `RadarScan<->其他风格` 都是平滑过渡而非硬切.
+  - 再执行 Unity EditMode tests(`Gsplat.Tests`)做一次完整回归.
+  - 最后补齐 `notes.md`/`WORKLOG.md`/`LATER_PLANS.md`/`ERRORFIX.md` 的尾部记录并将阶段状态改为完成.
+
+## 状态
+**增量修复验证中**
+- 正在执行最终代码自检与回归测试.
+
+### 2026-03-02 16:21:00 +0800
+- 增量修复已完成并通过回归:
+  - [x] Runtime: 增加 LiDAR 颜色混合动画(`m_lidarColorBlend01`)与雷达可见性动画(`m_lidarVisibility01`),并在关闭雷达时通过 `m_lidarKeepAliveDuringFadeOut` 播放淡出.
+  - [x] Shader: 增加 `_LidarColorBlend` / `_LidarVisibility`,实现 `Depth <-> SplatColor` 渐变与 `RadarScan` 淡入淡出.
+  - [x] Editor: LiDAR Visual 区新增 `Depth(动画)` / `SplatColor(动画)` 按钮.
+  - [x] Tests: 新增 `SetLidarColorMode_Animated_ReachesTargetBlend` 与 `SetRadarScanEnabled_Animated_FadesOutVisibility`.
+  - [x] 回归: Unity EditMode `Gsplat.Tests` 通过.
+    - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_radar_anim_fix_2026-03-02_1612_noquit.xml`
+
+## 状态
+**增量修复已完成**
+- 你反馈的两个硬切点已改为平滑动画,并有自动化测试覆盖.
+
+### 2026-03-02 16:35:00 +0800
+- 新增细节修复任务(你最新反馈):
+  - 现象: `Gaussian/ParticleDots -> RadarScan` 时出现黑场,随后雷达粒子再渐显.
+  - 初步判断: `HideSplatsWhenLidarEnabled=true` 在切换起点立即生效,导致 splat 被先停掉,而雷达还在 fade-in.
+- 本轮计划:
+  - [ ] 定位 splat 提交门禁与 `HideSplatsWhenLidarEnabled` 的生效时序.
+  - [ ] 改为对称过渡: 入雷达期间延迟隐藏 splat,直到雷达可见性达到阈值(或动画结束).
+  - [ ] 增加回归测试覆盖“入雷达不黑场”语义.
+  - [ ] 运行 Unity EditMode tests 并更新四文件.
+
+## 状态
+**新一轮增量修复进行中**
+- 正在定位 black frame 的具体门禁触发点.
+
+### 2026-03-02 16:30:00 +0800
+- 本轮 black frame 细节修复完成:
+  - [x] 已定位门禁: `HideSplatsWhenLidarEnabled` 在入雷达起点立即生效,导致 splat 先停掉.
+  - [x] Runtime 修复: 入雷达 fade-in 期间延迟隐藏 splat,待雷达可见性接近完成后再隐藏.
+  - [x] 覆盖 `GsplatRenderer` 与 `GsplatSequenceRenderer` 两个后端.
+  - [x] 新增回归测试: `SetRenderStyleAndRadarScan_Animated_DelayHideSplatsUntilRadarVisible`.
+  - [x] 回归通过: `Gsplat.Tests` total=38, passed=36, failed=0, skipped=2.
+    - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_radar_enter_no_black_2026-03-02_1640_noquit.xml`
+
+## 状态
+**新一轮增量修复已完成**
+- 入雷达不再出现“先黑场再渐显雷达”的断层.
+
+### 2026-03-02 16:41:00 +0800
+- 进入交付动作: 按你的要求执行 git 提交.
+- 提交范围: 本轮已验证通过的 RadarScan 切换动画修复(含 black frame 细节修复)与对应测试/文档/工作记录.

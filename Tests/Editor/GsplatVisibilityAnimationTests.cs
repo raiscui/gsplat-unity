@@ -17,11 +17,26 @@ namespace Gsplat.Tests
         static readonly MethodInfo s_advanceRenderStyleStateIfNeeded =
             typeof(GsplatRenderer).GetMethod("AdvanceRenderStyleStateIfNeeded", BindingFlags.Instance | BindingFlags.NonPublic);
 
+        static readonly MethodInfo s_advanceLidarAnimationStateIfNeeded =
+            typeof(GsplatRenderer).GetMethod("AdvanceLidarAnimationStateIfNeeded", BindingFlags.Instance | BindingFlags.NonPublic);
+
         static readonly FieldInfo s_renderStyleBlend01Field =
             typeof(GsplatRenderer).GetField("m_renderStyleBlend01", BindingFlags.Instance | BindingFlags.NonPublic);
 
         static readonly FieldInfo s_renderStyleAnimatingField =
             typeof(GsplatRenderer).GetField("m_renderStyleAnimating", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_lidarColorBlend01Field =
+            typeof(GsplatRenderer).GetField("m_lidarColorBlend01", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_lidarColorAnimatingField =
+            typeof(GsplatRenderer).GetField("m_lidarColorAnimating", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_lidarVisibility01Field =
+            typeof(GsplatRenderer).GetField("m_lidarVisibility01", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_lidarVisibilityAnimatingField =
+            typeof(GsplatRenderer).GetField("m_lidarVisibilityAnimating", BindingFlags.Instance | BindingFlags.NonPublic);
 
         static void AdvanceVisibilityState(GsplatRenderer renderer)
         {
@@ -42,6 +57,13 @@ namespace Gsplat.Tests
             s_advanceRenderStyleStateIfNeeded.Invoke(renderer, null);
         }
 
+        static void AdvanceLidarAnimationState(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_advanceLidarAnimationStateIfNeeded,
+                "Expected GsplatRenderer.AdvanceLidarAnimationStateIfNeeded to exist.");
+            s_advanceLidarAnimationStateIfNeeded.Invoke(renderer, null);
+        }
+
         static float GetRenderStyleBlend01(GsplatRenderer renderer)
         {
             // 说明: 该值是 shader morph 的核心 uniform,需要锁定其收敛到目标值的语义.
@@ -53,6 +75,39 @@ namespace Gsplat.Tests
         {
             Assert.IsNotNull(s_renderStyleAnimatingField, "Expected private field 'm_renderStyleAnimating' to exist on GsplatRenderer.");
             return (bool)s_renderStyleAnimatingField.GetValue(renderer);
+        }
+
+        static float GetLidarColorBlend01(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_lidarColorBlend01Field, "Expected private field 'm_lidarColorBlend01' to exist on GsplatRenderer.");
+            return (float)s_lidarColorBlend01Field.GetValue(renderer);
+        }
+
+        static bool GetLidarColorAnimating(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_lidarColorAnimatingField, "Expected private field 'm_lidarColorAnimating' to exist on GsplatRenderer.");
+            return (bool)s_lidarColorAnimatingField.GetValue(renderer);
+        }
+
+        static float GetLidarVisibility01(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_lidarVisibility01Field, "Expected private field 'm_lidarVisibility01' to exist on GsplatRenderer.");
+            return (float)s_lidarVisibility01Field.GetValue(renderer);
+        }
+
+        static bool GetLidarVisibilityAnimating(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_lidarVisibilityAnimatingField,
+                "Expected private field 'm_lidarVisibilityAnimating' to exist on GsplatRenderer.");
+            return (bool)s_lidarVisibilityAnimatingField.GetValue(renderer);
+        }
+
+        static uint GetSubmittedSplatCount(GsplatRenderer renderer)
+        {
+            // 说明:
+            // - `IGsplat.SplatCount` 会走 `ShouldSubmitSplatsThisFrame` 门禁.
+            // - 因此它可直接作为“当前帧是否还在提交 splat sort/draw”的证据.
+            return ((IGsplat)renderer).SplatCount;
         }
 
         static GsplatAsset CreateMinimalAsset1Splat()
@@ -216,6 +271,127 @@ namespace Gsplat.Tests
                 "Expected exiting radar mode to follow requested render style.");
 
             Object.DestroyImmediate(go);
+        }
+
+        [UnityTest]
+        public IEnumerator SetLidarColorMode_Animated_ReachesTargetBlend()
+        {
+            var go = new GameObject("GsplatVisibilityAnimationTests_LidarColor");
+            go.SetActive(false);
+            var r = go.AddComponent<GsplatRenderer>();
+            r.SetLidarColorMode(GsplatLidarColorMode.Depth, animated: false);
+
+            go.SetActive(true);
+            yield return null;
+
+            Assert.AreEqual(0.0f, GetLidarColorBlend01(r), 1e-6f, "Precondition failed: expected Depth blend=0.");
+
+            r.SetLidarColorMode(GsplatLidarColorMode.SplatColorSH0, animated: true, durationSeconds: 0.05f);
+
+            var t0 = Time.realtimeSinceStartup;
+            var sawIntermediate = false;
+            while (Time.realtimeSinceStartup - t0 < 1.0f)
+            {
+                AdvanceLidarAnimationState(r);
+                var blend = GetLidarColorBlend01(r);
+                if (blend > 0.0f && blend < 1.0f)
+                    sawIntermediate = true;
+                if (!GetLidarColorAnimating(r) && Mathf.Abs(blend - 1.0f) < 1e-3f)
+                    break;
+                yield return null;
+            }
+
+            Assert.IsTrue(sawIntermediate, "Expected LiDAR color blend to pass through intermediate values.");
+            Assert.IsFalse(GetLidarColorAnimating(r), "Expected LiDAR color animation to finish within timeout.");
+            Assert.AreEqual(1.0f, GetLidarColorBlend01(r), 1e-3f,
+                "Expected LiDAR color blend to converge to SplatColor target=1.");
+
+            Object.DestroyImmediate(go);
+        }
+
+        [UnityTest]
+        public IEnumerator SetRadarScanEnabled_Animated_FadesOutVisibility()
+        {
+            var go = new GameObject("GsplatVisibilityAnimationTests_LidarVisibility");
+            go.SetActive(false);
+            var r = go.AddComponent<GsplatRenderer>();
+            r.SetRadarScanEnabled(enableRadarScan: true, animated: false);
+
+            go.SetActive(true);
+            yield return null;
+
+            Assert.IsTrue(r.EnableLidarScan, "Precondition failed: expected radar mode enabled.");
+            Assert.AreEqual(1.0f, GetLidarVisibility01(r), 1e-6f, "Precondition failed: expected visibility=1.");
+
+            r.SetRadarScanEnabled(enableRadarScan: false, animated: true, durationSeconds: 0.05f);
+            Assert.IsFalse(r.EnableLidarScan, "Expected desired radar mode to turn off immediately.");
+
+            var t0 = Time.realtimeSinceStartup;
+            var sawIntermediate = false;
+            while (Time.realtimeSinceStartup - t0 < 1.0f)
+            {
+                AdvanceLidarAnimationState(r);
+                var vis = GetLidarVisibility01(r);
+                if (vis > 0.0f && vis < 1.0f)
+                    sawIntermediate = true;
+                if (!GetLidarVisibilityAnimating(r) && vis < 1e-3f)
+                    break;
+                yield return null;
+            }
+
+            Assert.IsTrue(sawIntermediate, "Expected LiDAR visibility to pass through intermediate values.");
+            Assert.IsFalse(GetLidarVisibilityAnimating(r), "Expected LiDAR visibility animation to finish within timeout.");
+            Assert.LessOrEqual(GetLidarVisibility01(r), 1e-3f, "Expected LiDAR visibility to fade to zero.");
+
+            Object.DestroyImmediate(go);
+        }
+
+        [UnityTest]
+        public IEnumerator SetRenderStyleAndRadarScan_Animated_DelayHideSplatsUntilRadarVisible()
+        {
+            // 目的:
+            // - 锁定“入雷达不黑场”的语义.
+            // - 开启 RadarScan 动画后,起始阶段应继续提交 splats;
+            //   待雷达可见性淡入完成后,才因 HideSplatsWhenLidarEnabled 停掉 splat 提交.
+            var go = new GameObject("GsplatVisibilityAnimationTests_RadarEnterNoBlackFrame");
+            go.SetActive(false);
+            var asset = CreateMinimalAsset1Splat();
+            var r = go.AddComponent<GsplatRenderer>();
+            r.GsplatAsset = asset;
+
+            go.SetActive(true);
+            yield return null;
+
+            // 预热: 等待一小段时间,确保最小资产已进入可提交状态.
+            var warmStart = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - warmStart < 1.0f && GetSubmittedSplatCount(r) == 0)
+                yield return null;
+
+            Assert.Greater(GetSubmittedSplatCount(r), 0u,
+                "Precondition failed: expected splat submission before entering radar mode.");
+
+            r.SetRenderStyleAndRadarScan(GsplatRenderStyle.Gaussian, enableRadarScan: true, animated: true, durationSeconds: 0.05f);
+
+            Assert.IsTrue(r.EnableLidarScan, "Expected radar mode to enable LiDAR.");
+            Assert.IsTrue(r.HideSplatsWhenLidarEnabled, "Expected radar mode to request pure radar view.");
+            Assert.Greater(GetSubmittedSplatCount(r), 0u,
+                "Expected splats to remain submitted at radar fade-in start (avoid black frame).");
+
+            var t0 = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - t0 < 1.0f)
+            {
+                AdvanceLidarAnimationState(r);
+                if (!GetLidarVisibilityAnimating(r))
+                    break;
+                yield return null;
+            }
+
+            Assert.IsFalse(GetLidarVisibilityAnimating(r), "Expected radar fade-in animation to finish within timeout.");
+            Assert.AreEqual(0u, GetSubmittedSplatCount(r),
+                "Expected splat submission to stop after radar fade-in completes when HideSplatsWhenLidarEnabled=true.");
+
+            Object.DestroyImmediate(go);
+            Object.DestroyImmediate(asset);
         }
 
         [UnityTest]

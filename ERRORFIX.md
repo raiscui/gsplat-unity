@@ -1062,3 +1062,32 @@
   - 汇总: total=33, passed=31, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_zwrite_2026-03-02_123150_noquit.xml`
 - Commit: `2bf675c`
+
+## 2026-03-02 16:21:00 +0800: 修复 LiDAR 颜色与雷达模式切换硬切(缺动画)
+
+### 现象
+- `LidarColorMode` 从 `Depth` 切到 `SplatColorSH0` 时是硬切,缺少过渡动画.
+- `RenderStyle` 从 `RadarScan` 切回 `Gaussian/ParticleDots` 时,雷达点云立即消失,缺少淡出.
+
+### 根因
+- 颜色模式原实现是枚举分支,shader 直接二选一,没有连续参数承载过渡.
+- 雷达开关原实现直接绑定 `EnableLidarScan`,关闭时立刻停掉 LiDAR runtime 链路,导致不可能播放 fade-out.
+
+### 修复
+- Runtime:
+  - 增加 `m_lidarColorBlend01` 与 `m_lidarVisibility01` 两条动画状态,并在 Update/相机回调中推进.
+  - 新增 `SetLidarColorMode(...)` 与 `SetRadarScanEnabled(...)` 统一入口.
+  - 关闭雷达时引入 `m_lidarKeepAliveDuringFadeOut`,动画结束后再释放 runtime 链路.
+  - LiDAR range image 的 `needsSplatId` 改为按动画状态判断,避免过渡阶段缺 splatId.
+- Shader:
+  - 新增 `_LidarColorBlend` / `_LidarVisibility`.
+  - 颜色从 `depthRgb` 与 `splatRgb` 做 `lerp`.
+  - alpha/brightness 乘 `visibility`,实现雷达淡入淡出.
+
+### 验证(证据型)
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests`:
+  - total=37, passed=35, failed=0, skipped=2
+  - 新增测试通过:
+    - `SetLidarColorMode_Animated_ReachesTargetBlend`
+    - `SetRadarScanEnabled_Animated_FadesOutVisibility`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_radar_anim_fix_2026-03-02_1612_noquit.xml`

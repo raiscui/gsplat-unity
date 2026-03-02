@@ -113,6 +113,8 @@ namespace Gsplat
         static readonly int k_lidarMatrixL2W = Shader.PropertyToID("_LidarMatrixL2W");
         static readonly int k_lidarPointRadiusPixels = Shader.PropertyToID("_LidarPointRadiusPixels");
         static readonly int k_lidarColorMode = Shader.PropertyToID("_LidarColorMode");
+        static readonly int k_lidarColorBlend = Shader.PropertyToID("_LidarColorBlend");
+        static readonly int k_lidarVisibility = Shader.PropertyToID("_LidarVisibility");
         static readonly int k_lidarDepthNear = Shader.PropertyToID("_LidarDepthNear");
         static readonly int k_lidarDepthFar = Shader.PropertyToID("_LidarDepthFar");
         static readonly int k_lidarRotationHz = Shader.PropertyToID("_LidarRotationHz");
@@ -272,7 +274,8 @@ namespace Gsplat
             Matrix4x4 lidarLocalToWorld, float lidarTime, float rotationHz,
             int azimuthBins, int beamCount,
             float depthNear, float depthFar, float pointRadiusPixels,
-            GsplatLidarColorMode colorMode, float trailGamma, float intensity, float depthOpacity,
+            GsplatLidarColorMode colorMode, float colorBlend01, float visibility01,
+            float trailGamma, float intensity, float depthOpacity,
             GraphicsBuffer splatColorBuffer)
         {
             if (m_lastRangeImageUpdateRealtime < 0.0)
@@ -319,6 +322,8 @@ namespace Gsplat
             m_propertyBlock.SetMatrix(k_lidarMatrixL2W, lidarLocalToWorld);
             m_propertyBlock.SetFloat(k_lidarPointRadiusPixels, Mathf.Max(pointRadiusPixels, 0.0f));
             m_propertyBlock.SetInt(k_lidarColorMode, (int)colorMode);
+            m_propertyBlock.SetFloat(k_lidarColorBlend, Mathf.Clamp01(colorBlend01));
+            m_propertyBlock.SetFloat(k_lidarVisibility, Mathf.Clamp01(visibility01));
             m_propertyBlock.SetFloat(k_lidarDepthNear, depthNear);
             m_propertyBlock.SetFloat(k_lidarDepthFar, depthFar);
             m_propertyBlock.SetFloat(k_lidarRotationHz, rotationHz);

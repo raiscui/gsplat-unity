@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed the burn-ring hide animation sometimes leaving a few splats lingering near the end due to outward edge jitter, by making fade/shrink use a more stable edge distance (ring/glow still jitters).
 - Fixed RenderStyle switching (Gaussian <-> ParticleDots) popping for splats near the screen edge (those culled by the dot frustum cull at the transition endpoints): they now smoothly fade in/out instead of abruptly disappearing/appearing at the start/end of the animation.
 - Fixed LiDAR point cloud looking "too far" / like a thick outer shell by storing the projected depth onto the bin-center ray (instead of the Euclidean distance), making sampling and reconstruction consistent.
+- Fixed LiDAR mode switches popping: `Depth <-> SplatColorSH0` now blends smoothly, and `RadarScan -> Gaussian/ParticleDots` now fades out LiDAR visibility instead of hard-cutting.
+- Fixed a black-frame gap when switching `Gaussian/ParticleDots -> RadarScan` with `HideSplatsWhenLidarEnabled=true`, by delaying splat hiding until radar fade-in is nearly complete.
 
 ## [1.1.4] - 2026-02-23
 

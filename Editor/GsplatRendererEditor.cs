@@ -96,6 +96,42 @@ namespace Gsplat.Editor
                 EditorGUILayout.LabelField("Visual", EditorStyles.boldLabel);
                 var colorModeProp = serializedObject.FindProperty(nameof(GsplatRenderer.LidarColorMode));
                 EditorGUILayout.PropertyField(colorModeProp);
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button("Depth(动画)"))
+                    {
+                        serializedObject.ApplyModifiedProperties();
+                        foreach (var obj in targets)
+                        {
+                            var r = obj as GsplatRenderer;
+                            if (!r)
+                                continue;
+                            r.SetLidarColorMode(GsplatLidarColorMode.Depth, animated: true);
+                            EditorUtility.SetDirty(r);
+                        }
+
+                        EditorApplication.QueuePlayerLoopUpdate();
+                        UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+                        serializedObject.Update();
+                    }
+
+                    if (GUILayout.Button("SplatColor(动画)"))
+                    {
+                        serializedObject.ApplyModifiedProperties();
+                        foreach (var obj in targets)
+                        {
+                            var r = obj as GsplatRenderer;
+                            if (!r)
+                                continue;
+                            r.SetLidarColorMode(GsplatLidarColorMode.SplatColorSH0, animated: true);
+                            EditorUtility.SetDirty(r);
+                        }
+
+                        EditorApplication.QueuePlayerLoopUpdate();
+                        UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+                        serializedObject.Update();
+                    }
+                }
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthNear)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthFar)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarMinSplatOpacity)));

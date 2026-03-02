@@ -368,6 +368,36 @@ namespace Gsplat
         float m_renderStyleAnimDurationSeconds = 1.5f;
         float m_renderStyleLastAdvanceRealtime = -1.0f;
 
+        // --------------------------------------------------------------------
+        // LiDAR 动画状态(非序列化):
+        // - m_lidarColorBlend01:
+        //   - 0 = Depth
+        //   - 1 = SplatColorSH0
+        // - m_lidarVisibility01:
+        //   - 0 = 雷达效果不可见
+        //   - 1 = 雷达效果完全可见
+        // --------------------------------------------------------------------
+        const float k_lidarColorSwitchDurationSeconds = 0.35f;
+        float m_lidarColorBlend01;
+        bool m_lidarColorAnimating;
+        float m_lidarColorAnimProgress01;
+        float m_lidarColorAnimStartBlend01;
+        float m_lidarColorAnimTargetBlend01;
+        float m_lidarColorAnimDurationSeconds = k_lidarColorSwitchDurationSeconds;
+        float m_lidarColorLastAdvanceRealtime = -1.0f;
+
+        float m_lidarVisibility01;
+        bool m_lidarVisibilityAnimating;
+        float m_lidarVisibilityAnimProgress01;
+        float m_lidarVisibilityAnimStart01;
+        float m_lidarVisibilityAnimTarget01;
+        float m_lidarVisibilityAnimDurationSeconds = 1.5f;
+        float m_lidarVisibilityLastAdvanceRealtime = -1.0f;
+        const float k_lidarHideSplatsAfterVisibility01 = 0.999f;
+
+        // 关闭雷达时,为了播放淡出动画,会暂时保持 runtime draw 链路在线.
+        bool m_lidarKeepAliveDuringFadeOut;
+
 #if UNITY_EDITOR
         // --------------------------------------------------------------------
         // Editor 体验修复: 让 show/hide 动画在“鼠标不动”时也能连续播放.
@@ -404,13 +434,38 @@ namespace Gsplat
             if (m_renderStyleAnimating)
                 return true;
 
+            if (m_lidarColorAnimating || m_lidarVisibilityAnimating)
+                return true;
+
             // LiDAR 扫描前沿(亮度余辉)是纯时间驱动:
             // - EditMode 下如果没有持续 repaint,会出现“鼠标不动就不动”的错觉.
-            // - 因此当 EnableLidarScan=true 且已指定 Origin 时,我们认为需要 ticker 驱动 Repaint.
-            if (EnableLidarScan && LidarOrigin)
+            // - 因此当雷达 runtime 链路仍在(包括 fade-out 期间)且已指定 Origin 时,都需要 ticker 驱动 Repaint.
+            if (IsLidarRuntimeActive() && LidarOrigin)
                 return true;
 
             return false;
+        }
+
+        bool IsLidarRuntimeActive()
+        {
+            return EnableLidarScan || m_lidarKeepAliveDuringFadeOut;
+        }
+
+        bool ShouldDelayHideSplatsForLidarFadeIn()
+        {
+            // 入雷达时避免黑场:
+            // - `HideSplatsWhenLidarEnabled` 不能在雷达可见性还是 0 的瞬间就停掉 splat.
+            // - 这里与静态后端保持一致: 在雷达 fade-in 期间先保留 splat,到接近完成再隐藏.
+            if (!EnableLidarScan || !HideSplatsWhenLidarEnabled)
+                return false;
+
+            if (!m_lidarVisibilityAnimating)
+                return false;
+
+            if (m_lidarVisibilityAnimTarget01 < 0.999f)
+                return false;
+
+            return m_lidarVisibility01 < k_lidarHideSplatsAfterVisibility01;
         }
 
         static void EnsureVisibilityEditorUpdateHooked()
@@ -474,9 +529,10 @@ namespace Gsplat
 
                 r.AdvanceVisibilityStateIfNeeded();
                 r.AdvanceRenderStyleStateIfNeeded();
+                r.AdvanceLidarAnimationStateIfNeeded();
 
                 // LiDAR 扫描前沿需要持续 repaint 才能看到"旋转"与余辉变化(尤其是 EditMode).
-                if (r.EnableLidarScan && r.LidarOrigin)
+                if (r.IsLidarRuntimeActive() && r.LidarOrigin)
                     r.RequestEditorRepaintForVisibilityAnimation(force: false, reason: "LiDAR");
 
                 // 诊断(可选): 仅在 EnableEditorDiagnostics=true 时记录,并做额外节流.
@@ -615,10 +671,10 @@ namespace Gsplat
         GraphicsBuffer m_sh3CentroidsBuffer;
 
         public bool Valid =>
-            (EnableGsplatBackend || EnableLidarScan) &&
+            (EnableGsplatBackend || IsLidarRuntimeActive()) &&
             // burn reveal 的 Hidden 本质是“停止 splat 的 sort/draw”.
             // 但 LiDAR 是独立显示模式: 当 EnableLidarScan=true 时,仍允许组件参与回调链路与点云渲染.
-            (EnableLidarScan || m_visibilityState != VisibilityAnimState.Hidden) &&
+            (IsLidarRuntimeActive() || m_visibilityState != VisibilityAnimState.Hidden) &&
             !m_disabledDueToError &&
             SequenceAsset &&
             m_renderer != null &&
@@ -649,6 +705,7 @@ namespace Gsplat
 
             AdvanceVisibilityStateIfNeeded();
             AdvanceRenderStyleStateIfNeeded();
+            AdvanceLidarAnimationStateIfNeeded();
 
             if (!Valid || m_renderer == null || !m_renderer.Valid || !SequenceAsset)
                 return;
@@ -693,13 +750,13 @@ namespace Gsplat
             //   1) 强制切到 ParticleDots.
             //   2) 自动开启 HideSplatsWhenLidarEnabled,保证默认进入纯雷达观感.
             // ----------------------------------------------------------------
-            EnableLidarScan = enableRadarScan;
             if (enableRadarScan)
             {
                 HideSplatsWhenLidarEnabled = true;
                 style = GsplatRenderStyle.ParticleDots;
             }
 
+            SetRadarScanEnabled(enableRadarScan, animated, durationSeconds);
             SetRenderStyle(style, animated, durationSeconds);
 
 #if UNITY_EDITOR
@@ -707,6 +764,66 @@ namespace Gsplat
             {
                 UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
                 UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+            }
+#endif
+        }
+
+        public void SetRadarScanEnabled(bool enableRadarScan, bool animated = true, float durationSeconds = -1.0f)
+        {
+            var d = durationSeconds;
+            if (d < 0.0f)
+                d = RenderStyleSwitchDurationSeconds;
+            if (float.IsNaN(d) || float.IsInfinity(d) || d < 0.0f)
+                d = 0.0f;
+
+            EnableLidarScan = enableRadarScan;
+
+            if (enableRadarScan)
+            {
+                m_lidarKeepAliveDuringFadeOut = false;
+                BeginLidarVisibilityTransition(target01: 1.0f, animated, d);
+            }
+            else
+            {
+                if (animated && m_lidarVisibility01 > 0.0f)
+                {
+                    m_lidarKeepAliveDuringFadeOut = true;
+                    BeginLidarVisibilityTransition(target01: 0.0f, animated: true, durationSeconds: d);
+                }
+                else
+                {
+                    m_lidarKeepAliveDuringFadeOut = false;
+                    BeginLidarVisibilityTransition(target01: 0.0f, animated: false, durationSeconds: 0.0f);
+                }
+            }
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                RequestEditorRepaintForVisibilityAnimation(force: true, reason: "LiDAR.ModeSwitch");
+                RegisterVisibilityEditorTickerIfAnimating();
+            }
+#endif
+        }
+
+        public void SetLidarColorMode(GsplatLidarColorMode colorMode, bool animated = true, float durationSeconds = -1.0f)
+        {
+            LidarColorMode = colorMode;
+
+            var target = colorMode == GsplatLidarColorMode.SplatColorSH0 ? 1.0f : 0.0f;
+            var d = durationSeconds;
+            if (d < 0.0f)
+                d = k_lidarColorSwitchDurationSeconds;
+            if (float.IsNaN(d) || float.IsInfinity(d) || d < 0.0f)
+                d = 0.0f;
+
+            BeginLidarColorTransition(target, animated, d);
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                RequestEditorRepaintForVisibilityAnimation(force: true, reason: "LiDAR.ColorSwitch");
+                RegisterVisibilityEditorTickerIfAnimating();
             }
 #endif
         }
@@ -874,6 +991,181 @@ namespace Gsplat
             }
 
             m_renderStyleLastAdvanceRealtime = -1.0f;
+        }
+
+        void InitLidarAnimationOnEnable()
+        {
+            var colorTarget = LidarColorMode == GsplatLidarColorMode.SplatColorSH0 ? 1.0f : 0.0f;
+            m_lidarColorBlend01 = colorTarget;
+            m_lidarColorAnimating = false;
+            m_lidarColorAnimProgress01 = 1.0f;
+            m_lidarColorAnimStartBlend01 = colorTarget;
+            m_lidarColorAnimTargetBlend01 = colorTarget;
+            m_lidarColorAnimDurationSeconds = k_lidarColorSwitchDurationSeconds;
+            m_lidarColorLastAdvanceRealtime = -1.0f;
+
+            var visibilityTarget = EnableLidarScan ? 1.0f : 0.0f;
+            m_lidarVisibility01 = visibilityTarget;
+            m_lidarVisibilityAnimating = false;
+            m_lidarVisibilityAnimProgress01 = 1.0f;
+            m_lidarVisibilityAnimStart01 = visibilityTarget;
+            m_lidarVisibilityAnimTarget01 = visibilityTarget;
+            m_lidarVisibilityAnimDurationSeconds = RenderStyleSwitchDurationSeconds;
+            m_lidarVisibilityLastAdvanceRealtime = -1.0f;
+            m_lidarKeepAliveDuringFadeOut = false;
+        }
+
+        void SyncLidarColorBlendTargetFromSerializedMode(bool animated)
+        {
+            var target = LidarColorMode == GsplatLidarColorMode.SplatColorSH0 ? 1.0f : 0.0f;
+            if (!m_lidarColorAnimating && Mathf.Abs(m_lidarColorAnimTargetBlend01 - target) < 1e-6f)
+                return;
+
+            BeginLidarColorTransition(target, animated, k_lidarColorSwitchDurationSeconds);
+        }
+
+        bool LidarNeedsSplatIdThisFrame()
+        {
+            if (LidarColorMode == GsplatLidarColorMode.SplatColorSH0)
+                return true;
+
+            if (m_lidarColorAnimating)
+                return true;
+
+            if (m_lidarColorBlend01 > 1.0e-4f)
+                return true;
+
+            return m_lidarColorAnimTargetBlend01 > 1.0e-4f;
+        }
+
+        void BeginLidarColorTransition(float targetBlend01, bool animated, float durationSeconds)
+        {
+            targetBlend01 = Mathf.Clamp01(targetBlend01);
+            if (float.IsNaN(durationSeconds) || float.IsInfinity(durationSeconds) || durationSeconds < 0.0f)
+                durationSeconds = 0.0f;
+
+            if (!animated || durationSeconds <= 0.0f)
+            {
+                m_lidarColorBlend01 = targetBlend01;
+                m_lidarColorAnimating = false;
+                m_lidarColorAnimProgress01 = 1.0f;
+                m_lidarColorAnimStartBlend01 = targetBlend01;
+                m_lidarColorAnimTargetBlend01 = targetBlend01;
+                m_lidarColorAnimDurationSeconds = k_lidarColorSwitchDurationSeconds;
+                m_lidarColorLastAdvanceRealtime = -1.0f;
+                return;
+            }
+
+            m_lidarColorAnimating = true;
+            m_lidarColorAnimProgress01 = 0.0f;
+            m_lidarColorAnimStartBlend01 = m_lidarColorBlend01;
+            m_lidarColorAnimTargetBlend01 = targetBlend01;
+            m_lidarColorAnimDurationSeconds = durationSeconds;
+            m_lidarColorLastAdvanceRealtime = -1.0f;
+        }
+
+        void BeginLidarVisibilityTransition(float target01, bool animated, float durationSeconds)
+        {
+            target01 = Mathf.Clamp01(target01);
+            if (float.IsNaN(durationSeconds) || float.IsInfinity(durationSeconds) || durationSeconds < 0.0f)
+                durationSeconds = 0.0f;
+
+            if (!animated || durationSeconds <= 0.0f)
+            {
+                m_lidarVisibility01 = target01;
+                m_lidarVisibilityAnimating = false;
+                m_lidarVisibilityAnimProgress01 = 1.0f;
+                m_lidarVisibilityAnimStart01 = target01;
+                m_lidarVisibilityAnimTarget01 = target01;
+                m_lidarVisibilityAnimDurationSeconds = RenderStyleSwitchDurationSeconds;
+                m_lidarVisibilityLastAdvanceRealtime = -1.0f;
+                if (target01 <= 0.0f && !EnableLidarScan)
+                    m_lidarKeepAliveDuringFadeOut = false;
+                return;
+            }
+
+            m_lidarVisibilityAnimating = true;
+            m_lidarVisibilityAnimProgress01 = 0.0f;
+            m_lidarVisibilityAnimStart01 = m_lidarVisibility01;
+            m_lidarVisibilityAnimTarget01 = target01;
+            m_lidarVisibilityAnimDurationSeconds = durationSeconds;
+            m_lidarVisibilityLastAdvanceRealtime = -1.0f;
+        }
+
+        void AdvanceLidarAnimationStateIfNeeded()
+        {
+            if (!m_lidarColorAnimating && !m_lidarVisibilityAnimating)
+                return;
+
+            var now = Time.realtimeSinceStartup;
+
+            if (m_lidarColorAnimating)
+            {
+                var dt = 0.0f;
+                if (m_lidarColorLastAdvanceRealtime >= 0.0f)
+                    dt = Mathf.Max(0.0f, now - m_lidarColorLastAdvanceRealtime);
+                m_lidarColorLastAdvanceRealtime = now;
+                if (float.IsNaN(dt) || float.IsInfinity(dt) || dt < 0.0f)
+                    dt = 0.0f;
+
+                var duration = m_lidarColorAnimDurationSeconds;
+                if (duration <= 0.0f || float.IsNaN(duration) || float.IsInfinity(duration))
+                {
+                    m_lidarColorAnimProgress01 = 1.0f;
+                }
+                else
+                {
+                    m_lidarColorAnimProgress01 = Mathf.Clamp01(m_lidarColorAnimProgress01 + dt / duration);
+                }
+
+                var t = GsplatUtils.EaseInOutQuart(m_lidarColorAnimProgress01);
+                m_lidarColorBlend01 = Mathf.Lerp(m_lidarColorAnimStartBlend01, m_lidarColorAnimTargetBlend01, t);
+                if (m_lidarColorAnimProgress01 >= 1.0f)
+                {
+                    m_lidarColorBlend01 = m_lidarColorAnimTargetBlend01;
+                    m_lidarColorAnimating = false;
+                }
+            }
+
+            if (m_lidarVisibilityAnimating)
+            {
+                var dt = 0.0f;
+                if (m_lidarVisibilityLastAdvanceRealtime >= 0.0f)
+                    dt = Mathf.Max(0.0f, now - m_lidarVisibilityLastAdvanceRealtime);
+                m_lidarVisibilityLastAdvanceRealtime = now;
+                if (float.IsNaN(dt) || float.IsInfinity(dt) || dt < 0.0f)
+                    dt = 0.0f;
+
+                var duration = m_lidarVisibilityAnimDurationSeconds;
+                if (duration <= 0.0f || float.IsNaN(duration) || float.IsInfinity(duration))
+                {
+                    m_lidarVisibilityAnimProgress01 = 1.0f;
+                }
+                else
+                {
+                    m_lidarVisibilityAnimProgress01 = Mathf.Clamp01(m_lidarVisibilityAnimProgress01 + dt / duration);
+                }
+
+                var t = GsplatUtils.EaseInOutQuart(m_lidarVisibilityAnimProgress01);
+                m_lidarVisibility01 = Mathf.Lerp(m_lidarVisibilityAnimStart01, m_lidarVisibilityAnimTarget01, t);
+                if (m_lidarVisibilityAnimProgress01 >= 1.0f)
+                {
+                    m_lidarVisibility01 = m_lidarVisibilityAnimTarget01;
+                    m_lidarVisibilityAnimating = false;
+                    if (m_lidarVisibility01 <= 0.0f && !EnableLidarScan)
+                        m_lidarKeepAliveDuringFadeOut = false;
+                }
+            }
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                if (m_lidarColorAnimating || m_lidarVisibilityAnimating)
+                    RequestEditorRepaintForVisibilityAnimation(force: false, reason: "LiDAR.Anim.Advance");
+                else
+                    RequestEditorRepaintForVisibilityAnimation(force: true, reason: "LiDAR.Anim.Finish");
+            }
+#endif
         }
 
         void AdvanceVisibilityStateIfNeeded()
@@ -1173,6 +1465,7 @@ namespace Gsplat
 
             InitVisibilityOnEnable();
             InitRenderStyleOnEnable();
+            InitLidarAnimationOnEnable();
             PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
             PushRenderStyleUniformsForThisFrame();
         }
@@ -1190,6 +1483,7 @@ namespace Gsplat
             m_renderer?.Dispose();
             m_renderer = null;
             m_prevAsset = null;
+            m_lidarKeepAliveDuringFadeOut = false;
 
             // 释放 runtime bundle 与运行时创建的 asset/纹理.
             m_runtimeBundle?.Dispose();
@@ -1226,6 +1520,9 @@ namespace Gsplat
 
             // LiDAR(编辑态参数同步):
             ValidateLidarSerializedFields();
+            SyncLidarColorBlendTargetFromSerializedMode(animated: true);
+            if (!m_lidarVisibilityAnimating && !IsLidarRuntimeActive())
+                m_lidarVisibility01 = 0.0f;
 
             PushRenderStyleUniformsForThisFrame();
 
@@ -1243,6 +1540,7 @@ namespace Gsplat
         {
             AdvanceVisibilityStateIfNeeded();
             AdvanceRenderStyleStateIfNeeded();
+            AdvanceLidarAnimationStateIfNeeded();
 
 #if UNITY_EDITOR
             // EditMode 下,LiDAR 扫描前沿/余辉需要持续 repaint 才能看到变化.
@@ -1253,8 +1551,11 @@ namespace Gsplat
             // LiDAR 参数防御:
             // - Play 模式下用户可能从脚本写入 NaN/Inf/负数.
             // - 这里仅在启用 LiDAR 时做一次轻量 clamp,保证后续 compute/draw 不会炸.
-            if (EnableLidarScan)
+            if (IsLidarRuntimeActive())
+            {
                 ValidateLidarSerializedFields();
+                SyncLidarColorBlendTargetFromSerializedMode(animated: true);
+            }
             else if (m_lidarScan != null)
             {
                 // 资源释放策略:
@@ -1327,7 +1628,7 @@ namespace Gsplat
             // LiDAR GPU 资源准备:
             // - 这里先完成 buffers/LUT 的创建与重建,为后续 compute/draw 链路打底.
             // - 注意: `-batchmode -nographics` 下 graphicsDeviceType=Null,必须跳过任何 GPU 资源创建.
-            if (EnableLidarScan && m_renderer != null && m_renderer.Valid)
+            if (IsLidarRuntimeActive() && m_renderer != null && m_renderer.Valid)
                 EnsureLidarResources();
 
             if (!Valid)
@@ -1674,7 +1975,7 @@ namespace Gsplat
             var count = SplatCount > int.MaxValue ? int.MaxValue : (int)SplatCount;
             var modelToLidar = LidarOrigin.worldToLocalMatrix * transform.localToWorldMatrix;
 
-            var needsSplatId = LidarColorMode == GsplatLidarColorMode.SplatColorSH0;
+            var needsSplatId = LidarNeedsSplatIdThisFrame();
             if (m_lidarScan.TryRebuildRangeImage(settings.ComputeShader,
                     m_renderer.PositionBuffer,
                     m_renderer.VelocityBuffer,
@@ -1698,7 +1999,7 @@ namespace Gsplat
 
         void RenderLidarInUpdateIfNeeded()
         {
-            if (!EnableLidarScan || m_lidarScan == null || m_renderer == null || !m_renderer.Valid)
+            if (!IsLidarRuntimeActive() || m_lidarScan == null || m_renderer == null || !m_renderer.Valid)
                 return;
 
             if (!LidarOrigin)
@@ -1731,14 +2032,15 @@ namespace Gsplat
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
                 LidarAzimuthBins, LidarBeamCount,
                 LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
-                LidarColorMode, LidarTrailGamma, LidarIntensity,
+                LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
+                LidarTrailGamma, LidarIntensity,
                 LidarDepthOpacity,
                 m_renderer.ColorBuffer);
         }
 
         void RenderLidarForCamera(Camera camera)
         {
-            if (!EnableLidarScan || m_lidarScan == null || m_renderer == null || !m_renderer.Valid)
+            if (!IsLidarRuntimeActive() || m_lidarScan == null || m_renderer == null || !m_renderer.Valid)
                 return;
 
             if (!camera)
@@ -1758,7 +2060,8 @@ namespace Gsplat
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
                 LidarAzimuthBins, LidarBeamCount,
                 LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
-                LidarColorMode, LidarTrailGamma, LidarIntensity,
+                LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
+                LidarTrailGamma, LidarIntensity,
                 LidarDepthOpacity,
                 m_renderer.ColorBuffer);
         }
@@ -1771,7 +2074,7 @@ namespace Gsplat
             if (!EnableGsplatBackend)
                 return false;
 
-            if (EnableLidarScan && HideSplatsWhenLidarEnabled)
+            if (EnableLidarScan && HideSplatsWhenLidarEnabled && !ShouldDelayHideSplatsForLidarFadeIn())
                 return false;
 
             // burn reveal 的 Hidden 状态表示“完全不可见”,并且应停掉 sort/draw.

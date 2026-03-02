@@ -62,6 +62,8 @@ Shader "Gsplat/LiDAR"
             // - 0: Depth
             // - 1: SplatColorSH0
             int _LidarColorMode;
+            float _LidarColorBlend;
+            float _LidarVisibility;
 
             float _LidarDepthNear;
             float _LidarDepthFar;
@@ -195,25 +197,23 @@ Shader "Gsplat/LiDAR"
                 proj.z = clamp(proj.z, -abs(proj.w), abs(proj.w));
 
                 // 颜色:
-                float3 baseRgb = float3(1.0, 1.0, 1.0);
-                if (_LidarColorMode == 0)
-                {
-                    float denom = max(_LidarDepthFar - _LidarDepthNear, 1e-6);
-                    float depth01 = saturate((range - _LidarDepthNear) / denom);
-                    baseRgb = DepthToCyanRed(depth01);
-                }
-                else
+                // - `Depth -> SplatColor` 通过 `_LidarColorBlend` 做平滑过渡,避免枚举切换硬跳变.
+                float denom = max(_LidarDepthFar - _LidarDepthNear, 1e-6);
+                float depth01 = saturate((range - _LidarDepthNear) / denom);
+                float3 depthRgb = DepthToCyanRed(depth01);
+                float3 splatRgb = depthRgb;
+
+                float colorBlend = saturate(_LidarColorBlend);
+                if (colorBlend > 1.0e-4)
                 {
                     uint splatId = _LidarMinSplatId[cellId];
-                    if (splatId == kLidarInvalidId)
+                    if (splatId != kLidarInvalidId)
                     {
-                        o.vertex = float4(0.0, 0.0, 2.0, 1.0);
-                        return o;
+                        float4 sh0 = _ColorBuffer[splatId];
+                        splatRgb = sh0.rgb * SH_C0 + 0.5;
                     }
-
-                    float4 sh0 = _ColorBuffer[splatId];
-                    baseRgb = sh0.rgb * SH_C0 + 0.5;
                 }
+                float3 baseRgb = lerp(depthRgb, splatRgb, colorBlend);
 
                 // 扫描前沿+余辉(按 azBin 年龄):
                 // - headBin 由 realtime 与 RotationHz 决定.
@@ -262,13 +262,15 @@ Shader "Gsplat/LiDAR"
                 // - Intensity 只控制 rgb 亮度,避免出现“调强度=变透明”的错觉.
                 float trail = saturate(i.trail01);
                 float intensity = max(_LidarIntensity, 0.0);
+                float colorBlend = saturate(_LidarColorBlend);
+                float visibility = saturate(_LidarVisibility);
                 // DepthOpacity:
-                // - 仅 Depth 模式生效,用于调节 alpha(0..1),从而得到“真正的不透明/透明”.
-                float depthOpacity = (_LidarColorMode == 0) ? saturate(_LidarDepthOpacity) : 1.0;
-                float alpha = saturate(alphaShape * depthOpacity);
+                // - 当颜色从 Depth 向 SplatColor 过渡时,opacity 也同步从 `LidarDepthOpacity` 平滑过渡到 1.
+                float depthOpacity = lerp(saturate(_LidarDepthOpacity), 1.0, colorBlend);
+                float alpha = saturate(alphaShape * depthOpacity * visibility);
 
                 // 余辉只影响亮度,不影响 alpha,避免在浅色底图上出现“透明发灰”.
-                float brightness = intensity * trail;
+                float brightness = intensity * trail * visibility;
                 if (brightness * alpha < 1.0 / 255.0) discard;
 
                 float3 rgb = i.rgb * brightness;
