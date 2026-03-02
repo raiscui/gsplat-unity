@@ -775,3 +775,17 @@
   - [x] 回归: Unity EditMode tests.
     - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_opacity_2026-03-02_112159_noquit.xml`
   - [x] git commit: `1362d14`(feat: LiDAR depth opacity).
+
+### 2026-03-02 11:57:33 +0800
+- 用户澄清: 你要的是“真正的不透明”,也就是:
+  - `LidarDepthOpacity=1` 时,点云颜色应当覆盖背景(不再受底图混色影响).
+  - 而不是 additive blend 那种“亮度叠加/像发光”的观感.
+- 根因:
+  - 之前 LiDAR shader 采用 additive blend,因此即便暴露了 `LidarDepthOpacity`,它也只能表现为亮度/覆盖率缩放,无法得到“真正的 alpha 不透明”.
+- 修正策略:
+  - [x] Shader: LiDAR 点云改为 alpha blend,并用 `ColorMask RGB` 保持不写入 alpha 通道.
+  - [x] Shader: `LidarDepthOpacity` 改为直接参与 alpha(仅 Depth 模式),从而得到真实不透明/透明控制.
+  - [x] Docs: README/CHANGELOG 同步渲染方式描述(从 additive 改为 alpha blend).
+  - [x] 回归: Unity EditMode tests.
+    - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_opacity_alpha_2026-03-02_115702_noquit.xml`
+  - [x] git commit: `e6e5615`(fix: LiDAR depth points opaque).

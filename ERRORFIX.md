@@ -1018,3 +1018,28 @@
 
 ### 修复
 - 恢复 Depth 色带为 HSV hue: 0.5(cyan) -> 1.0(red/360°),确保中间经过 blue/purple.
+
+## 2026-03-02 11:57:33 +0800: 修复 LiDAR Depth 点云“不透明需求”未满足(因为 additive blend)
+
+### 现象
+- 你希望 `LidarColorMode=Depth` 时点云是“真正的不透明”:
+  - `LidarDepthOpacity=1` 时应覆盖背景颜色,不受底图影响.
+- 但之前的实现即便增加了 `LidarDepthOpacity`,看起来仍像“发光叠加”,并不会变成真正不透明.
+
+### 根因
+- `Runtime/Shaders/GsplatLidar.shader` 使用了 additive blend.
+  - additive 的本质是“把颜色加到背景上”,alpha 很难表达“覆盖背景”的不透明语义.
+
+### 修复
+- `Runtime/Shaders/GsplatLidar.shader`:
+  - blend 改为 alpha blend(`SrcAlpha OneMinusSrcAlpha`).
+  - `ColorMask RGB` 保持不写入 alpha 通道,避免污染 CameraTarget alpha.
+  - `LidarDepthOpacity` 改为直接参与 alpha(仅 Depth 模式),从而得到真实不透明/透明控制.
+  - `TrailGamma` 只影响亮度(rgb),不影响 alpha,避免浅色底图下“透明发灰”.
+- `README.md`/`CHANGELOG.md`: 同步渲染方式描述.
+
+### 验证(证据型)
+- Unity 6000.3.8f1,EditMode tests:
+  - 汇总: total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_opacity_alpha_2026-03-02_115702_noquit.xml`
+- Commit: `e6e5615`

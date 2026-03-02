@@ -217,3 +217,17 @@
   - total=33, passed=31, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_opacity_2026-03-02_112159_noquit.xml`
 - Commit: `1362d14`
+
+## 2026-03-02 11:57:33 +0800
+- LiDAR: Depth 点云实现“真正不透明”(不再 additive 发光).
+  - 之前的 `LidarDepthOpacity` 在 additive blend 下只能当作亮度/覆盖率缩放,无法做到 alpha=1 覆盖背景.
+  - 现改为 alpha blend:
+    - `LidarDepthOpacity` 直接参与 alpha(仅 Depth 模式).
+    - `LidarTrailGamma` 只影响亮度(rgb),不影响 alpha,避免浅色底图上出现“透明发灰”.
+    - `ColorMask RGB` 避免写入 alpha 通道污染 CameraTarget alpha.
+
+### 回归(证据)
+- Unity 6000.3.8f1,EditMode tests:
+  - total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_opacity_alpha_2026-03-02_115702_noquit.xml`
+- Commit: `e6e5615`
