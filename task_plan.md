@@ -789,3 +789,14 @@
   - [x] 回归: Unity EditMode tests.
     - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_opacity_alpha_2026-03-02_115702_noquit.xml`
   - [x] git commit: `e6e5615`(fix: LiDAR depth points opaque).
+
+### 2026-03-02 12:32:15 +0800
+- 用户反馈: 改成 alpha blend 后,点云/粒子之间遮挡关系看起来不正常(远近穿插).
+- 根因:
+  - alpha blend + `ZWrite Off` 时,透明物体的正确遮挡需要严格的 back-to-front 排序.
+  - 我们的点云是单次 instanced draw,没有 per-point 排序,因此会出现遮挡乱序.
+- 修复策略:
+  - [x] Shader: 开启 `ZWrite On`,让更近的点写入深度并稳定遮挡更远的点.
+  - [x] 回归: Unity EditMode tests.
+    - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_zwrite_2026-03-02_123150_noquit.xml`
+  - [x] git commit: `2bf675c`(fix: LiDAR point occlusion).

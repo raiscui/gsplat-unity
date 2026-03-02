@@ -231,3 +231,14 @@
   - total=33, passed=31, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_opacity_alpha_2026-03-02_115702_noquit.xml`
 - Commit: `e6e5615`
+
+## 2026-03-02 12:32:15 +0800
+- LiDAR: 修复点云内部遮挡乱序.
+  - 触发原因: alpha blend 但 `ZWrite Off`,透明遮挡需要排序,单次 instanced draw 无法保证 per-point 顺序.
+  - 修复: 开启 `ZWrite On`,用深度缓冲稳定遮挡(近点遮挡远点).
+
+### 回归(证据)
+- Unity 6000.3.8f1,EditMode tests:
+  - total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_zwrite_2026-03-02_123150_noquit.xml`
+- Commit: `2bf675c`

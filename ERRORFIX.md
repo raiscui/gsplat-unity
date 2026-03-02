@@ -1043,3 +1043,22 @@
   - 汇总: total=33, passed=31, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_opacity_alpha_2026-03-02_115702_noquit.xml`
 - Commit: `e6e5615`
+
+## 2026-03-02 12:32:15 +0800: 修复 LiDAR 点云内部遮挡乱序(alpha blend + ZWrite Off)
+
+### 现象
+- 改为 alpha blend 后,点云/粒子之间出现“远近穿插”的遮挡乱序,看起来不符合真实点云的遮挡关系.
+
+### 根因
+- alpha blend 且 `ZWrite Off` 的透明绘制,正确遮挡依赖严格的 back-to-front 排序.
+- 我们的点云是单次 instanced draw,没有 per-point 排序,因此天然会出现遮挡乱序.
+
+### 修复
+- `Runtime/Shaders/GsplatLidar.shader`: 开启 `ZWrite On`.
+  - 让更近的点写入深度,从而稳定遮挡更远的点.
+
+### 验证(证据型)
+- Unity 6000.3.8f1,EditMode tests:
+  - 汇总: total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_zwrite_2026-03-02_123150_noquit.xml`
+- Commit: `2bf675c`
