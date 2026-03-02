@@ -138,7 +138,7 @@ Default scanning setup (as discussed in the spec):
 - Depth opacity:
   - `LidarDepthOpacity` (0..1, default `1`, only affects `Depth` mode)
 - Point size: `LidarPointRadiusPixels` (default `2px` radius)
-- Rendering: screen-space square points (soft edge), additive blend, brightness controlled by `LidarTrailGamma` + `LidarIntensity`
+- Rendering: screen-space square points (soft edge), alpha blend (opaque when alpha=1), brightness controlled by `LidarTrailGamma` + `LidarIntensity`
 - Noise filter: `LidarMinSplatOpacity` (default `1/255`, filters near-invisible splats to avoid a "transparent shell" look)
 
 API example:

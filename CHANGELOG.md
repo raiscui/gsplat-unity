@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tuned burn-ring hide afterglow to linger longer behind the glow front (eased fade timing + two-stage shrink, avoids the "glow passes and everything vanishes" look).
 - Tuned burn-ring hide warp so it cannot push splats outward past the burn front (keeps the afterglow trail visually inside the ring even with strong `WarpStrength`).
 - LiDAR scan visualization now uses a single `LidarBeamCount` (no Up/Down split) and samples vertical beam directions uniformly over `[LidarDownFovDeg..LidarUpFovDeg]` (more down-beams naturally come from a larger downward FOV range).
-- LiDAR point cloud rendering now uses screen-space square points with additive blending, and the `Depth` color mode maps depth from cyan -> blue -> purple -> red.
+- LiDAR point cloud rendering now uses screen-space square points with alpha blending (opaque when alpha=1), and the `Depth` color mode maps depth from cyan -> blue -> purple -> red.
 
 ### Fixed
 

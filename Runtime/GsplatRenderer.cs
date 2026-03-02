@@ -174,11 +174,11 @@ namespace Gsplat
         public float LidarIntensity = 1.0f;
 
         [Range(0.0f, 1.0f)]
-        [Tooltip("LiDAR Depth 模式下的点云透明度/可见性倍率(0..1).\n" +
+        [Tooltip("LiDAR Depth 模式下的点云透明度(0..1).\n" +
                  "说明:\n" +
                  "- 仅在 LidarColorMode=Depth 时生效.\n" +
-                 "- 因为点云使用 additive blend,该值表现为对亮度/覆盖率的缩放(更像\"可见性\").\n" +
-                 "- 默认 1(完全显示).")]
+                 "- 该值直接参与 alpha blending: 1 为不透明,0 为不可见.\n" +
+                 "- 默认 1(不透明).")]
         public float LidarDepthOpacity = 1.0f;
 
         [Range(0.0f, 1.0f)]

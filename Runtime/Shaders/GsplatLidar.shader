@@ -15,11 +15,12 @@ Shader "Gsplat/LiDAR"
         Pass
         {
             ZWrite Off
-            // LiDAR 点云更接近“发光点”的观感:
-            // - 使用 additive blend,避免 alpha 淡出时变成“透明发灰”.
-            // - 亮度由 shader 内的 strength(含 Trail 与 Intensity)控制.
-            // 注意: alpha 通道保持不变(不做 additive),避免污染 CameraTarget 的 alpha.
-            Blend One One, Zero One
+            // LiDAR 点云(Depth 模式)需要“真正不透明”的观感:
+            // - 使用 alpha blend,当 alpha=1 时会完全覆盖背景颜色,不再受底图影响.
+            // - LidarDepthOpacity 用于调节 Depth 模式下的 alpha(0..1).
+            // - ColorMask RGB: 不写入 alpha 通道,避免污染 CameraTarget 的 alpha.
+            Blend SrcAlpha OneMinusSrcAlpha
+            ColorMask RGB
             Cull Off
 
             HLSLPROGRAM
@@ -254,21 +255,23 @@ Shader "Gsplat/LiDAR"
                 float alphaShape = 1.0 - smoothstep(inner, 1.0, d);
 
                 // 强度语义:
-                // - Trail 与 Shape 共同决定点的可见性/覆盖率.
-                // - Intensity 只控制亮度,避免出现“调强度=变透明”的错觉.
+                // - Trail 与 Shape 决定点的覆盖范围(Shape)与余辉衰减(Trail).
+                // - Intensity 只控制 rgb 亮度,避免出现“调强度=变透明”的错觉.
                 float trail = saturate(i.trail01);
-                float brightness = max(_LidarIntensity, 0.0);
+                float intensity = max(_LidarIntensity, 0.0);
                 // DepthOpacity:
-                // - 仅 Depth 模式生效,用于把“深度色彩点云”的可见性从 Intensity 中解耦出来,便于按场景调参.
-                // - 因为点云使用 additive blend,这里的 opacity 实际表现为“亮度/覆盖率”的缩放.
+                // - 仅 Depth 模式生效,用于调节 alpha(0..1),从而得到“真正的不透明/透明”.
                 float depthOpacity = (_LidarColorMode == 0) ? saturate(_LidarDepthOpacity) : 1.0;
-                float strength = alphaShape * trail * brightness * depthOpacity;
-                if (strength < 1.0 / 255.0) discard;
+                float alpha = saturate(alphaShape * depthOpacity);
 
-                float3 rgb = i.rgb * strength;
+                // 余辉只影响亮度,不影响 alpha,避免在浅色底图上出现“透明发灰”.
+                float brightness = intensity * trail;
+                if (brightness * alpha < 1.0 / 255.0) discard;
+
+                float3 rgb = i.rgb * brightness;
                 if (_GammaToLinear)
-                    return float4(GammaToLinearSpace(rgb), 1.0);
-                return float4(rgb, 1.0);
+                    return float4(GammaToLinearSpace(rgb), alpha);
+                return float4(rgb, alpha);
             }
             ENDHLSL
         }
