@@ -757,7 +757,21 @@
 - 用户澄清需求: 你要的 Depth 色带就是 "青 -> 蓝 -> 紫 -> 红".
   - 也就是 HSV hue 走 0.5(cyan) -> 1.0(red/360°) 的那条路径,而不是走 0.5 -> 0.0(经过绿/黄)的路径.
 - 调整策略:
-  - [ ] Shader: Depth 色带恢复为 HSV 渐变(0.5 -> 1.0),确保路径经过 blue/purple.
-  - [ ] Docs: README/CHANGELOG 同步文案描述.
-  - [ ] 回归: Unity EditMode tests.
-  - [ ] git commit.
+  - [x] Shader: Depth 色带恢复为 HSV 渐变(0.5 -> 1.0),确保路径经过 blue/purple.
+  - [x] Docs: README/CHANGELOG 同步文案描述.
+  - [x] 回归: Unity EditMode tests.
+    - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_colormap2_2026-03-02_003813_noquit.xml`
+  - [x] git commit: `5299fab`(fix: restore LiDAR HSV depth gradient).
+
+### 2026-03-02 11:18:15 +0800
+- 用户需求: LiDAR 点云在 `LidarColorMode=Depth` 时,需要一个可调的“透明度/可见性”设置.
+  - 目的: Depth 色彩模式下,可以按场景/底图亮度调整点云的覆盖感,而不必只能靠 `LidarIntensity` 硬顶亮度.
+- 修正计划:
+  - [x] Runtime: 新增序列化字段 `LidarDepthOpacity(0..1)` 并 clamp.
+  - [x] Shader: 增加 `_LidarDepthOpacity`,仅在 Depth 模式下参与强度计算.
+  - [x] Editor: Inspector 面板增加该字段的调参入口(并标注仅 Depth 生效).
+  - [x] Tests: 补充 clamp 单测覆盖.
+  - [x] Docs: README/CHANGELOG 补充该参数说明.
+  - [x] 回归: Unity EditMode tests.
+    - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_opacity_2026-03-02_112159_noquit.xml`
+  - [x] git commit: `1362d14`(feat: LiDAR depth opacity).

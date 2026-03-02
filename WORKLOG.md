@@ -193,3 +193,27 @@
 - 需求澄清后修正: Depth 色带目标就是 "青 -> 蓝 -> 紫 -> 红".
   - 因此把 Depth 色带恢复为 HSV hue 0.5(cyan) -> 1.0(red/360°) 的渐变路径.
   - 同步回滚 README/CHANGELOG 的文案描述,保持一致.
+
+## 2026-03-02 11:22:37 +0800
+- LiDAR: Depth 颜色模式增加“透明度/可见性”调参项 `LidarDepthOpacity`.
+  - 目的: Depth 模式下可以按场景调整点云覆盖感,不必只能靠 `LidarIntensity` 硬顶亮度.
+  - 注意: 由于点云使用 additive blend,这里的 opacity 语义是对亮度/覆盖率的缩放(更像\"可见性\").
+
+### 变更内容
+- Runtime:
+  - `Runtime/GsplatRenderer.cs`: 新增 `LidarDepthOpacity` 字段并 clamp,并在点云 draw 时下发到 shader.
+  - `Runtime/GsplatSequenceRenderer.cs`: 同步新增字段/clamp/下发.
+  - `Runtime/Lidar/GsplatLidarScan.cs`: `RenderPointCloud(...)` 增加参数与 `_LidarDepthOpacity` MPB 下发.
+- Shader:
+  - `Runtime/Shaders/GsplatLidar.shader`: 增加 `_LidarDepthOpacity`,仅在 `LidarColorMode=Depth` 时参与强度计算.
+- Editor:
+  - `Editor/GsplatRendererEditor.cs`/`Editor/GsplatSequenceRendererEditor.cs`: Inspector 增加 `LidarDepthOpacity`(仅 Depth 生效时可编辑).
+- Tests/Docs:
+  - `Tests/Editor/GsplatLidarScanTests.cs`: 增加 clamp 回归覆盖.
+  - `README.md`/`CHANGELOG.md`: 补充参数说明.
+
+### 回归(证据)
+- Unity 6000.3.8f1,EditMode tests:
+  - total=33, passed=31, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_opacity_2026-03-02_112159_noquit.xml`
+- Commit: `1362d14`
