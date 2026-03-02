@@ -800,3 +800,120 @@
   - [x] 回归: Unity EditMode tests.
     - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_zwrite_2026-03-02_123150_noquit.xml`
   - [x] git commit: `2bf675c`(fix: LiDAR point occlusion).
+
+---
+
+## 2026-03-02 14:56:03 +0800
+# 任务计划: RenderStyle 增加 "雷达 scan" 按钮与双向切换
+
+## 目标
+- 在 `GsplatRenderer` 和 `GsplatSequenceRenderer` 的 Inspector 中新增 "RadarScan(动画)" 按钮.
+- 支持从 `Gaussian` 或 `ParticleDots` 一键切换到雷达 scan 观感.
+- 支持从雷达 scan 观感再切回 `Gaussian` / `ParticleDots`.
+- 不破坏现有渲染风格动画与 LiDAR 参数行为.
+
+## 两条路线(先明确)
+### 路线A(不惜代价,最佳方案)
+- 新增统一的高层 API(例如 `SetRadarScanEnabled(bool, animated)` + 恢复前样式记忆),
+- 把 "RenderStyle" 与 "EnableLidarScan" 的协同状态机沉淀到 Runtime,
+- Inspector 只调用统一 API.
+- 优点: 语义最清晰,后续扩展成本低.
+- 代价: 变更面稍大,需要补更多测试.
+
+### 路线B(先能用,后续再优雅)
+- 保持现有 Runtime 字段不大改,
+- 在 Inspector 按钮层完成组合动作:
+  - RadarScan 按钮: 开启 `EnableLidarScan`,并切到 `ParticleDots`.
+  - Gaussian/ParticleDots 按钮: 关闭 `EnableLidarScan`,再走现有风格动画 API.
+- 优点: 低风险,可以快速满足交互需求.
+- 代价: 状态编排分散在 Editor 侧,后续可能再收敛 API.
+
+## 本轮决策
+- [决定] 先落地路线B.
+- [理由] 你这次需求是 "增加按钮并完成双向切换",路线B能最小影响现有 runtime,并且与当前架构一致.
+
+## 阶段
+- [ ] 阶段1: 定位现有 RenderStyle/LiDAR 按钮与状态入口
+- [ ] 阶段2: 实现 RadarScan 按钮与双向切换逻辑
+- [ ] 阶段3: 增加/更新测试并跑回归
+- [ ] 阶段4: 文档与四文件收尾
+
+## 状态
+**目前在阶段1**
+- 正在定位 `Editor/*RendererEditor.cs` 与 Runtime API,确认最稳妥改造点.
+
+### 2026-03-02 15:03:12 +0800
+- 阶段1完成: 已定位并确认改造入口.
+  - Editor: `Editor/GsplatRendererEditor.cs`、`Editor/GsplatSequenceRendererEditor.cs` 已存在 RenderStyle 动画按钮区.
+  - Runtime: `SetRenderStyle(...)` 与 `EnableLidarScan/HideSplatsWhenLidarEnabled` 语义清晰,可安全组合.
+- 下一步进入阶段2:
+  - 在 Runtime 增加统一组合 API(风格+雷达开关).
+  - Editor 新增 `RadarScan(动画)` 按钮,并让 Gaussian/ParticleDots 按钮自动关闭雷达模式.
+
+## 阶段
+- [x] 阶段1: 定位现有 RenderStyle/LiDAR 按钮与状态入口
+- [ ] 阶段2: 实现 RadarScan 按钮与双向切换逻辑
+- [ ] 阶段3: 增加/更新测试并跑回归
+- [ ] 阶段4: 文档与四文件收尾
+
+## 状态
+**目前在阶段2**
+- 正在实现 Runtime 组合 API 与 Inspector 新按钮联动.
+
+### 2026-03-02 15:10:44 +0800
+- 阶段2已完成代码实现:
+  - Runtime: `GsplatRenderer` / `GsplatSequenceRenderer` 新增 `SetRenderStyleAndRadarScan(...)`.
+  - Editor: Render Style 区新增 `RadarScan(动画)` 按钮.
+  - 联动语义:
+    - RadarScan 按钮 -> 启用 `EnableLidarScan`,默认 `HideSplatsWhenLidarEnabled=true`,并强制切到 `ParticleDots`.
+    - Gaussian / ParticleDots 按钮 -> 关闭 `EnableLidarScan`,并播放对应风格动画.
+- 下一步进入阶段3:
+  - 新增/更新测试覆盖双向切换语义.
+  - 执行 EditMode tests 回归.
+
+## 阶段
+- [x] 阶段1: 定位现有 RenderStyle/LiDAR 按钮与状态入口
+- [x] 阶段2: 实现 RadarScan 按钮与双向切换逻辑
+- [ ] 阶段3: 增加/更新测试并跑回归
+- [ ] 阶段4: 文档与四文件收尾
+
+## 状态
+**目前在阶段3**
+- 正在执行测试并验证无回归.
+
+### 2026-03-02 15:19:06 +0800
+- 阶段3完成: 测试回归通过.
+  - 执行环境: Unity 6000.3.8f1 (`/Applications/Unity/Hub/Editor/6000.3.8f1/Unity.app/Contents/MacOS/Unity`).
+  - 命令: `-runTests -testPlatform EditMode -testFilter Gsplat.Tests`.
+  - 结果: total=35, passed=33, failed=0, skipped=2.
+  - 新增用例通过:
+    - `SetRenderStyleAndRadarScan_SupportsRendererBidirectionalSwitch`
+    - `SetRenderStyleAndRadarScan_SupportsSequenceBidirectionalSwitch`
+- 下一步进入阶段4:
+  - 更新 changelog 与四文件收尾.
+
+## 阶段
+- [x] 阶段1: 定位现有 RenderStyle/LiDAR 按钮与状态入口
+- [x] 阶段2: 实现 RadarScan 按钮与双向切换逻辑
+- [x] 阶段3: 增加/更新测试并跑回归
+- [ ] 阶段4: 文档与四文件收尾
+
+## 状态
+**目前在阶段4**
+- 正在整理最终变更说明并更新 WORKLOG/LATER_PLANS/notes.
+
+### 2026-03-02 15:23:15 +0800
+- 阶段4完成:
+  - `CHANGELOG.md` 已同步本次新增行为.
+  - `notes.md` / `WORKLOG.md` / `LATER_PLANS.md` 已追加本轮记录.
+  - 回归证据已归档到 `_tmp_gsplat_pkgtests/Logs`.
+
+## 阶段
+- [x] 阶段1: 定位现有 RenderStyle/LiDAR 按钮与状态入口
+- [x] 阶段2: 实现 RadarScan 按钮与双向切换逻辑
+- [x] 阶段3: 增加/更新测试并跑回归
+- [x] 阶段4: 文档与四文件收尾
+
+## 状态
+**已完成**
+- RenderStyle 动画区已支持 RadarScan 按钮与双向切换,并已通过回归测试.

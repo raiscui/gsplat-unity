@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tuned hide splat size shrink to follow a faster-then-slower (easeOutCirc-like) curve, keeping a non-zero minimum size to avoid "disappearing too fast" during the burn tail.
 - Added `GsplatRenderStyle` (`Gaussian` / `ParticleDots`) and `SetRenderStyle(...)` API for `GsplatRenderer` and `GsplatSequenceRenderer` to switch between standard Gaussian splats and screen-space particle dots (solid discs with a soft edge), with a default animated morph transition (`easeInOutQuart`, `1.5s`) and adjustable `ParticleDotRadiusPixels` (radius in screen pixels).
 - Added an experimental LiDAR scan visualization mode for `GsplatRenderer` and `GsplatSequenceRenderer` (regular `128 x 2048` point grid, first return occlusion via GPU range image, `UpdateHz=10` full rebuild with `RotationHz=5` scan head + 1-revolution afterglow, `Depth` / `SplatColorSH0` color modes, `LidarDepthOpacity` for `Depth` visibility, and `HideSplatsWhenLidarEnabled` to disable splat sort/draw while keeping buffers for LiDAR sampling). Disabled by default.
+- Added `SetRenderStyleAndRadarScan(...)` API to `GsplatRenderer` and `GsplatSequenceRenderer` for a single-call switch between Gaussian/ParticleDots and RadarScan mode (enables LiDAR + forces ParticleDots when RadarScan is active).
 
 ### Changed
 
@@ -26,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tuned burn-ring hide warp so it cannot push splats outward past the burn front (keeps the afterglow trail visually inside the ring even with strong `WarpStrength`).
 - LiDAR scan visualization now uses a single `LidarBeamCount` (no Up/Down split) and samples vertical beam directions uniformly over `[LidarDownFovDeg..LidarUpFovDeg]` (more down-beams naturally come from a larger downward FOV range).
 - LiDAR point cloud rendering now uses screen-space square points with alpha blending (opaque when alpha=1), and the `Depth` color mode maps depth from cyan -> blue -> purple -> red.
+- The Inspector `Render Style` quick-action row now includes `RadarScan(动画)`, and `Gaussian(动画)` / `ParticleDots(动画)` now also disable RadarScan in the same action so switching is bidirectional.
 
 ### Fixed
 

@@ -159,6 +159,65 @@ namespace Gsplat.Tests
             Object.DestroyImmediate(go);
         }
 
+        [Test]
+        public void SetRenderStyleAndRadarScan_SupportsRendererBidirectionalSwitch()
+        {
+            // 说明:
+            // - 本用例锁定“高斯/粒子 <-> RadarScan”双向切换语义.
+            // - RadarScan 开启时应强制进入 ParticleDots 并启用 HideSplatsWhenLidarEnabled.
+            // - 退出 RadarScan 后应恢复为调用方指定的风格(此处验证 Gaussian).
+            var go = new GameObject("GsplatVisibilityAnimationTests_RendererRadarSwitch");
+            go.SetActive(false);
+            var r = go.AddComponent<GsplatRenderer>();
+
+            r.SetRenderStyleAndRadarScan(GsplatRenderStyle.Gaussian, enableRadarScan: true, animated: false);
+
+            Assert.IsTrue(r.EnableLidarScan, "Expected radar mode to enable LiDAR scan.");
+            Assert.IsTrue(r.HideSplatsWhenLidarEnabled,
+                "Expected radar mode to default to pure radar view (hide splat draw).");
+            Assert.AreEqual(GsplatRenderStyle.ParticleDots, r.RenderStyle,
+                "Expected radar mode to force ParticleDots render style.");
+            Assert.AreEqual(1.0f, GetRenderStyleBlend01(r), 1e-6f,
+                "Expected hard switch in radar mode to set style blend to ParticleDots target.");
+
+            r.SetRenderStyleAndRadarScan(GsplatRenderStyle.Gaussian, enableRadarScan: false, animated: false);
+
+            Assert.IsFalse(r.EnableLidarScan, "Expected disabling radar mode to disable LiDAR scan.");
+            Assert.AreEqual(GsplatRenderStyle.Gaussian, r.RenderStyle,
+                "Expected exiting radar mode to follow requested render style.");
+            Assert.AreEqual(0.0f, GetRenderStyleBlend01(r), 1e-6f,
+                "Expected hard switch back to Gaussian to set style blend to 0.");
+
+            Object.DestroyImmediate(go);
+        }
+
+        [Test]
+        public void SetRenderStyleAndRadarScan_SupportsSequenceBidirectionalSwitch()
+        {
+            // 说明:
+            // - 序列后端需要与静态后端保持同样的切换语义.
+            // - 这里验证组合 API 在 `GsplatSequenceRenderer` 上的字段结果一致.
+            var go = new GameObject("GsplatVisibilityAnimationTests_SequenceRadarSwitch");
+            go.SetActive(false);
+            var r = go.AddComponent<GsplatSequenceRenderer>();
+
+            r.SetRenderStyleAndRadarScan(GsplatRenderStyle.Gaussian, enableRadarScan: true, animated: false);
+
+            Assert.IsTrue(r.EnableLidarScan, "Expected radar mode to enable LiDAR scan.");
+            Assert.IsTrue(r.HideSplatsWhenLidarEnabled,
+                "Expected radar mode to default to pure radar view (hide splat draw).");
+            Assert.AreEqual(GsplatRenderStyle.ParticleDots, r.RenderStyle,
+                "Expected radar mode to force ParticleDots render style.");
+
+            r.SetRenderStyleAndRadarScan(GsplatRenderStyle.Gaussian, enableRadarScan: false, animated: false);
+
+            Assert.IsFalse(r.EnableLidarScan, "Expected disabling radar mode to disable LiDAR scan.");
+            Assert.AreEqual(GsplatRenderStyle.Gaussian, r.RenderStyle,
+                "Expected exiting radar mode to follow requested render style.");
+
+            Object.DestroyImmediate(go);
+        }
+
         [UnityTest]
         public IEnumerator PlayShow_FromHidden_ValidBecomesTrue()
         {

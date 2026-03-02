@@ -988,3 +988,11 @@
 - 点形: 从圆点改为正方形(屏幕空间,软边).
 - Blend: 改为 additive,避免余辉衰减时“透明发灰”.
 - Depth 配色: hue 180°->0° 的 HSV 渐变,即 cyan -> red.
+
+## 2026-03-02 15:20:12 +0800 - RenderStyle 与 RadarScan 联动设计笔记
+- 现状确认: Inspector 里已有 `Gaussian(动画)` 与 `ParticleDots(动画)` 两个按钮,但没有雷达模式的快捷切换入口.
+- 风险点: 仅开启 `EnableLidarScan` 但不处理风格/显隐,会出现 splat 与雷达叠加,不符合"切换到雷达 scan 效果"的直觉.
+- 方案收敛: 增加 Runtime 组合 API `SetRenderStyleAndRadarScan(...)`,由一个入口同时处理 RenderStyle 动画和 LiDAR 开关.
+- 语义约定: `enableRadarScan=true` 时自动强制 `ParticleDots` + `HideSplatsWhenLidarEnabled=true`.
+- 双向切换: `Gaussian/ParticleDots` 按钮都显式传 `enableRadarScan=false`,实现从雷达模式一键回切.
+- Context7 复核: `OnInspectorGUI` 使用 `serializedObject.Update/ApplyModifiedProperties` + `GUILayout.Button` 的写法与 Unity 6000 manual 示例一致.

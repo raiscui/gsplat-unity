@@ -111,14 +111,15 @@ namespace Gsplat.Editor
             // ----------------------------------------------------------------
             // RenderStyle 快捷按钮:
             // - Inspector 的枚举下拉本质是“序列化字段赋值”,默认不播放动画(这是 Unity 的常规行为).
-            // - 下面两个按钮会调用 `SetRenderStyle(..., animated:true)`,从而触发默认 1.5s easeInOutQuart 的切换动画.
+            // - 下面三个按钮会调用 `SetRenderStyleAndRadarScan(...)`,从而统一处理风格动画与雷达模式切换.
             // - 多选 targets 时,对每个对象都触发一次.
             // ----------------------------------------------------------------
             EditorGUILayout.Space();
             EditorGUILayout.LabelField("Render Style", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
                 "说明: 直接修改 RenderStyle 枚举是硬切(不会播放切换动画).\n" +
-                "使用下方按钮可播放动画切换(默认 easeInOutQuart,时长为 RenderStyleSwitchDurationSeconds).",
+                "使用下方按钮可播放动画切换(默认 easeInOutQuart,时长为 RenderStyleSwitchDurationSeconds).\n" +
+                "RadarScan(动画) 会自动切到 ParticleDots 并开启雷达扫描模式.",
                 MessageType.Info);
 
             var anyDurationZero = false;
@@ -152,7 +153,8 @@ namespace Gsplat.Editor
                         var r = obj as GsplatSequenceRenderer;
                         if (!r)
                             continue;
-                        r.SetRenderStyle(GsplatRenderStyle.Gaussian, animated: true, durationSeconds: -1.0f);
+                        r.SetRenderStyleAndRadarScan(GsplatRenderStyle.Gaussian, enableRadarScan: false,
+                            animated: true, durationSeconds: -1.0f);
                         EditorUtility.SetDirty(r);
                     }
 
@@ -168,7 +170,24 @@ namespace Gsplat.Editor
                         var r = obj as GsplatSequenceRenderer;
                         if (!r)
                             continue;
-                        r.SetRenderStyle(GsplatRenderStyle.ParticleDots, animated: true, durationSeconds: -1.0f);
+                        r.SetRenderStyleAndRadarScan(GsplatRenderStyle.ParticleDots, enableRadarScan: false,
+                            animated: true, durationSeconds: -1.0f);
+                        EditorUtility.SetDirty(r);
+                    }
+
+                    EditorApplication.QueuePlayerLoopUpdate();
+                    UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+                }
+
+                if (GUILayout.Button("RadarScan(动画)"))
+                {
+                    foreach (var obj in targets)
+                    {
+                        var r = obj as GsplatSequenceRenderer;
+                        if (!r)
+                            continue;
+                        r.SetRenderStyleAndRadarScan(GsplatRenderStyle.ParticleDots, enableRadarScan: true,
+                            animated: true, durationSeconds: -1.0f);
                         EditorUtility.SetDirty(r);
                     }
 

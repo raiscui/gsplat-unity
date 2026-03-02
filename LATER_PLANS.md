@@ -125,3 +125,7 @@
   - 现状: warp 只在 vertex shader 里改 `modelCenter`,排序 key 仍基于原始 PositionBuffer.
   - 影响: 动画期间可能出现短暂的半透明排序误差(尤其在 warpStrength 很大时更明显).
   - 方向: compute 侧生成一份临时 position buffer(或 warp delta buffer),并让 CalcDistance 与渲染都读同一套“扭曲后位置”.
+
+## 2026-03-02 15:22:46 +0800
+- 回溯结果: 本次 "RenderStyle + RadarScan 按钮联动" 不属于既有候选项,且未引入新的延期事项.
+- 处理: LATER_PLANS 无需新增或清理条目.

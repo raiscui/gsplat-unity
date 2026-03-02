@@ -242,3 +242,29 @@
   - total=33, passed=31, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_zwrite_2026-03-02_123150_noquit.xml`
 - Commit: `2bf675c`
+
+## 2026-03-02 15:22:10 +0800
+- 实现 `Render Style` 动画区新增 `RadarScan(动画)` 快捷按钮,支持以下双向切换:
+  - `Gaussian/ParticleDots -> RadarScan`: 自动启用 LiDAR,并切换到 `ParticleDots` 动画.
+  - `RadarScan -> Gaussian/ParticleDots`: 自动关闭 LiDAR,并切换回指定风格动画.
+
+### 代码改动
+- Runtime:
+  - `Runtime/GsplatRenderer.cs`: 新增 `SetRenderStyleAndRadarScan(...)` 组合 API.
+  - `Runtime/GsplatSequenceRenderer.cs`: 新增同名组合 API,保持序列后端语义一致.
+- Editor:
+  - `Editor/GsplatRendererEditor.cs`: Render Style 按钮区改为 3 个按钮(`Gaussian(动画)`/`ParticleDots(动画)`/`RadarScan(动画)`),统一调用组合 API.
+  - `Editor/GsplatSequenceRendererEditor.cs`: 同步改造为 3 按钮与相同行为.
+- Tests:
+  - `Tests/Editor/GsplatVisibilityAnimationTests.cs` 新增 2 个回归用例:
+    - `SetRenderStyleAndRadarScan_SupportsRendererBidirectionalSwitch`
+    - `SetRenderStyleAndRadarScan_SupportsSequenceBidirectionalSwitch`
+- Docs:
+  - `CHANGELOG.md` 记录新增组合 API 与 Inspector 双向切换行为.
+
+### 回归验证
+- Unity 6000.3.8f1:
+  - 命令: `-batchmode -nographics -runTests -testPlatform EditMode -testFilter Gsplat.Tests`
+  - 结果: total=35, passed=33, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_radar_button_2026-03-02_1516_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_radar_button_2026-03-02_1516_noquit.log`

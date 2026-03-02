@@ -683,6 +683,34 @@ namespace Gsplat
         // --------------------------------------------------------------------
         // Public API: Render style 切换(Gaussian <-> ParticleDots)
         // --------------------------------------------------------------------
+        public void SetRenderStyleAndRadarScan(GsplatRenderStyle style, bool enableRadarScan, bool animated = true,
+            float durationSeconds = -1.0f)
+        {
+            // ----------------------------------------------------------------
+            // 组合切换 API:
+            // - 目标: 让序列后端与静态后端拥有一致的“风格 + 雷达模式”切换语义.
+            // - RadarScan 模式约定:
+            //   1) 强制切到 ParticleDots.
+            //   2) 自动开启 HideSplatsWhenLidarEnabled,保证默认进入纯雷达观感.
+            // ----------------------------------------------------------------
+            EnableLidarScan = enableRadarScan;
+            if (enableRadarScan)
+            {
+                HideSplatsWhenLidarEnabled = true;
+                style = GsplatRenderStyle.ParticleDots;
+            }
+
+            SetRenderStyle(style, animated, durationSeconds);
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                UnityEditor.EditorApplication.QueuePlayerLoopUpdate();
+                UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+            }
+#endif
+        }
+
         public void SetRenderStyle(GsplatRenderStyle style, bool animated = true, float durationSeconds = -1.0f)
         {
             RenderStyle = style;
