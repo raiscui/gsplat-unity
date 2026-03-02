@@ -14,7 +14,10 @@ Shader "Gsplat/LiDAR"
 
         Pass
         {
-            ZWrite Off
+            // 重要:
+            // - alpha blend 下若不写 depth,点云内部的遮挡关系会依赖绘制顺序,很容易看起来“乱穿”.
+            // - 这里开启 ZWrite,让更近的点能稳定遮挡更远的点(看起来更像真实点云/回波).
+            ZWrite On
             // LiDAR 点云(Depth 模式)需要“真正不透明”的观感:
             // - 使用 alpha blend,当 alpha=1 时会完全覆盖背景颜色,不再受底图影响.
             // - LidarDepthOpacity 用于调节 Depth 模式下的 alpha(0..1).
