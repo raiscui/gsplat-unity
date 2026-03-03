@@ -165,6 +165,26 @@ namespace Gsplat
                  "- 默认 6.")]
         public float LidarShowHideWarpPixels = 6.0f;
 
+        [Tooltip("LiDAR show/hide 的 glow 颜色(仅影响 RadarScan 的 show/hide glow).\n" +
+                 "说明:\n" +
+                 "- 该参数不会影响高斯 show/hide 的 GlowColor.\n" +
+                 "- alpha 通道不参与计算,仅使用 rgb.")]
+        public Color LidarShowHideGlowColor = new(1.0f, 0.45f, 0.1f, 1.0f);
+
+        [Min(0.0f)]
+        [Tooltip("LiDAR show 阶段的 glow 强度(仅影响 RadarScan 的 show/hide glow).\n" +
+                 "提示:\n" +
+                 "- 如果你觉得 show 的 glow 不明显,优先调大该值.\n" +
+                 "- 它不会影响高斯 show 的 ShowGlowIntensity.")]
+        public float LidarShowGlowIntensity = 1.5f;
+
+        [Min(0.0f)]
+        [Tooltip("LiDAR hide 阶段的 glow 强度(仅影响 RadarScan 的 show/hide glow).\n" +
+                 "提示:\n" +
+                 "- hide 若觉得 glow 过暗或过短,可以调大该值.\n" +
+                 "- 它不会影响高斯 hide 的 HideGlowIntensity.")]
+        public float LidarHideGlowIntensity = 2.5f;
+
         [Tooltip("LiDAR 点云颜色模式.\n" +
                  "- Depth: 由距离映射颜色(DepthNear..DepthFar).\n" +
                  "- SplatColorSH0: 采样 first return 对应 splat 的基础颜色(SH0).")]
@@ -3409,7 +3429,7 @@ namespace Gsplat
             if (showHideGate <= 1.0e-4f && showHideMode == 0)
                 return;
 
-            var showHideGlowIntensity = showHideMode == 2 ? HideGlowIntensity : ShowGlowIntensity;
+            var showHideGlowIntensity = showHideMode == 2 ? LidarHideGlowIntensity : LidarShowGlowIntensity;
 
             m_lidarScan.RenderPointCloud(settings, targetCam, gameObject.layer, GammaToLinear,
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
@@ -3425,7 +3445,7 @@ namespace Gsplat
                 showHideCenterModel, showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
                 (int)VisibilityNoiseMode, NoiseStrength, NoiseScale, NoiseSpeed,
                 LidarShowHideWarpPixels, WarpStrength,
-                GlowColor, showHideGlowIntensity);
+                LidarShowHideGlowColor, showHideGlowIntensity);
         }
 
         void RenderLidarForCamera(Camera camera)
@@ -3463,7 +3483,7 @@ namespace Gsplat
             if (showHideGate <= 1.0e-4f && showHideMode == 0)
                 return;
 
-            var showHideGlowIntensity = showHideMode == 2 ? HideGlowIntensity : ShowGlowIntensity;
+            var showHideGlowIntensity = showHideMode == 2 ? LidarHideGlowIntensity : LidarShowGlowIntensity;
 
             m_lidarScan.RenderPointCloud(settings, camera, gameObject.layer, GammaToLinear,
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
@@ -3479,7 +3499,7 @@ namespace Gsplat
                 showHideCenterModel, showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
                 (int)VisibilityNoiseMode, NoiseStrength, NoiseScale, NoiseSpeed,
                 LidarShowHideWarpPixels, WarpStrength,
-                GlowColor, showHideGlowIntensity);
+                LidarShowHideGlowColor, showHideGlowIntensity);
         }
 
         bool ShouldSubmitSplatsThisFrame()
@@ -3561,6 +3581,18 @@ namespace Gsplat
 
             if (float.IsNaN(LidarShowHideWarpPixels) || float.IsInfinity(LidarShowHideWarpPixels) || LidarShowHideWarpPixels < 0.0f)
                 LidarShowHideWarpPixels = 6.0f;
+
+            if (float.IsNaN(LidarShowHideGlowColor.r) || float.IsNaN(LidarShowHideGlowColor.g) || float.IsNaN(LidarShowHideGlowColor.b) ||
+                float.IsInfinity(LidarShowHideGlowColor.r) || float.IsInfinity(LidarShowHideGlowColor.g) || float.IsInfinity(LidarShowHideGlowColor.b))
+            {
+                LidarShowHideGlowColor = new Color(1.0f, 0.45f, 0.1f, 1.0f);
+            }
+
+            if (float.IsNaN(LidarShowGlowIntensity) || float.IsInfinity(LidarShowGlowIntensity) || LidarShowGlowIntensity < 0.0f)
+                LidarShowGlowIntensity = 1.5f;
+
+            if (float.IsNaN(LidarHideGlowIntensity) || float.IsInfinity(LidarHideGlowIntensity) || LidarHideGlowIntensity < 0.0f)
+                LidarHideGlowIntensity = 2.5f;
 
             if (float.IsNaN(LidarTrailGamma) || float.IsInfinity(LidarTrailGamma) || LidarTrailGamma < 0.0f)
                 LidarTrailGamma = 2.0f;

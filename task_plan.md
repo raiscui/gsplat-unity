@@ -93,7 +93,8 @@
   - 强度: show/hide 各自的 intensity(按当前 show/hide 动画方向选择)
 - [x] 扩展/新增 EditMode 单测,锁定 LiDAR shader 必须包含新 glow 属性.
 - [x] 在 `_tmp_gsplat_pkgtests` 回归 `Gsplat.Tests` EditMode.
-- [ ] git commit(包含 shader + runtime + tests + changelog 如有需要).
+- [x] git commit(包含 shader + runtime + tests + changelog 如有需要).
+  - commit: `2630f96`
 
 ### 状态
 
@@ -118,3 +119,49 @@
 
 **目前在阶段4(回归与提交)**
 - 代码与测试已完成,接下来只剩一次 git commit,把本轮的 glow + warpPixels 去上限一起提交。
+
+## 2026-03-03 10:14:20 +0800 新需求: RadarScan glow 独立控制 + 调整 show/hide glow 节奏
+
+- 用户需求:
+  - RadarScan(LiDAR) 的 glow 颜色/强度要与高斯分开,单独可调.
+  - hide 的 glow "走得太快",希望在时间上更靠后(更持久/更像余辉).
+  - show 的 glow 完全看不出,疑似亮度或 mask 逻辑问题.
+
+### 初步诊断(基于代码对照)
+
+- 高斯(`Gsplat.shader`)的 show/hide glow 之所以在 show 阶段也可见,关键在于:
+  - alphaMask = max(visible, ring) , ring 会作为 alpha 下限.
+  - 因此就算 visible=0(尚未 reveal),ring 仍会被绘制出来.
+- LiDAR(`GsplatLidar.shader`)当前只用 visible 去乘 showHideMul,没有把 ring 纳入 alphaMask.
+  - 结果: show 阶段 ring 所在的"外侧"点几乎都被 early-out 丢弃,导致 glow 看不到.
+- hide 阶段 glow 过快,根因是 LiDAR 侧 glowFactor 只有 ring,没有高斯那样的 tailInside afterglow.
+
+### 下一步行动
+
+- [ ] Runtime: 为 `GsplatRenderer/GsplatSequenceRenderer` 增加 LiDAR 专用 glow 参数(颜色+show/hide 强度),并在 ValidateLidarSerializedFields 做 NaN/Inf/负数防御.
+- [ ] Runtime: LiDAR draw 下发改为使用 LiDAR 专用 glow 参数(不再复用高斯 GlowColor/ShowGlowIntensity/HideGlowIntensity).
+- [ ] Shader: LiDAR show/hide 叠加逻辑对齐高斯:
+  - [ ] 把 ring 纳入 alphaMask(解决 show glow 不可见).
+  - [ ] 为 hide 增加 tailInside afterglow(解决 hide glow 太快).
+  - [ ] glowFactor 用 ring+tail 的组合,并继续用 additive glow 叠加到 rgb.
+- [ ] Tests: 更新/新增 EditMode tests,锁定 LiDAR 专用 glow 字段 clamp 行为(避免未来改动又被无意回退).
+- [ ] 回归 `_tmp_gsplat_pkgtests` EditMode `Gsplat.Tests`.
+- [ ] git commit.
+
+### 进展(已完成)
+
+- [x] Runtime: 为 `GsplatRenderer/GsplatSequenceRenderer` 增加 LiDAR 专用 glow 参数(颜色+show/hide 强度),并在 ValidateLidarSerializedFields 做 NaN/Inf/负数防御.
+- [x] Runtime: LiDAR draw 下发改为使用 LiDAR 专用 glow 参数(不再复用高斯 GlowColor/ShowGlowIntensity/HideGlowIntensity).
+- [x] Shader: LiDAR show/hide 叠加逻辑对齐高斯:
+  - [x] 把 ring 纳入 alphaMask(解决 show glow 不可见).
+  - [x] 为 hide 增加 tailInside afterglow(解决 hide glow 太快).
+  - [x] glowFactor 用 ring+tail 的组合,并继续用 additive glow 叠加到 rgb.
+  - [x] 修正 discard: 让 discard 判断包含 glowAdd(避免 trail 很小导致 show glow 被提前丢弃).
+- [x] Tests: 更新/新增 EditMode tests,锁定 LiDAR 专用 glow 字段 clamp 行为(避免未来改动又被无意回退).
+- [x] 回归 `_tmp_gsplat_pkgtests` EditMode `Gsplat.Tests`.
+- [ ] git commit.
+
+### 状态
+
+**目前在阶段4(回归与提交)**
+- 代码与测试已完成,接下来只剩一次 git commit,把本轮的 LiDAR glow 独立参数 + shader 节奏调参一起提交。

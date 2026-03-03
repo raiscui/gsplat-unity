@@ -28,6 +28,9 @@ namespace Gsplat.Editor
                 nameof(GsplatRenderer.LidarDepthFar),
                 nameof(GsplatRenderer.LidarPointRadiusPixels),
                 nameof(GsplatRenderer.LidarShowHideWarpPixels),
+                nameof(GsplatRenderer.LidarShowHideGlowColor),
+                nameof(GsplatRenderer.LidarShowGlowIntensity),
+                nameof(GsplatRenderer.LidarHideGlowIntensity),
                 nameof(GsplatRenderer.LidarColorMode),
                 nameof(GsplatRenderer.LidarTrailGamma),
                 nameof(GsplatRenderer.LidarIntensity),
@@ -138,6 +141,9 @@ namespace Gsplat.Editor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarMinSplatOpacity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarPointRadiusPixels)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarShowHideWarpPixels)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarShowHideGlowColor)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarShowGlowIntensity)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarHideGlowIntensity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarTrailGamma)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarIntensity)));
                 using (new EditorGUI.DisabledScope(colorModeProp.enumValueIndex != (int)GsplatLidarColorMode.Depth))

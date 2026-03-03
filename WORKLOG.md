@@ -548,3 +548,48 @@
   - total=46, passed=44, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_showhide_glow_2026-03-03_095630_noquit.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_showhide_glow_2026-03-03_095630_noquit.log`
+
+## 2026-03-03 10:25:40 +0800
+- RadarScan(LiDAR) show/hide glow 改为可独立调参,并修复 show 不可见 + hide 过快的问题.
+
+### 背景与根因
+- 用户反馈:
+  - show 的 glow 基本看不出来.
+  - hide 的 glow 走得太快,希望更像余辉(时间更靠后).
+  - RadarScan 的 glow 颜色/强度需要与高斯分开,单独控制.
+- 根因(对照 `Runtime/Shaders/Gsplat.shader`):
+  - 高斯 show/hide 会把 `ring` 纳入 alphaMask(`alphaPrimary=max(visible, ring)`),因此 show 阶段即便 visible=0,ring 也能被画出来.
+  - LiDAR 侧之前只用 visible 去乘 showHideMul,ring 没参与 alphaMask,导致 show 阶段 ring 外侧点直接 early-out,看起来像 glow 没生效.
+  - LiDAR 侧 glowFactor 之前只有 ring,缺少内侧 afterglow tail,导致 hide glow 很快扫完就没了.
+
+### 变更内容
+- Runtime: LiDAR glow 参数独立于高斯
+  - [GsplatRenderer.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/GsplatRenderer.cs)
+    - 新增: `LidarShowHideGlowColor`, `LidarShowGlowIntensity`, `LidarHideGlowIntensity`.
+    - `ValidateLidarSerializedFields` 增加 NaN/Inf/负数防御.
+    - LiDAR draw 下发改为使用上述 LiDAR 专用字段.
+  - [GsplatSequenceRenderer.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/GsplatSequenceRenderer.cs)
+    - 同步新增字段 + clamp + 下发.
+
+- Editor: LiDAR 调参区补齐新字段
+  - [GsplatRendererEditor.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Editor/GsplatRendererEditor.cs)
+  - [GsplatSequenceRendererEditor.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Editor/GsplatSequenceRendererEditor.cs)
+
+- Shader: show/hide 语义对齐高斯,并增强可见性
+  - [GsplatLidar.shader](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/Shaders/GsplatLidar.shader)
+    - alphaMask 对齐高斯: `alphaPrimary=max(visible, ring)`,并在 show 阶段允许 tail 提供受限 alpha 下限,解决 show glow 不可见.
+    - glowFactor = ring + tail(afterglow),让 hide 的 glow 更持久.
+    - 修正 discard: discard 判断改为包含 glowAdd 的最终 rgb,避免 scan trail 很小时 show glow 被提前丢弃.
+    - glowAdd 的 trail 衰减加入下限(0.35),避免 show 阶段过暗.
+
+- 诊断日志: show/hide diag 增加 glow 值输出
+  - [GsplatLidarScan.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/Lidar/GsplatLidarScan.cs)
+
+### 测试与回归(证据)
+- EditMode tests(`Gsplat.Tests`):
+  - total=46, passed=44, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_glow_tune_2026-03-03_105818_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_glow_tune_2026-03-03_105818_noquit.log`
+- 单测补强:
+  - [GsplatLidarScanTests.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Tests/Editor/GsplatLidarScanTests.cs)
+    - 覆盖 LiDAR glow 字段的 clamp 行为.

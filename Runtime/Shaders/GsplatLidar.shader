@@ -538,9 +538,77 @@ Shader "Gsplat/LiDAR"
                             noiseSigned = noise01 * 2.0 - 1.0;
                         }
 
-                        float primaryMask = EvalLidarShowHideVisibleMask(
-                            mode, progress, distModel, maxRadius, trailWidth, noiseSigned, noise01, noiseStrength);
+                        // ------------------------------------------------------------
+                        // show/hide mask + glow(对齐高斯 show/hide 的关键语义):
+                        // - alphaMask 必须包含 ring,否则 show 阶段 ring 位于“外侧”会被 early-out 丢弃,
+                        //   用户会感觉 show 的 glow 完全看不到.
+                        // - hide glow 不能只有一条薄 ring,必须有内侧 afterglow tail,否则会显得“走得太快”.
+                        //
+                        // 这里直接复用高斯的数学结构:
+                        // 1) edgeDist/radius/passed 统一定义.
+                        // 2) ring 在外侧(edgeDist>=0).
+                        // 3) visible 在内侧(edgeDist<=0)逐步从 0->1(show) 或 1->0(hide).
+                        // 4) tailInside 在内侧,用于 afterglow.
+                        // 5) alphaPrimary = max(visible, ring),并在 show 时允许 tailInside 提供受限 alpha 下限.
+                        // ------------------------------------------------------------
+                        float progressExpand = EaseInOutQuad(progress);
+                        float radiusShowHide = progressExpand * (maxRadius + trailWidth);
+                        float edgeDist = distModel - radiusShowHide;
 
+                        // passed0: 粗略进度(不含噪声),用于决定 jitter 权重,避免递归依赖.
+                        float passed0 = saturate((-edgeDist) / trailWidth);
+                        float noiseWeight0 = (mode == 1) ? (1.0 - passed0) : passed0;
+
+                        // 边界扰动:
+                        // - LiDAR 的点云密度更低,这里为 jitter 提供一个更稳态的距离尺度下限(绑定 maxRadius),
+                        //   避免 trailWidth 很小时噪声几乎不可见.
+                        float jitterBase = max(trailWidth * 0.75, maxRadius * 0.015);
+                        float noiseWeightJitter = lerp(0.35, 1.0, noiseWeight0);
+                        float jitter = noiseStrength * jitterBase;
+                        float edgeDistNoisy = edgeDist + noiseSigned * jitter * noiseWeightJitter;
+
+                        // hide 防 lingering:
+                        // - fade/shrink 不允许噪声把边界往外推,确保 passed 能达到 1.
+                        float edgeDistForFade = edgeDistNoisy;
+                        if (mode == 2)
+                        {
+                            float noiseSignedIn = min(noiseSigned, 0.0);
+                            edgeDistForFade = edgeDist + noiseSignedIn * jitter * noiseWeightJitter;
+                        }
+
+                        // ring: 只在外侧(edgeDistNoisy>=0)出现.
+                        float ringOut = 1.0 - saturate(edgeDistNoisy / ringWidth);
+                        ringOut *= step(0.0, edgeDistNoisy);
+                        float ring = smoothstep(0.0, 1.0, ringOut);
+
+                        // visible: 只描述“可见度”,不包含 ring/tail.
+                        float passedForMask = saturate((-edgeDistForFade) / trailWidth);
+                        float passedForFade = (mode == 2) ? (passedForMask * passedForMask) : passedForMask;
+                        float visible = (mode == 1) ? passedForMask : (1.0 - passedForFade);
+                        float noiseWeight = (mode == 1) ? (1.0 - passedForMask) : passedForMask;
+                        float ashMul = saturate(1.0 - noiseStrength * noiseWeight * (1.0 - noise01));
+                        visible = saturate(visible * ashMul);
+
+                        // 内侧 afterglow/tail:
+                        // - 只出现在边界内侧(edgeDistNoisy<=0),并朝内逐渐衰减.
+                        // - 乘以(1-ring)避免前沿过曝,保持“ring 永远更亮”的对比.
+                        float tailInside = (1.0 - passedForFade) * step(0.0, -edgeDistNoisy);
+                        tailInside *= (1.0 - ring);
+
+                        // primary alphaMask:
+                        // - ring 必须可见(尤其 show 阶段).
+                        float alphaPrimary = max(visible, ring);
+                        if (mode == 1)
+                        {
+                            // show: 允许 tailInside 提供受限 alpha 下限,避免 glow 被 alpha 吃掉.
+                            float tailAlpha = tailInside * tailInside;
+                            tailAlpha *= 0.45;
+                            alphaPrimary = max(alphaPrimary, tailAlpha);
+                        }
+
+                        // 叠加 source mask:
+                        // - show: max(source, primary),保留 hide 中断前已可见的区域.
+                        // - hide: source * primary,避免 show 中断后外圈整片弹出.
                         int sourceMode = _LidarShowHideSourceMaskMode;
                         if (sourceMode < 1 || sourceMode > 4)
                             sourceMode = 1;
@@ -562,29 +630,30 @@ Shader "Gsplat/LiDAR"
                         }
 
                         if (mode == 1)
-                            showHideMul *= max(primaryMask, sourceMask);
+                            showHideMul *= max(alphaPrimary, sourceMask);
                         else
-                            showHideMul *= primaryMask * sourceMask;
+                            showHideMul *= alphaPrimary * sourceMask;
 
-                        float ring = EvalLidarShowHideRingMask(
-                            mode, progress, distModel, maxRadius, ringWidth, trailWidth, noiseSigned, noiseStrength);
-                        // 让 ring glow 也带有粒子噪声明暗变化,确保噪声肉眼可见.
+                        // show/hide glowFactor:
+                        // - ring+tail 组合,让 hide 的 glow 更持久,show 的 glow 更容易被看见.
                         float glowNoiseMul = lerp(1.0, lerp(0.45, 1.0, noise01), noiseStrengthVis);
-                        // 重要:
-                        // - showHideGlow 不要乘 showHideMul,否则:
-                        //   1) glow 会被 showHideMul(在 alpha)再次乘一次,导致强度被二次衰减.
-                        //   2) 边界处(正好在 ring 上)反而最暗,不符合“燃烧前沿更亮”的直觉.
-                        // - 最终 glow 仍会通过 alpha(showHideMul)进入 blend,因此不会在隐藏区域泄漏.
-                        showHideGlow = ring * glowNoiseMul;
+                        float ringGlow = ring * glowNoiseMul;
+                        float tailGlow = pow(tailInside, 0.5);
+                        if (mode == 1)
+                        {
+                            float showBoost = lerp(1.35, 1.0, progressExpand);
+                            showHideGlow = ringGlow * showBoost + tailGlow * showBoost * 0.85;
+                        }
+                        else
+                        {
+                            showHideGlow = ringGlow * 1.25 + tailGlow;
+                        }
 
                         // 与 ParticleDots 对齐的“粒子噪声位移感”:
                         // - 只在 show/hide 过渡期间增强前沿附近点的屏幕空间位移抖动.
                         // - 目的: 不仅是边界明暗噪声,还要有明显的“颗粒扰动”观感.
                         if (noiseStrength > 1.0e-4)
                         {
-                            float progressExpand = EaseInOutQuad(progress);
-                            float radiusShowHide = progressExpand * (maxRadius + trailWidth);
-                            float edgeDist = distModel - radiusShowHide;
                             float passed = saturate((-edgeDist) / max(trailWidth, 1.0e-5));
                             float edgeWeight = (mode == 1) ? (1.0 - passed) : passed;
                             float globalWarp = (mode == 1) ? (1.0 - progressExpand) : progressExpand;
@@ -711,22 +780,31 @@ Shader "Gsplat/LiDAR"
                 // DepthOpacity:
                 // - 当颜色从 Depth 向 SplatColor 过渡时,opacity 也同步从 `LidarDepthOpacity` 平滑过渡到 1.
                 float depthOpacity = lerp(saturate(_LidarDepthOpacity), 1.0, colorBlend);
-                float alpha = saturate(alphaShape * depthOpacity * visibility * saturate(i.showHideMul));
+                float showHideMul = saturate(i.showHideMul);
+                float alpha = saturate(alphaShape * depthOpacity * visibility * showHideMul);
 
                 // 余辉只影响亮度,不影响 alpha,避免在浅色底图上出现“透明发灰”.
-                float brightness = intensity * trail * visibility * saturate(i.showHideMul);
-                brightness *= (1.0 + saturate(i.showHideGlow) * 0.85);
-                if (brightness * alpha < 1.0 / 255.0) discard;
-
                 // show/hide glow(对齐高斯的 additive glow):
                 // - 这里用 glowColor 做 RGB 叠加,而不是仅仅提亮 brightness.
-                // - glow 强度随 show/hide ring(glowFactor)变化,并且跟随 LiDAR 的全局强度与可见性.
+                // - glow 强度随 show/hide ring/tail(glowFactor)变化.
+                // - 关键: discard 判断必须考虑 glowAdd,否则 show 阶段(尚未被扫描头扫到,trail 很小)会被直接丢弃,
+                //   看起来就像“show glow 完全没生效”.
                 float glowFactor = saturate(i.showHideGlow);
                 float glowIntensity = max(_LidarShowHideGlowIntensity, 0.0);
-                // - glowAdd 也应遵循 scan trail(否则很老的点在 show/hide 时会被重新点亮,看起来不对).
-                float3 glowAdd = _LidarShowHideGlowColor.rgb * glowFactor * glowIntensity * (intensity * trail * visibility);
+
+                // glow 的 trail 衰减:
+                // - 不能完全跟随 scan trail,否则 show 阶段大部分点都会太暗,用户感觉“看不出 glow”.
+                // - 这里给一个下限,让 glow 在未被扫描头扫到时也仍可见.
+                float trailForGlow = lerp(0.35, 1.0, trail);
+                float3 glowAdd = _LidarShowHideGlowColor.rgb * glowFactor * glowIntensity * (intensity * visibility) * trailForGlow;
+
+                float brightness = intensity * trail * visibility * showHideMul;
+                brightness *= (1.0 + glowFactor * 0.85);
 
                 float3 rgb = i.rgb * brightness + glowAdd;
+
+                float maxRgb = max(rgb.x, max(rgb.y, rgb.z));
+                if (maxRgb * alpha < 1.0 / 255.0) discard;
                 if (_GammaToLinear)
                     return float4(GammaToLinearSpace(rgb), alpha);
                 return float4(rgb, alpha);

@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `GsplatRenderStyle` (`Gaussian` / `ParticleDots`) and `SetRenderStyle(...)` API for `GsplatRenderer` and `GsplatSequenceRenderer` to switch between standard Gaussian splats and screen-space particle dots (solid discs with a soft edge), with a default animated morph transition (`easeInOutQuart`, `1.5s`) and adjustable `ParticleDotRadiusPixels` (radius in screen pixels).
 - Added an experimental LiDAR scan visualization mode for `GsplatRenderer` and `GsplatSequenceRenderer` (regular `128 x 2048` point grid, first return occlusion via GPU range image, `UpdateHz=10` full rebuild with `RotationHz=5` scan head + 1-revolution afterglow, `Depth` / `SplatColorSH0` color modes, `LidarDepthOpacity` for `Depth` visibility, and `HideSplatsWhenLidarEnabled` to disable splat sort/draw while keeping buffers for LiDAR sampling). Disabled by default.
 - Added `LidarShowHideWarpPixels` to tune RadarScan(LiDAR) show/hide jitter amplitude in screen pixels, decoupled from point size.
+- Added LiDAR-specific show/hide glow tuning (`LidarShowHideGlowColor`, `LidarShowGlowIntensity`, `LidarHideGlowIntensity`) so RadarScan glow can be adjusted independently from Gaussian.
 - Added `SetRenderStyleAndRadarScan(...)` API to `GsplatRenderer` and `GsplatSequenceRenderer` for a single-call switch between Gaussian/ParticleDots and RadarScan mode (enables LiDAR + forces ParticleDots when RadarScan is active).
 
 ### Changed
@@ -50,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed missing particle-noise feel in `RadarScan` show/hide transitions: LiDAR now forwards `VisibilityNoiseMode/NoiseStrength/NoiseScale/NoiseSpeed` into the show/hide mask path (primary mask, source-mask compositing, and ring glow edge jitter), so radar reveal/burn no longer looks unnaturally "clean" compared to `ParticleDots`.
 - Fixed missing "ParticleDots-like" noise motion in `RadarScan` show/hide by adding edge-weighted screen-space point jitter (noise-driven position warp) during transition, so radar points now exhibit visible granular displacement instead of only brightness-mask noise.
 - Fixed `CurlSmoke` parity in `RadarScan` show/hide: LiDAR `CurlSmoke` now uses a curl-like vector field, and the screen-space jitter amplitude is scaled by `WarpStrength` (0 disables, higher values increase motion).
-- Fixed missing Gaussian-like glow in `RadarScan` show/hide transitions: LiDAR now adds a colored additive glow overlay (reusing `GlowColor` and `ShowGlowIntensity` / `HideGlowIntensity`) instead of only multiplying brightness.
+- Fixed `RadarScan` show/hide glow: LiDAR now draws the ring in the alpha mask (so show glow is visible), adds an inward afterglow tail (so hide glow lingers longer), and uses a colored additive glow overlay controlled by LiDAR-specific glow parameters.
 
 ## [1.1.4] - 2026-02-23
 

@@ -57,3 +57,19 @@
 - 用户反馈: 需要把 `LidarShowHideWarpPixels` 调到更大值,用于更明显的扰动.
 - 现状: `ValidateLidarSerializedFields` 会把该值 clamp 到 64,导致“调大但不生效”.
 - 决策: 移除 max clamp,仅保留 NaN/Inf/负数防御.
+
+## 2026-03-03 10:14:50 +0800 RadarScan glow 不可见/过快 - 根因对照
+
+- 现象:
+  - show glow 看不到.
+  - hide glow 太快.
+- 关键差异(对照高斯 shader):
+  - `Gsplat.shader`:
+    - `visibilityAlphaPrimary = max(visible, ring)`.
+    - ring 本身会作为 alphaMask 下限,因此 show 阶段即便 visible=0,ring 也能被画出来.
+    - hide 的 glowFactor 里包含 `tailInside` afterglow,所以 glow 不会只是一条薄薄的 ring.
+  - `GsplatLidar.shader`:
+    - show/hide 只用 visible 去乘 showHideMul,ring 没有参与 alphaMask,导致 show 阶段 ring 外侧点直接 early-out.
+    - glowFactor 只有 ring,没有 tailInside afterglow,导致 hide glow 很快扫完就没了.
+- 计划:
+  - 把 LiDAR 的 alphaMask 与 glowFactor 按高斯逻辑补齐,并把 glow 参数改为 LiDAR 专用(独立于高斯).

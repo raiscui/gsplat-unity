@@ -306,7 +306,8 @@ namespace Gsplat
             int showHideSourceMaskMode, float showHideSourceMaskProgress,
             float showHideMaxRadius, float showHideRingWidth, float showHideTrailWidth,
             int showHideNoiseMode, float showHideNoiseStrength, float showHideNoiseScale, float showHideNoiseSpeed,
-            float showHideWarpPixels, float showHideWarpStrength)
+            float showHideWarpPixels, float showHideWarpStrength,
+            Color showHideGlowColor, float showHideGlowIntensity)
         {
             // 只在过渡期记录,避免正常运行刷屏.
             if (showHideMode != 1 && showHideMode != 2)
@@ -366,6 +367,7 @@ namespace Gsplat
                 $"gate={showHideGate:0.###} mode={showHideMode} p={progress01:0.###} " +
                 $"srcMode={showHideSourceMaskMode} srcP={Mathf.Clamp01(showHideSourceMaskProgress):0.###} " +
                 $"noise(mode={showHideNoiseMode} str={showHideNoiseStrength:0.###} scale={showHideNoiseScale:0.###} spd={showHideNoiseSpeed:0.###} warpPx={showHideWarpPixels:0.###} warpStr={showHideWarpStrength:0.###}) " +
+                $"glow(col={showHideGlowColor.r:0.###},{showHideGlowColor.g:0.###},{showHideGlowColor.b:0.###} inten={showHideGlowIntensity:0.###}) " +
                 $"shape(maxR={showHideMaxRadius:0.###} ringW={showHideRingWidth:0.###} trailW={showHideTrailWidth:0.###}) " +
                 $"hasProp(gate={hasGateProp} mode={hasModeProp} p={hasProgressProp} " +
                 $"vis={hasVisibilityProp} inten={hasIntensityProp} depOp={hasDepthOpacityProp} " +
@@ -516,7 +518,8 @@ namespace Gsplat
                 showHideSourceMaskMode, showHideSourceMaskProgress,
                 showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
                 showHideNoiseMode, showHideNoiseStrength, showHideNoiseScale, showHideNoiseSpeed,
-                showHideWarpPixels, showHideWarpStrength);
+                showHideWarpPixels, showHideWarpStrength,
+                showHideGlowColor, showHideGlowIntensity);
 #endif
 
             var rp = new RenderParams(m_materialInstance)
