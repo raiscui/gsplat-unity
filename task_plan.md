@@ -337,7 +337,8 @@
 - [x] Editor: 在 LiDAR 面板中暴露 `LidarShowDuration/LidarHideDuration` 并提示 "<0 复用 RenderStyleSwitchDurationSeconds".
 - [x] Tests: 扩展 `GsplatLidarScanTests` 锁定 clamp 语义.
 - [x] 回归 `_tmp_gsplat_pkgtests` EditMode `Gsplat.Tests`.
-- [ ] git commit.
+- [x] git commit.
+  - commit: `4fdd526`
 
 ### 回归(证据)
 
@@ -348,6 +349,5 @@
 
 ### 状态
 
-**目前在阶段4(git 提交)**
-- 代码/Editor/Tests/回归已完成.
-- 下一步只剩一次 git commit.
+**目前在阶段4(完成)**
+- RadarScan 独立 ShowDuration/HideDuration 已落地并提交.
