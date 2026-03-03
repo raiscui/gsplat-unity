@@ -75,3 +75,46 @@
 - [x] 在 `_tmp_gsplat_pkgtests` 跑 EditMode tests(`Gsplat.Tests`)回归:
   - total=44, passed=42, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_curl_warpstrength_2026-03-03_002646_noquit.xml`
+
+## 2026-03-03 10:03:00 +0800 追加需求: RadarScan show/hide 增加高斯同款 glow
+
+### 目标补充
+
+- RadarScan(LiDAR) 模式下,Show/Hide 期间也要有和高斯显隐动画类似的“带颜色的发光叠加(glow)”.
+- glow 不是单纯提亮(brightness multiply),而是像高斯那样对 `color.rgb` 做 additive 的发光叠加.
+
+### 下一步行动(按最小侵入落地)
+
+- [x] 对照 `Runtime/Shaders/Gsplat.shader` 的显隐 glow 实现,提取其 shader property 与公式.
+- [x] 在 `Runtime/Shaders/GsplatLidar.shader` 增加 LiDAR 的 show/hide glow uniforms(颜色+强度),并以 additive 方式叠加到 `rgb`.
+  - 约束: 新增的 shader uniforms 必须写进 ShaderLab `Properties`(隐藏属性),避免再次出现 MPB "HasProperty=0".
+- [x] C# 下发层复用现有高斯参数:
+  - glowColor: `GlowColor`
+  - 强度: show/hide 各自的 intensity(按当前 show/hide 动画方向选择)
+- [x] 扩展/新增 EditMode 单测,锁定 LiDAR shader 必须包含新 glow 属性.
+- [x] 在 `_tmp_gsplat_pkgtests` 回归 `Gsplat.Tests` EditMode.
+- [ ] git commit(包含 shader + runtime + tests + changelog 如有需要).
+
+### 状态
+
+**目前在阶段3(执行/构建)**
+- 我正在把 RadarScan(LiDAR) 的 show/hide glow 补齐为高斯同款 additive glow,并确保参数可调且有单测锁死契约。
+
+## 2026-03-03 10:06:30 +0800 追加需求: LidarShowHideWarpPixels 不限制最大值
+
+- 用户需求: `LidarShowHideWarpPixels` 不要再做最大值 clamp(当前上限为 64).
+- 处理原则:
+  - 仍然保留对 NaN/Inf/负数的防御性校验,避免 shader 出现 NaN/黑屏.
+  - 移除 max clamp,让用户可以把 warpPixels 调到任意大用于夸张效果或调试.
+
+### 下一步行动
+
+- [x] 移除 `GsplatRenderer.ValidateLidarSerializedFields` 内对 `LidarShowHideWarpPixels > 64` 的 clamp.
+- [x] 移除 `GsplatSequenceRenderer.ValidateLidarSerializedFields` 内同款 clamp.
+- [x] 增加 EditMode 单测锁定: 大值不会被 clamp.
+- [x] 回归 `_tmp_gsplat_pkgtests` EditMode tests.
+
+### 状态
+
+**目前在阶段4(回归与提交)**
+- 代码与测试已完成,接下来只剩一次 git commit,把本轮的 glow + warpPixels 去上限一起提交。

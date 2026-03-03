@@ -146,6 +146,8 @@ namespace Gsplat
         static readonly int k_lidarShowHideNoiseSpeed = Shader.PropertyToID("_LidarShowHideNoiseSpeed");
         static readonly int k_lidarShowHideWarpPixels = Shader.PropertyToID("_LidarShowHideWarpPixels");
         static readonly int k_lidarShowHideWarpStrength = Shader.PropertyToID("_LidarShowHideWarpStrength");
+        static readonly int k_lidarShowHideGlowColor = Shader.PropertyToID("_LidarShowHideGlowColor");
+        static readonly int k_lidarShowHideGlowIntensity = Shader.PropertyToID("_LidarShowHideGlowIntensity");
         static readonly int k_lidarDepthNear = Shader.PropertyToID("_LidarDepthNear");
         static readonly int k_lidarDepthFar = Shader.PropertyToID("_LidarDepthFar");
         static readonly int k_lidarRotationHz = Shader.PropertyToID("_LidarRotationHz");
@@ -346,6 +348,9 @@ namespace Gsplat
             var hasWarpStrengthProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideWarpStrength))
                 ? 1
                 : 0;
+            var hasGlowColorProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideGlowColor)) ? 1 : 0;
+            var hasGlowIntensityProp =
+                (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideGlowIntensity)) ? 1 : 0;
             var hasGateProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideGate)) ? 1 : 0;
             var hasModeProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideMode)) ? 1 : 0;
             var hasProgressProp = (m_materialInstance && m_materialInstance.HasProperty(k_lidarShowHideProgress)) ? 1 : 0;
@@ -364,7 +369,8 @@ namespace Gsplat
                 $"shape(maxR={showHideMaxRadius:0.###} ringW={showHideRingWidth:0.###} trailW={showHideTrailWidth:0.###}) " +
                 $"hasProp(gate={hasGateProp} mode={hasModeProp} p={hasProgressProp} " +
                 $"vis={hasVisibilityProp} inten={hasIntensityProp} depOp={hasDepthOpacityProp} " +
-                $"noiseMode={hasNoiseModeProp} noiseStr={hasNoiseStrengthProp} warpPx={hasWarpPixelsProp} warpStr={hasWarpStrengthProp})");
+                $"noiseMode={hasNoiseModeProp} noiseStr={hasNoiseStrengthProp} warpPx={hasWarpPixelsProp} warpStr={hasWarpStrengthProp} " +
+                $"glowCol={hasGlowColorProp} glowI={hasGlowIntensityProp})");
         }
 
         static string DescribeShader(Shader shader)
@@ -389,7 +395,8 @@ namespace Gsplat
             int showHideSourceMaskMode, float showHideSourceMaskProgress,
             Vector3 showHideCenterModel, float showHideMaxRadius, float showHideRingWidth, float showHideTrailWidth,
             int showHideNoiseMode, float showHideNoiseStrength, float showHideNoiseScale, float showHideNoiseSpeed,
-            float showHideWarpPixels, float showHideWarpStrength)
+            float showHideWarpPixels, float showHideWarpStrength,
+            Color showHideGlowColor, float showHideGlowIntensity)
         {
             if (m_lastRangeImageUpdateRealtime < 0.0)
             {
@@ -484,6 +491,11 @@ namespace Gsplat
                 (float.IsNaN(showHideWarpStrength) || float.IsInfinity(showHideWarpStrength) || showHideWarpStrength < 0.0f)
                     ? 0.0f
                     : Mathf.Clamp(showHideWarpStrength, 0.0f, 3.0f));
+            m_propertyBlock.SetColor(k_lidarShowHideGlowColor, showHideGlowColor);
+            m_propertyBlock.SetFloat(k_lidarShowHideGlowIntensity,
+                (float.IsNaN(showHideGlowIntensity) || float.IsInfinity(showHideGlowIntensity) || showHideGlowIntensity < 0.0f)
+                    ? 0.0f
+                    : showHideGlowIntensity);
             m_propertyBlock.SetFloat(k_lidarDepthNear, depthNear);
             m_propertyBlock.SetFloat(k_lidarDepthFar, depthFar);
             m_propertyBlock.SetFloat(k_lidarRotationHz, rotationHz);

@@ -51,3 +51,9 @@
   - 主题: "Unity 里改 shader/包代码但运行时没变化" 的排障手册(证据链优先).
 - 是否提取/更新 skill: 是(建议新增 1 条 self-learning skill).
   - 理由: 这是高频踩坑,且根因往往不是公式,而是 "实际跑的不是你改的那份".
+
+## 2026-03-03 10:06:50 +0800 追加: LidarShowHideWarpPixels max clamp
+
+- 用户反馈: 需要把 `LidarShowHideWarpPixels` 调到更大值,用于更明显的扰动.
+- 现状: `ValidateLidarSerializedFields` 会把该值 clamp 到 64,导致“调大但不生效”.
+- 决策: 移除 max clamp,仅保留 NaN/Inf/负数防御.

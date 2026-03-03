@@ -18,6 +18,11 @@ Shader "Gsplat/LiDAR"
         [HideInInspector] _LidarShowHideNoiseSpeed("_LidarShowHideNoiseSpeed", Float) = 0
         [HideInInspector] _LidarShowHideWarpPixels("_LidarShowHideWarpPixels", Float) = 6
         [HideInInspector] _LidarShowHideWarpStrength("_LidarShowHideWarpStrength", Float) = 2
+        // show/hide glow(对齐高斯 show/hide 的 additive glow 语义):
+        // - 注意: glow 必须是“加到 rgb 上”的叠加,而不是仅仅乘 brightness.
+        // - 这里把 glowColor/glowIntensity 也声明成隐藏属性,确保 MPB 下发稳定生效.
+        [HideInInspector] _LidarShowHideGlowColor("_LidarShowHideGlowColor", Color) = (1,0.45,0.1,1)
+        [HideInInspector] _LidarShowHideGlowIntensity("_LidarShowHideGlowIntensity", Float) = 0
     }
     SubShader
     {
@@ -111,6 +116,11 @@ Shader "Gsplat/LiDAR"
             //   - 2: 默认强度.
             //   - 3: 更强扰动(可能需要更小的 WarpPixels).
             float _LidarShowHideWarpStrength;
+            // show/hide glow(对齐高斯 show/hide 的 additive glow 语义):
+            // - glowColor: 使用 rgb,alpha 不参与.
+            // - glowIntensity: >=0.
+            float4 _LidarShowHideGlowColor;
+            float _LidarShowHideGlowIntensity;
 
             float _LidarDepthNear;
             float _LidarDepthFar;
@@ -560,7 +570,12 @@ Shader "Gsplat/LiDAR"
                             mode, progress, distModel, maxRadius, ringWidth, trailWidth, noiseSigned, noiseStrength);
                         // 让 ring glow 也带有粒子噪声明暗变化,确保噪声肉眼可见.
                         float glowNoiseMul = lerp(1.0, lerp(0.45, 1.0, noise01), noiseStrengthVis);
-                        showHideGlow = ring * glowNoiseMul * showHideMul;
+                        // 重要:
+                        // - showHideGlow 不要乘 showHideMul,否则:
+                        //   1) glow 会被 showHideMul(在 alpha)再次乘一次,导致强度被二次衰减.
+                        //   2) 边界处(正好在 ring 上)反而最暗,不符合“燃烧前沿更亮”的直觉.
+                        // - 最终 glow 仍会通过 alpha(showHideMul)进入 blend,因此不会在隐藏区域泄漏.
+                        showHideGlow = ring * glowNoiseMul;
 
                         // 与 ParticleDots 对齐的“粒子噪声位移感”:
                         // - 只在 show/hide 过渡期间增强前沿附近点的屏幕空间位移抖动.
@@ -703,7 +718,15 @@ Shader "Gsplat/LiDAR"
                 brightness *= (1.0 + saturate(i.showHideGlow) * 0.85);
                 if (brightness * alpha < 1.0 / 255.0) discard;
 
-                float3 rgb = i.rgb * brightness;
+                // show/hide glow(对齐高斯的 additive glow):
+                // - 这里用 glowColor 做 RGB 叠加,而不是仅仅提亮 brightness.
+                // - glow 强度随 show/hide ring(glowFactor)变化,并且跟随 LiDAR 的全局强度与可见性.
+                float glowFactor = saturate(i.showHideGlow);
+                float glowIntensity = max(_LidarShowHideGlowIntensity, 0.0);
+                // - glowAdd 也应遵循 scan trail(否则很老的点在 show/hide 时会被重新点亮,看起来不对).
+                float3 glowAdd = _LidarShowHideGlowColor.rgb * glowFactor * glowIntensity * (intensity * trail * visibility);
+
+                float3 rgb = i.rgb * brightness + glowAdd;
                 if (_GammaToLinear)
                     return float4(GammaToLinearSpace(rgb), alpha);
                 return float4(rgb, alpha);

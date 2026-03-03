@@ -3409,6 +3409,8 @@ namespace Gsplat
             if (showHideGate <= 1.0e-4f && showHideMode == 0)
                 return;
 
+            var showHideGlowIntensity = showHideMode == 2 ? HideGlowIntensity : ShowGlowIntensity;
+
             m_lidarScan.RenderPointCloud(settings, targetCam, gameObject.layer, GammaToLinear,
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
                 LidarAzimuthBins, LidarBeamCount,
@@ -3422,7 +3424,8 @@ namespace Gsplat
                 showHideSourceMaskMode, showHideSourceMaskProgress,
                 showHideCenterModel, showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
                 (int)VisibilityNoiseMode, NoiseStrength, NoiseScale, NoiseSpeed,
-                LidarShowHideWarpPixels, WarpStrength);
+                LidarShowHideWarpPixels, WarpStrength,
+                GlowColor, showHideGlowIntensity);
         }
 
         void RenderLidarForCamera(Camera camera)
@@ -3460,6 +3463,8 @@ namespace Gsplat
             if (showHideGate <= 1.0e-4f && showHideMode == 0)
                 return;
 
+            var showHideGlowIntensity = showHideMode == 2 ? HideGlowIntensity : ShowGlowIntensity;
+
             m_lidarScan.RenderPointCloud(settings, camera, gameObject.layer, GammaToLinear,
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
                 LidarAzimuthBins, LidarBeamCount,
@@ -3473,7 +3478,8 @@ namespace Gsplat
                 showHideSourceMaskMode, showHideSourceMaskProgress,
                 showHideCenterModel, showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
                 (int)VisibilityNoiseMode, NoiseStrength, NoiseScale, NoiseSpeed,
-                LidarShowHideWarpPixels, WarpStrength);
+                LidarShowHideWarpPixels, WarpStrength,
+                GlowColor, showHideGlowIntensity);
         }
 
         bool ShouldSubmitSplatsThisFrame()
@@ -3555,8 +3561,6 @@ namespace Gsplat
 
             if (float.IsNaN(LidarShowHideWarpPixels) || float.IsInfinity(LidarShowHideWarpPixels) || LidarShowHideWarpPixels < 0.0f)
                 LidarShowHideWarpPixels = 6.0f;
-            if (LidarShowHideWarpPixels > 64.0f)
-                LidarShowHideWarpPixels = 64.0f;
 
             if (float.IsNaN(LidarTrailGamma) || float.IsInfinity(LidarTrailGamma) || LidarTrailGamma < 0.0f)
                 LidarTrailGamma = 2.0f;

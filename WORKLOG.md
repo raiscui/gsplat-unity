@@ -525,3 +525,26 @@
 - Unity 6000.3.8f1, EditMode `Gsplat.Tests`
   - total=44, passed=42, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_curl_warpstrength_2026-03-03_002646_noquit.xml`
+
+## 2026-03-03 10:10:30 +0800
+- RadarScan(LiDAR) show/hide 增加高斯同款 glow(带颜色 additive 叠加,而不是仅 brightness multiply).
+  - Shader: `Runtime/Shaders/GsplatLidar.shader`
+    - 新增隐藏属性(用于 MPB 稳态下发): `_LidarShowHideGlowColor`, `_LidarShowHideGlowIntensity`.
+    - show/hide ring glow 以 additive 方式叠加到 `rgb`(并遵循 scan trail,避免很老的点被重新点亮).
+  - Runtime: `Runtime/Lidar/GsplatLidarScan.cs`
+    - 新增 MPB 下发: `_LidarShowHideGlowColor`, `_LidarShowHideGlowIntensity`.
+  - `GsplatRenderer` / `GsplatSequenceRenderer`:
+    - glow 参数复用高斯已有字段: `GlowColor` + `ShowGlowIntensity` / `HideGlowIntensity`.
+
+- 按用户需求移除 `LidarShowHideWarpPixels` 的最大值 clamp.
+  - 之前上限为 64,导致用户“调大但不生效”.
+  - 现在仅保留 NaN/Inf/负数防御,不再限制最大值.
+
+### 测试与回归(证据)
+- 扩展/新增 EditMode tests:
+  - `Tests/Editor/GsplatLidarShaderPropertyTests.cs`: 覆盖 LiDAR show/hide glow 属性契约.
+  - `Tests/Editor/GsplatLidarScanTests.cs`: 覆盖 `LidarShowHideWarpPixels` 大值不被 clamp.
+- Unity 6000.3.8f1,EditMode tests(`Gsplat.Tests`):
+  - total=46, passed=44, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_showhide_glow_2026-03-03_095630_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_showhide_glow_2026-03-03_095630_noquit.log`

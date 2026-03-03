@@ -127,6 +127,31 @@ namespace Gsplat.Tests
         }
 
         [Test]
+        public void ValidateLidarSerializedFields_DoesNotClampWarpPixelsMax_GsplatRenderer()
+        {
+            // 说明:
+            // - 用户需要把 `LidarShowHideWarpPixels` 调到非常大(例如用于夸张效果或调试).
+            // - 因此这里锁定语义: 不再对 warpPixels 做最大值 clamp(仅防御 NaN/Inf/负数).
+            var r = (GsplatRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatRenderer));
+            r.EnableLidarScan = true;
+            r.LidarShowHideWarpPixels = 1234.5f;
+
+            InvokeValidateLidarSerializedFields(r, nameof(GsplatRenderer));
+            Assert.AreEqual(1234.5f, r.LidarShowHideWarpPixels, 1e-6f);
+        }
+
+        [Test]
+        public void ValidateLidarSerializedFields_DoesNotClampWarpPixelsMax_GsplatSequenceRenderer()
+        {
+            var r = (GsplatSequenceRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatSequenceRenderer));
+            r.EnableLidarScan = true;
+            r.LidarShowHideWarpPixels = 1234.5f;
+
+            InvokeValidateLidarSerializedFields(r, nameof(GsplatSequenceRenderer));
+            Assert.AreEqual(1234.5f, r.LidarShowHideWarpPixels, 1e-6f);
+        }
+
+        [Test]
         public void IsRangeImageUpdateDue_RespectsUpdateHzGate()
         {
             // 说明:

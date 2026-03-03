@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - LiDAR scan visualization now uses a single `LidarBeamCount` (no Up/Down split) and samples vertical beam directions uniformly over `[LidarDownFovDeg..LidarUpFovDeg]` (more down-beams naturally come from a larger downward FOV range).
 - LiDAR point cloud rendering now uses screen-space square points with alpha blending (opaque when alpha=1), and the `Depth` color mode maps depth from cyan -> blue -> purple -> red.
 - The Inspector `Render Style` quick-action row now includes `RadarScan(动画)`, and `Gaussian(动画)` / `ParticleDots(动画)` now also disable RadarScan in the same action so switching is bidirectional.
+- Removed the max clamp for `LidarShowHideWarpPixels` (was 64), allowing larger values for stronger RadarScan show/hide jitter.
 
 ### Fixed
 
@@ -49,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed missing particle-noise feel in `RadarScan` show/hide transitions: LiDAR now forwards `VisibilityNoiseMode/NoiseStrength/NoiseScale/NoiseSpeed` into the show/hide mask path (primary mask, source-mask compositing, and ring glow edge jitter), so radar reveal/burn no longer looks unnaturally "clean" compared to `ParticleDots`.
 - Fixed missing "ParticleDots-like" noise motion in `RadarScan` show/hide by adding edge-weighted screen-space point jitter (noise-driven position warp) during transition, so radar points now exhibit visible granular displacement instead of only brightness-mask noise.
 - Fixed `CurlSmoke` parity in `RadarScan` show/hide: LiDAR `CurlSmoke` now uses a curl-like vector field, and the screen-space jitter amplitude is scaled by `WarpStrength` (0 disables, higher values increase motion).
+- Fixed missing Gaussian-like glow in `RadarScan` show/hide transitions: LiDAR now adds a colored additive glow overlay (reusing `GlowColor` and `ShowGlowIntensity` / `HideGlowIntensity`) instead of only multiplying brightness.
 
 ## [1.1.4] - 2026-02-23
 
