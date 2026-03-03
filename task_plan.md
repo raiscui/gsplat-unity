@@ -196,12 +196,13 @@
 - [x] Tests: 扩展 `ValidateLidarSerializedFields` 的单测,锁定 NaN/Inf/负数时回退到 -1(复用全局).
 - [x] Changelog/Worklog: 追加记录.
 - [x] 回归 `_tmp_gsplat_pkgtests` EditMode `Gsplat.Tests`.
-- [ ] git commit.
+- [x] git commit.
+  - commit: `017cf59`
 
 ### 状态
 
 **目前在阶段4(回归与提交)**
-- 代码与回归已完成,只剩一次 git commit.
+- 代码与回归已完成,并已提交 git.
 - 回归(证据):
   - Unity EditMode `Gsplat.Tests`: total=46, passed=44, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_noise_overrides_2026-03-03_121526_noquit.xml`
