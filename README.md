@@ -138,7 +138,12 @@ Default scanning setup (as discussed in the spec):
 - Depth opacity:
   - `LidarDepthOpacity` (0..1, default `1`, only affects `Depth` mode)
 - Point size: `LidarPointRadiusPixels` (default `2px` radius)
-- Rendering: screen-space square points (soft edge), alpha blend (opaque when alpha=1), brightness controlled by `LidarTrailGamma` + `LidarIntensity`
+- Rendering: screen-space square points (soft edge), alpha blend (opaque when alpha=1)
+  - Scan head + trail: `LidarTrailGamma`, `LidarIntensity`
+  - Optional base intensity (prevents "black after sweep"): `LidarKeepUnscannedPoints`, `LidarUnscannedIntensity`
+  - Optional distance attenuation (near stronger, far weaker):
+    - `LidarIntensityDistanceDecayMode` (`Reciprocal` / `Exponential`)
+    - `LidarIntensityDistanceDecay`, `LidarUnscannedIntensityDistanceDecay` (0 disables)
 - Noise filter: `LidarMinSplatOpacity` (default `1/255`, filters near-invisible splats to avoid a "transparent shell" look)
 
 API example:
@@ -151,12 +156,19 @@ r.HideSplatsWhenLidarEnabled = true;
 r.LidarColorMode = GsplatLidarColorMode.Depth;
 r.LidarDepthOpacity = 1.0f;
 r.LidarPointRadiusPixels = 2.0f;
+r.LidarKeepUnscannedPoints = true;
+r.LidarUnscannedIntensity = 0.2f;
+r.LidarIntensityDistanceDecayMode = GsplatLidarDistanceDecayMode.Exponential;
+r.LidarIntensityDistanceDecay = 0.02f;
+r.LidarUnscannedIntensityDistanceDecay = 0.02f;
 ```
 
 Manual verification checklist:
 
 - 360-degree scan head rotates at ~`LidarRotationHz` (default 5Hz)
-- 1-revolution trail fades behind the scan head (`LidarTrailGamma`, `LidarIntensity`)
+- Scan head rotates and leaves a 1-revolution trail (`LidarTrailGamma`, `LidarIntensity`)
+- When `LidarKeepUnscannedPoints=true`, points do not fade to black before the next sweep (uses `LidarUnscannedIntensity`)
+- When `Lidar*DistanceDecay > 0`, intensity attenuates with distance (near stronger, far weaker)
 - `Depth` / `SplatColorSH0` switching works
 - `HideSplatsWhenLidarEnabled=true` stops splat sort/draw while LiDAR still works
 

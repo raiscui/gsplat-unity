@@ -60,6 +60,17 @@ namespace Gsplat.Tests
             return (float)m.Invoke(obj, new object[] { enableRadarScan, durationSeconds });
         }
 
+        static float InvokeResolveLidarUnscannedIntensityForShader(object obj, string ownerName)
+        {
+            // 说明:
+            // - ResolveLidarUnscannedIntensityForShader 是 LiDAR 点云“底色强度”的决策逻辑.
+            // - 它把 Keep 开关与 UnscannedIntensity 合并成最终下发到 shader 的数值.
+            var m = obj.GetType().GetMethod("ResolveLidarUnscannedIntensityForShader",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(m, $"Expected {ownerName}.ResolveLidarUnscannedIntensityForShader to exist.");
+            return (float)m.Invoke(obj, null);
+        }
+
         static void SetLidarFieldsToInvalidValues(GsplatRenderer r)
         {
             // 说明: 这组非法值覆盖常见风险:
@@ -92,6 +103,11 @@ namespace Gsplat.Tests
             r.LidarHideGlowIntensity = float.PositiveInfinity;
             r.LidarTrailGamma = -1.0f;
             r.LidarIntensity = float.PositiveInfinity;
+            r.LidarKeepUnscannedPoints = true;
+            r.LidarUnscannedIntensity = float.NaN;
+            r.LidarIntensityDistanceDecayMode = (GsplatLidarDistanceDecayMode)123;
+            r.LidarIntensityDistanceDecay = float.NaN;
+            r.LidarUnscannedIntensityDistanceDecay = float.PositiveInfinity;
             r.LidarDepthOpacity = float.NaN;
             r.LidarMinSplatOpacity = float.NaN;
         }
@@ -125,6 +141,11 @@ namespace Gsplat.Tests
             r.LidarHideGlowIntensity = float.PositiveInfinity;
             r.LidarTrailGamma = -1.0f;
             r.LidarIntensity = float.PositiveInfinity;
+            r.LidarKeepUnscannedPoints = true;
+            r.LidarUnscannedIntensity = float.NaN;
+            r.LidarIntensityDistanceDecayMode = (GsplatLidarDistanceDecayMode)123;
+            r.LidarIntensityDistanceDecay = float.NaN;
+            r.LidarUnscannedIntensityDistanceDecay = float.PositiveInfinity;
             r.LidarDepthOpacity = float.NaN;
             r.LidarMinSplatOpacity = float.NaN;
         }
@@ -165,6 +186,10 @@ namespace Gsplat.Tests
             Assert.AreEqual(2.5f, r.LidarHideGlowIntensity);
             Assert.AreEqual(2.0f, r.LidarTrailGamma);
             Assert.AreEqual(1.0f, r.LidarIntensity);
+            Assert.AreEqual(0.2f, r.LidarUnscannedIntensity);
+            Assert.AreEqual(GsplatLidarDistanceDecayMode.Reciprocal, r.LidarIntensityDistanceDecayMode);
+            Assert.AreEqual(0.0f, r.LidarIntensityDistanceDecay);
+            Assert.AreEqual(0.0f, r.LidarUnscannedIntensityDistanceDecay);
             Assert.AreEqual(1.0f, r.LidarDepthOpacity);
             Assert.AreEqual(1.0f / 255.0f, r.LidarMinSplatOpacity, 1e-6f);
         }
@@ -194,6 +219,10 @@ namespace Gsplat.Tests
             Assert.AreEqual(2.5f, r.LidarHideGlowIntensity);
             Assert.AreEqual(1.0f, r.LidarDepthOpacity);
             Assert.AreEqual(1.0f / 255.0f, r.LidarMinSplatOpacity, 1e-6f);
+            Assert.AreEqual(0.2f, r.LidarUnscannedIntensity);
+            Assert.AreEqual(GsplatLidarDistanceDecayMode.Reciprocal, r.LidarIntensityDistanceDecayMode);
+            Assert.AreEqual(0.0f, r.LidarIntensityDistanceDecay);
+            Assert.AreEqual(0.0f, r.LidarUnscannedIntensityDistanceDecay);
         }
 
         [Test]
@@ -347,6 +376,40 @@ namespace Gsplat.Tests
             Assert.AreEqual(1.5f,
                 InvokeResolveRadarScanVisibilityDurationSeconds(r, nameof(GsplatSequenceRenderer), enableRadarScan: false, durationSeconds: -1.0f),
                 1e-6f);
+        }
+
+        [Test]
+        public void ResolveLidarUnscannedIntensityForShader_RespectsKeepToggle_GsplatRenderer()
+        {
+            var r = (GsplatRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatRenderer));
+
+            r.LidarUnscannedIntensity = 0.25f;
+            r.LidarKeepUnscannedPoints = false;
+            Assert.AreEqual(0.0f, InvokeResolveLidarUnscannedIntensityForShader(r, nameof(GsplatRenderer)), 1e-6f);
+
+            r.LidarKeepUnscannedPoints = true;
+            Assert.AreEqual(0.25f, InvokeResolveLidarUnscannedIntensityForShader(r, nameof(GsplatRenderer)), 1e-6f);
+
+            // 非法值兜底:
+            // - 即便用户脚本把值写成 NaN,也应回退到默认值,避免 shader 出现黑屏或随机值.
+            r.LidarUnscannedIntensity = float.NaN;
+            Assert.AreEqual(0.2f, InvokeResolveLidarUnscannedIntensityForShader(r, nameof(GsplatRenderer)), 1e-6f);
+        }
+
+        [Test]
+        public void ResolveLidarUnscannedIntensityForShader_RespectsKeepToggle_GsplatSequenceRenderer()
+        {
+            var r = (GsplatSequenceRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatSequenceRenderer));
+
+            r.LidarUnscannedIntensity = 0.25f;
+            r.LidarKeepUnscannedPoints = false;
+            Assert.AreEqual(0.0f, InvokeResolveLidarUnscannedIntensityForShader(r, nameof(GsplatSequenceRenderer)), 1e-6f);
+
+            r.LidarKeepUnscannedPoints = true;
+            Assert.AreEqual(0.25f, InvokeResolveLidarUnscannedIntensityForShader(r, nameof(GsplatSequenceRenderer)), 1e-6f);
+
+            r.LidarUnscannedIntensity = float.PositiveInfinity;
+            Assert.AreEqual(0.2f, InvokeResolveLidarUnscannedIntensityForShader(r, nameof(GsplatSequenceRenderer)), 1e-6f);
         }
 
         [Test]

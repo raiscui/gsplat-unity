@@ -232,6 +232,58 @@ namespace Gsplat
                  "默认 1.")]
         public float LidarIntensity = 1.0f;
 
+        [Tooltip("是否在下一次扫描前保留未扫到的点云(不提前消失).\n" +
+                 "说明:\n" +
+                 "- 关闭(默认): 行为与旧版一致,未扫到区域会随余辉衰减到 0.\n" +
+                 "- 开启: 未扫到区域会以 LidarUnscannedIntensity 作为底色亮度保留.\n" +
+                 "提示:\n" +
+                 "- 一般建议保持 LidarIntensity >= LidarUnscannedIntensity,否则扫描头可能会反而更暗.")]
+        public bool LidarKeepUnscannedPoints;
+
+        [Min(0.0f)]
+        [Tooltip("LiDAR 未扫到(或远离扫描头)区域的底色强度倍率.\n" +
+                 "说明:\n" +
+                 "- 用于避免\"扫过后变黑\".\n" +
+                 "- 仅在 LidarKeepUnscannedPoints=true 时生效.\n" +
+                 "- 默认 0.2.")]
+        public float LidarUnscannedIntensity = 0.2f;
+
+        [Tooltip("LiDAR 强度的距离衰减模式(近强远弱).\n" +
+                 "说明:\n" +
+                 "- Reciprocal: atten(dist)=1/(1+dist*decay).\n" +
+                 "- Exponential: atten(dist)=exp(-dist*decay).\n" +
+                 "提示:\n" +
+                 "- decay 参数仍由 LidarIntensityDistanceDecay/LidarUnscannedIntensityDistanceDecay 提供.\n" +
+                 "- 默认 Reciprocal,以兼容旧项目.")]
+        public GsplatLidarDistanceDecayMode LidarIntensityDistanceDecayMode = GsplatLidarDistanceDecayMode.Reciprocal;
+
+        [Min(0.0f)]
+        [Tooltip("LiDAR 扫描强度随距离衰减的乘数(近强远弱).\n" +
+                 "说明:\n" +
+                 "- 0: 不衰减(兼容旧项目).\n" +
+                 "- >0: 按距离做衰减.\n" +
+                 "衰减函数:\n" +
+                 "- 由 LidarIntensityDistanceDecayMode 决定.\n" +
+                 "  - Reciprocal: atten(dist)=1/(1+dist*decay).\n" +
+                 "  - Exponential: atten(dist)=exp(-dist*decay).\n" +
+                 "提示:\n" +
+                 "- dist 使用当前点的 range(单位与 DepthNear/Far 一致,通常是米).")]
+        public float LidarIntensityDistanceDecay;
+
+        [Min(0.0f)]
+        [Tooltip("LiDAR 未扫到区域底色强度随距离衰减的乘数(近强远弱).\n" +
+                 "说明:\n" +
+                 "- 0: 不衰减(兼容旧项目).\n" +
+                 "- >0: 按距离做衰减.\n" +
+                 "- 仅在 LidarKeepUnscannedPoints=true 时最终可见(否则底色强度本身会被置 0).\n" +
+                 "衰减函数:\n" +
+                 "- 由 LidarIntensityDistanceDecayMode 决定.\n" +
+                 "  - Reciprocal: atten(dist)=1/(1+dist*decay).\n" +
+                 "  - Exponential: atten(dist)=exp(-dist*decay).\n" +
+                 "提示:\n" +
+                 "- 一般建议该值 <= LidarIntensityDistanceDecay,让远处的底色衰减更快一些.")]
+        public float LidarUnscannedIntensityDistanceDecay;
+
         [Range(0.0f, 1.0f)]
         [Tooltip("LiDAR Depth 模式下的点云透明度(0..1).\n" +
                  "说明:\n" +
@@ -2149,6 +2201,20 @@ namespace Gsplat
             return d;
         }
 
+        float ResolveLidarUnscannedIntensityForShader()
+        {
+            // 说明:
+            // - 用户希望\"扫过后不要变黑\",并且可选\"是否在下一次扫描前消失\".
+            // - 这里把最终下发到 shader 的 unscannedIntensity 做成一个可测的决策函数,避免未来回退语义.
+            if (!LidarKeepUnscannedPoints)
+                return 0.0f;
+
+            var v = LidarUnscannedIntensity;
+            if (float.IsNaN(v) || float.IsInfinity(v) || v < 0.0f)
+                v = 0.2f;
+            return v;
+        }
+
         public void SetRenderStyleAndRadarScan(GsplatRenderStyle style, bool enableRadarScan, bool animated = true,
             float durationSeconds = -1.0f)
         {
@@ -3483,13 +3549,15 @@ namespace Gsplat
             var showHideGlowIntensity = showHideMode == 2 ? LidarHideGlowIntensity : LidarShowGlowIntensity;
             var showHideNoiseScale = LidarShowHideNoiseScale >= 0.0f ? LidarShowHideNoiseScale : NoiseScale;
             var showHideNoiseSpeed = LidarShowHideNoiseSpeed >= 0.0f ? LidarShowHideNoiseSpeed : NoiseSpeed;
+            var lidarUnscannedIntensity = ResolveLidarUnscannedIntensityForShader();
 
             m_lidarScan.RenderPointCloud(settings, targetCam, gameObject.layer, GammaToLinear,
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
                 LidarAzimuthBins, LidarBeamCount,
                 LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
-                LidarTrailGamma, LidarIntensity,
+                LidarTrailGamma, LidarIntensity, lidarUnscannedIntensity,
+                LidarIntensityDistanceDecay, LidarUnscannedIntensityDistanceDecay, LidarIntensityDistanceDecayMode,
                 LidarDepthOpacity,
                 m_renderer.ColorBuffer,
                 transform.worldToLocalMatrix,
@@ -3539,13 +3607,15 @@ namespace Gsplat
             var showHideGlowIntensity = showHideMode == 2 ? LidarHideGlowIntensity : LidarShowGlowIntensity;
             var showHideNoiseScale = LidarShowHideNoiseScale >= 0.0f ? LidarShowHideNoiseScale : NoiseScale;
             var showHideNoiseSpeed = LidarShowHideNoiseSpeed >= 0.0f ? LidarShowHideNoiseSpeed : NoiseSpeed;
+            var lidarUnscannedIntensity = ResolveLidarUnscannedIntensityForShader();
 
             m_lidarScan.RenderPointCloud(settings, camera, gameObject.layer, GammaToLinear,
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
                 LidarAzimuthBins, LidarBeamCount,
                 LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
-                LidarTrailGamma, LidarIntensity,
+                LidarTrailGamma, LidarIntensity, lidarUnscannedIntensity,
+                LidarIntensityDistanceDecay, LidarUnscannedIntensityDistanceDecay, LidarIntensityDistanceDecayMode,
                 LidarDepthOpacity,
                 m_renderer.ColorBuffer,
                 transform.worldToLocalMatrix,
@@ -3670,6 +3740,24 @@ namespace Gsplat
 
             if (float.IsNaN(LidarIntensity) || float.IsInfinity(LidarIntensity) || LidarIntensity < 0.0f)
                 LidarIntensity = 1.0f;
+
+            if (float.IsNaN(LidarUnscannedIntensity) || float.IsInfinity(LidarUnscannedIntensity) || LidarUnscannedIntensity < 0.0f)
+                LidarUnscannedIntensity = 0.2f;
+
+            // 距离衰减模式:
+            // - 该字段可能来自序列化(例如 YAML 手工改坏或历史版本漂移),这里做一次防御性校验.
+            // - 非法值统一回退到默认 Reciprocal,以保持兼容.
+            if (LidarIntensityDistanceDecayMode != GsplatLidarDistanceDecayMode.Reciprocal &&
+                LidarIntensityDistanceDecayMode != GsplatLidarDistanceDecayMode.Exponential)
+            {
+                LidarIntensityDistanceDecayMode = GsplatLidarDistanceDecayMode.Reciprocal;
+            }
+
+            if (float.IsNaN(LidarIntensityDistanceDecay) || float.IsInfinity(LidarIntensityDistanceDecay) || LidarIntensityDistanceDecay < 0.0f)
+                LidarIntensityDistanceDecay = 0.0f;
+
+            if (float.IsNaN(LidarUnscannedIntensityDistanceDecay) || float.IsInfinity(LidarUnscannedIntensityDistanceDecay) || LidarUnscannedIntensityDistanceDecay < 0.0f)
+                LidarUnscannedIntensityDistanceDecay = 0.0f;
 
             if (float.IsNaN(LidarDepthOpacity) || float.IsInfinity(LidarDepthOpacity) || LidarDepthOpacity < 0.0f)
                 LidarDepthOpacity = 1.0f;

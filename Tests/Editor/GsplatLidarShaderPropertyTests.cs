@@ -31,6 +31,10 @@ namespace Gsplat.Tests
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideWarpStrength"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideGlowColor"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideGlowIntensity"), 0);
+            Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarUnscannedIntensity"), 0);
+            Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarIntensityDistanceDecay"), 0);
+            Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarUnscannedIntensityDistanceDecay"), 0);
+            Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarIntensityDistanceDecayMode"), 0);
 
             // Material: HasProperty(int) 必须为 true,否则 Render 时的诊断会显示 hasProp=0.
             var mat = new Material(shader);
@@ -44,6 +48,10 @@ namespace Gsplat.Tests
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideWarpStrength")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideGlowColor")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideGlowIntensity")));
+                Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarUnscannedIntensity")));
+                Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarIntensityDistanceDecay")));
+                Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarUnscannedIntensityDistanceDecay")));
+                Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarIntensityDistanceDecayMode")));
             }
             finally
             {

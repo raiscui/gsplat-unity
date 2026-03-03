@@ -23,6 +23,20 @@ Shader "Gsplat/LiDAR"
         // - 这里把 glowColor/glowIntensity 也声明成隐藏属性,确保 MPB 下发稳定生效.
         [HideInInspector] _LidarShowHideGlowColor("_LidarShowHideGlowColor", Color) = (1,0.45,0.1,1)
         [HideInInspector] _LidarShowHideGlowIntensity("_LidarShowHideGlowIntensity", Float) = 0
+        // 扫描强度:
+        // - `_LidarIntensity` 控制“扫描头/刚扫过区域”的强度.
+        // - `_LidarUnscannedIntensity` 控制“未扫到(或远离扫描头)区域”的底色强度.
+        // - 当 `_LidarUnscannedIntensity=0` 时,保持旧行为: 亮度随 trail 衰减到 0.
+        [HideInInspector] _LidarUnscannedIntensity("_LidarUnscannedIntensity", Float) = 0
+        // 距离衰减(近强远弱):
+        // - 这里把衰减乘数也声明为隐藏属性,确保 MPB 下发稳态生效.
+        // - 0 表示不衰减(兼容旧项目).
+        [HideInInspector] _LidarIntensityDistanceDecay("_LidarIntensityDistanceDecay", Float) = 0
+        [HideInInspector] _LidarUnscannedIntensityDistanceDecay("_LidarUnscannedIntensityDistanceDecay", Float) = 0
+        // 距离衰减模式:
+        // - 0: Reciprocal(反比),1: Exponential(指数).
+        // - 默认 0,以兼容旧项目.
+        [HideInInspector] _LidarIntensityDistanceDecayMode("_LidarIntensityDistanceDecayMode", Float) = 0
     }
     SubShader
     {
@@ -129,6 +143,10 @@ Shader "Gsplat/LiDAR"
             float _LidarRotationHz;
             float _LidarTrailGamma;
             float _LidarIntensity;
+            float _LidarUnscannedIntensity;
+            float _LidarIntensityDistanceDecay;
+            float _LidarUnscannedIntensityDistanceDecay;
+            float _LidarIntensityDistanceDecayMode;
             float _LidarDepthOpacity;
             float _LidarTime;
 
@@ -162,6 +180,7 @@ Shader "Gsplat/LiDAR"
                 float trail01 : TEXCOORD2;
                 float showHideMul : TEXCOORD3;
                 float showHideGlow : TEXCOORD4;
+                float range : TEXCOORD5;
             };
 
             float EaseInOutQuad(float t)
@@ -462,6 +481,7 @@ Shader "Gsplat/LiDAR"
                 o.trail01 = 0.0;
                 o.showHideMul = 1.0;
                 o.showHideGlow = 0.0;
+                o.range = 0.0;
 
                 uint cellId;
                 uint beamIndex;
@@ -805,6 +825,7 @@ Shader "Gsplat/LiDAR"
                 o.trail01 = trail01;
                 o.showHideMul = showHideMul;
                 o.showHideGlow = showHideGlow;
+                o.range = range;
                 return o;
             }
 
@@ -824,8 +845,31 @@ Shader "Gsplat/LiDAR"
                 // 强度语义:
                 // - Trail 与 Shape 决定点的覆盖范围(Shape)与余辉衰减(Trail).
                 // - Intensity 只控制 rgb 亮度,避免出现“调强度=变透明”的错觉.
+                // - UnscannedIntensity 用于避免“扫过后变黑”:
+                //   - 扫描头未扫到(或远离扫描头)的区域仍保留一层底色亮度.
                 float trail = saturate(i.trail01);
-                float intensity = max(_LidarIntensity, 0.0);
+                float dist = max(i.range, 0.0);
+                float scanDecay = max(_LidarIntensityDistanceDecay, 0.0);
+                float unscannedDecay = max(_LidarUnscannedIntensityDistanceDecay, 0.0);
+                float decayMode01 = saturate(_LidarIntensityDistanceDecayMode);
+
+                // 距离衰减函数:
+                // - Reciprocal: atten(dist)=1/(1+dist*decay) (数值稳定,兼容旧项目默认)
+                // - Exponential: atten(dist)=exp(-dist*decay) (指数衰减,近强远弱更明显)
+                float scanAttenReciprocal = rcp(1.0 + dist * scanDecay);
+                float unscannedAttenReciprocal = rcp(1.0 + dist * unscannedDecay);
+
+                // exp(x)=exp2(x/ln(2)),这里用 exp2 做指数衰减(通常更友好).
+                const float kInvLn2 = 1.4426950408889634; // 1/ln(2)
+                float scanAttenExponential = exp2(-dist * scanDecay * kInvLn2);
+                float unscannedAttenExponential = exp2(-dist * unscannedDecay * kInvLn2);
+
+                float scanAtten = lerp(scanAttenReciprocal, scanAttenExponential, decayMode01);
+                float unscannedAtten = lerp(unscannedAttenReciprocal, unscannedAttenExponential, decayMode01);
+
+                float scanIntensity = max(_LidarIntensity, 0.0) * scanAtten;
+                float unscannedIntensity = max(_LidarUnscannedIntensity, 0.0) * unscannedAtten;
+                float intensity = lerp(unscannedIntensity, scanIntensity, trail);
                 float colorBlend = saturate(_LidarColorBlend);
                 float visibility = saturate(_LidarVisibility);
                 // DepthOpacity:
@@ -849,7 +893,7 @@ Shader "Gsplat/LiDAR"
                 float trailForGlow = lerp(0.35, 1.0, trail);
                 float3 glowAdd = _LidarShowHideGlowColor.rgb * glowFactor * glowIntensity * (intensity * visibility) * trailForGlow;
 
-                float brightness = intensity * trail * visibility * showHideMul;
+                float brightness = intensity * visibility * showHideMul;
                 brightness *= (1.0 + glowFactor * 0.85);
 
                 float3 rgb = i.rgb * brightness + glowAdd;

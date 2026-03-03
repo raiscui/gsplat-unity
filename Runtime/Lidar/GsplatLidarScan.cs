@@ -153,6 +153,11 @@ namespace Gsplat
         static readonly int k_lidarRotationHz = Shader.PropertyToID("_LidarRotationHz");
         static readonly int k_lidarTrailGamma = Shader.PropertyToID("_LidarTrailGamma");
         static readonly int k_lidarIntensity = Shader.PropertyToID("_LidarIntensity");
+        static readonly int k_lidarUnscannedIntensity = Shader.PropertyToID("_LidarUnscannedIntensity");
+        static readonly int k_lidarIntensityDistanceDecay = Shader.PropertyToID("_LidarIntensityDistanceDecay");
+        static readonly int k_lidarUnscannedIntensityDistanceDecay =
+            Shader.PropertyToID("_LidarUnscannedIntensityDistanceDecay");
+        static readonly int k_lidarIntensityDistanceDecayMode = Shader.PropertyToID("_LidarIntensityDistanceDecayMode");
         static readonly int k_lidarDepthOpacity = Shader.PropertyToID("_LidarDepthOpacity");
         static readonly int k_lidarTime = Shader.PropertyToID("_LidarTime");
         static readonly int k_lidarAzSinCos = Shader.PropertyToID("_LidarAzSinCos");
@@ -391,7 +396,9 @@ namespace Gsplat
             int azimuthBins, int beamCount,
             float depthNear, float depthFar, float pointRadiusPixels,
             GsplatLidarColorMode colorMode, float colorBlend01, float visibility01,
-            float trailGamma, float intensity, float depthOpacity,
+            float trailGamma, float intensity, float unscannedIntensity,
+            float intensityDistanceDecay, float unscannedIntensityDistanceDecay, GsplatLidarDistanceDecayMode intensityDistanceDecayMode,
+            float depthOpacity,
             GraphicsBuffer splatColorBuffer,
             Matrix4x4 worldToModel, float showHideGate, int showHideMode, float showHideProgress,
             int showHideSourceMaskMode, float showHideSourceMaskProgress,
@@ -503,6 +510,24 @@ namespace Gsplat
             m_propertyBlock.SetFloat(k_lidarRotationHz, rotationHz);
             m_propertyBlock.SetFloat(k_lidarTrailGamma, Mathf.Max(trailGamma, 0.0f));
             m_propertyBlock.SetFloat(k_lidarIntensity, Mathf.Max(intensity, 0.0f));
+            m_propertyBlock.SetFloat(k_lidarUnscannedIntensity,
+                (float.IsNaN(unscannedIntensity) || float.IsInfinity(unscannedIntensity) || unscannedIntensity < 0.0f)
+                    ? 0.0f
+                    : unscannedIntensity);
+            m_propertyBlock.SetFloat(k_lidarIntensityDistanceDecay,
+                (float.IsNaN(intensityDistanceDecay) || float.IsInfinity(intensityDistanceDecay) || intensityDistanceDecay < 0.0f)
+                    ? 0.0f
+                    : intensityDistanceDecay);
+            m_propertyBlock.SetFloat(k_lidarUnscannedIntensityDistanceDecay,
+                (float.IsNaN(unscannedIntensityDistanceDecay) || float.IsInfinity(unscannedIntensityDistanceDecay) ||
+                 unscannedIntensityDistanceDecay < 0.0f)
+                    ? 0.0f
+                    : unscannedIntensityDistanceDecay);
+            // 距离衰减模式:
+            // - 只做两态选择,避免非法值(例如序列化坏值)导致意外落入 Exponential.
+            // - 0: Reciprocal, 1: Exponential.
+            var intensityDistanceDecayMode01 = intensityDistanceDecayMode == GsplatLidarDistanceDecayMode.Exponential ? 1.0f : 0.0f;
+            m_propertyBlock.SetFloat(k_lidarIntensityDistanceDecayMode, intensityDistanceDecayMode01);
             m_propertyBlock.SetFloat(k_lidarDepthOpacity, Mathf.Clamp01(depthOpacity));
             m_propertyBlock.SetFloat(k_lidarTime, lidarTime);
 

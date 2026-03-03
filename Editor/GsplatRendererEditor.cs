@@ -38,6 +38,11 @@ namespace Gsplat.Editor
                 nameof(GsplatRenderer.LidarColorMode),
                 nameof(GsplatRenderer.LidarTrailGamma),
                 nameof(GsplatRenderer.LidarIntensity),
+                nameof(GsplatRenderer.LidarIntensityDistanceDecayMode),
+                nameof(GsplatRenderer.LidarKeepUnscannedPoints),
+                nameof(GsplatRenderer.LidarUnscannedIntensity),
+                nameof(GsplatRenderer.LidarIntensityDistanceDecay),
+                nameof(GsplatRenderer.LidarUnscannedIntensityDistanceDecay),
                 nameof(GsplatRenderer.LidarDepthOpacity),
                 nameof(GsplatRenderer.LidarMinSplatOpacity),
                 nameof(GsplatRenderer.HideSplatsWhenLidarEnabled));
@@ -171,6 +176,26 @@ namespace Gsplat.Editor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarHideGlowIntensity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarTrailGamma)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarIntensity)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarIntensityDistanceDecayMode)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarIntensityDistanceDecay)));
+                var keepUnscannedProp =
+                    serializedObject.FindProperty(nameof(GsplatRenderer.LidarKeepUnscannedPoints));
+                EditorGUILayout.PropertyField(keepUnscannedProp);
+                using (new EditorGUI.DisabledScope(!keepUnscannedProp.boolValue && !keepUnscannedProp.hasMultipleDifferentValues))
+                {
+                    EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarUnscannedIntensity)));
+                    EditorGUILayout.PropertyField(
+                        serializedObject.FindProperty(nameof(GsplatRenderer.LidarUnscannedIntensityDistanceDecay)));
+                }
+                EditorGUILayout.HelpBox(
+                    "提示: 开启 LidarKeepUnscannedPoints 后,未扫到(或远离扫描头)区域会保留底色亮度.\n" +
+                    "你可以用 LidarUnscannedIntensity 控制这层底色,避免\"扫过后变黑\".\n" +
+                    "距离衰减: LidarIntensityDistanceDecayMode + (LidarIntensityDistanceDecay/LidarUnscannedIntensityDistanceDecay).\n" +
+                    "- Reciprocal: atten(dist)=1/(1+dist*decay).\n" +
+                    "- Exponential: atten(dist)=exp(-dist*decay).\n" +
+                    "- decay=0 表示不衰减.\n" +
+                    "关闭时会保持旧行为: 点云只随余辉(trail)显示,在下一次扫描前会逐渐变暗或消失.",
+                    MessageType.Info);
                 using (new EditorGUI.DisabledScope(colorModeProp.enumValueIndex != (int)GsplatLidarColorMode.Depth))
                     EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthOpacity)));
 

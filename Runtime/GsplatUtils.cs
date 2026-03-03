@@ -28,6 +28,17 @@ namespace Gsplat
         SplatColorSH0 = 1
     }
 
+    /// <summary>
+    /// LiDAR 强度的距离衰减模式(近强远弱).
+    /// - Reciprocal: atten(dist)=1/(1+dist*decay)
+    /// - Exponential: atten(dist)=exp(-dist*decay)
+    /// </summary>
+    public enum GsplatLidarDistanceDecayMode
+    {
+        Reciprocal = 0,
+        Exponential = 1
+    }
+
     public static class GsplatUtils
     {
         public const string k_PackagePath = "Packages/wu.yize.gsplat/";
