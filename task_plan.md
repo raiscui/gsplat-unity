@@ -206,3 +206,28 @@
 - 回归(证据):
   - Unity EditMode `Gsplat.Tests`: total=46, passed=44, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_noise_overrides_2026-03-03_121526_noquit.xml`
+
+## 2026-03-03 12:20:13 +0800 新需求: LidarAzimuthBins 不设置上限
+
+### 用户需求
+
+- `LidarAzimuthBins` 不要设置最大值上限(不 clamp).
+
+### 现状
+
+- `GsplatRenderer/GsplatSequenceRenderer.ValidateLidarSerializedFields()` 当前对 `LidarAzimuthBins` 做了 `>4096` 的最大值 clamp.
+
+### 下一步行动
+
+- [x] Runtime: 移除 `LidarAzimuthBins > 4096` 的 clamp(只保留最小值防御).
+- [x] Tests: 增加单测锁定“大值不再被 clamp”.
+- [x] 回归 `_tmp_gsplat_pkgtests` EditMode `Gsplat.Tests`.
+- [ ] git commit.
+
+### 状态
+
+**目前在阶段4(回归与提交)**
+- 代码与回归已完成,只剩一次 git commit.
+- 回归(证据):
+  - Unity EditMode `Gsplat.Tests`: total=48, passed=46, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_azimuth_uncap_2026-03-03_122028_noquit.xml`

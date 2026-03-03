@@ -2104,8 +2104,10 @@ namespace Gsplat
 
             if (LidarAzimuthBins < 64)
                 LidarAzimuthBins = 2048;
-            if (LidarAzimuthBins > 4096)
-                LidarAzimuthBins = 4096;
+            // 说明:
+            // - 按用户需求: 不再对 LidarAzimuthBins 设置最大值上限.
+            // - 风险: 过大的 azimuthBins 会导致 range image 分辨率变大,显著增加 compute 与显存开销.
+            // - 这里仅保留最小值防御,避免 0/负数/过小引发异常.
 
             if (float.IsNaN(LidarUpFovDeg) || float.IsInfinity(LidarUpFovDeg))
                 LidarUpFovDeg = 10.0f;

@@ -177,6 +177,31 @@ namespace Gsplat.Tests
         }
 
         [Test]
+        public void ValidateLidarSerializedFields_DoesNotClampAzimuthBinsMax_GsplatRenderer()
+        {
+            // 说明:
+            // - 用户需要把 `LidarAzimuthBins` 调到更高的角分辨率.
+            // - 因此这里锁定语义: 不再对 azimuthBins 做最大值 clamp(仅保留最小值防御).
+            var r = (GsplatRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatRenderer));
+            r.EnableLidarScan = true;
+            r.LidarAzimuthBins = 16384;
+
+            InvokeValidateLidarSerializedFields(r, nameof(GsplatRenderer));
+            Assert.AreEqual(16384, r.LidarAzimuthBins);
+        }
+
+        [Test]
+        public void ValidateLidarSerializedFields_DoesNotClampAzimuthBinsMax_GsplatSequenceRenderer()
+        {
+            var r = (GsplatSequenceRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatSequenceRenderer));
+            r.EnableLidarScan = true;
+            r.LidarAzimuthBins = 16384;
+
+            InvokeValidateLidarSerializedFields(r, nameof(GsplatSequenceRenderer));
+            Assert.AreEqual(16384, r.LidarAzimuthBins);
+        }
+
+        [Test]
         public void IsRangeImageUpdateDue_RespectsUpdateHzGate()
         {
             // 说明:

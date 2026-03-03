@@ -619,3 +619,22 @@
   - total=46, passed=44, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_noise_overrides_2026-03-03_121526_noquit.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_noise_overrides_2026-03-03_121526_noquit.log`
+
+## 2026-03-03 12:21:10 +0800
+- 按用户需求移除 `LidarAzimuthBins` 的最大值 clamp(不再限制到 4096).
+
+### 变更内容
+- Runtime:
+  - [GsplatRenderer.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/GsplatRenderer.cs)
+    - `ValidateLidarSerializedFields` 不再对 `LidarAzimuthBins > 4096` 做 clamp,只保留最小值防御(` < 64 -> 2048`).
+  - [GsplatSequenceRenderer.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/GsplatSequenceRenderer.cs)
+    - 同步移除上限 clamp.
+- Tests:
+  - [GsplatLidarScanTests.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Tests/Editor/GsplatLidarScanTests.cs)
+    - 新增: `ValidateLidarSerializedFields_DoesNotClampAzimuthBinsMax_*` 两条单测,锁定“大值不再被 clamp”的语义.
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`):
+  - total=48, passed=46, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_azimuth_uncap_2026-03-03_122028_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_azimuth_uncap_2026-03-03_122028_noquit.log`
