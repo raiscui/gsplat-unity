@@ -26,6 +26,8 @@ namespace Gsplat.Editor
                 nameof(GsplatSequenceRenderer.LidarDepthNear),
                 nameof(GsplatSequenceRenderer.LidarDepthFar),
                 nameof(GsplatSequenceRenderer.LidarPointRadiusPixels),
+                nameof(GsplatSequenceRenderer.LidarShowDuration),
+                nameof(GsplatSequenceRenderer.LidarHideDuration),
                 nameof(GsplatSequenceRenderer.LidarShowHideWarpPixels),
                 nameof(GsplatSequenceRenderer.LidarShowHideNoiseScale),
                 nameof(GsplatSequenceRenderer.LidarShowHideNoiseSpeed),
@@ -87,6 +89,14 @@ namespace Gsplat.Editor
                 EditorGUILayout.LabelField("Timing", EditorStyles.boldLabel);
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarUpdateHz)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarRotationHz)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarShowDuration)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarHideDuration)));
+                EditorGUILayout.HelpBox(
+                    "提示:\n" +
+                    "- LidarShowDuration/LidarHideDuration 仅影响 RadarScan 开/关的淡入淡出.\n" +
+                    "- < 0 时会复用 RenderStyleSwitchDurationSeconds.\n" +
+                    "- 它们不影响高斯/ParticleDots 的显隐燃烧环动画(ShowDuration/HideDuration).",
+                    MessageType.Info);
 
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField("Visual", EditorStyles.boldLabel);
@@ -170,8 +180,9 @@ namespace Gsplat.Editor
             EditorGUILayout.LabelField("Render Style", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox(
                 "说明: 直接修改 RenderStyle 枚举是硬切(不会播放切换动画).\n" +
-                "使用下方按钮可播放动画切换(默认 easeInOutQuart,时长为 RenderStyleSwitchDurationSeconds).\n" +
-                "RadarScan(动画) 会自动切到 ParticleDots 并开启雷达扫描模式.",
+                "使用下方按钮可播放动画切换:\n" +
+                "- Gaussian/ParticleDots: 时长=RenderStyleSwitchDurationSeconds(默认 easeInOutQuart).\n" +
+                "- RadarScan: RenderStyle 仍用 RenderStyleSwitchDurationSeconds,但雷达淡入/淡出优先用 LidarShowDuration/LidarHideDuration(>=0),否则复用 RenderStyleSwitchDurationSeconds.",
                 MessageType.Info);
 
             var anyDurationZero = false;
@@ -191,8 +202,9 @@ namespace Gsplat.Editor
             if (anyDurationZero)
             {
                 EditorGUILayout.HelpBox(
-                    "注意: 部分对象的 RenderStyleSwitchDurationSeconds <= 0,动画会退化为硬切.\n" +
-                    "如需动画,请把 RenderStyleSwitchDurationSeconds 设为大于 0 的值(例如 1.5).",
+                    "注意: 部分对象的 RenderStyleSwitchDurationSeconds <= 0.\n" +
+                    "- RenderStyle 切换动画会退化为硬切.\n" +
+                    "- RadarScan 的淡入淡出若仍希望有动画,请设置 LidarShowDuration/LidarHideDuration 为 >0(或把 RenderStyleSwitchDurationSeconds 设为 >0).",
                     MessageType.Warning);
             }
 

@@ -305,3 +305,49 @@
 **目前在阶段4(视觉验证与提交)**
 - shader 修复与自动化测试已完成.
 - 接下来只剩: 视觉确认(Show 起始是否仍弹球) + git commit.
+
+## 2026-03-03 14:23:28 +0800 新需求: RadarScan(LiDAR) 独立 ShowDuration/HideDuration
+
+### 用户需求
+
+- 没看到 RadarScan(LiDAR) 独立的 ShowDuration/HideDuration.
+- 希望 RadarScan 的淡入(show)/淡出(hide)时长可以独立设置.
+  - 不要再强绑定 `RenderStyleSwitchDurationSeconds`.
+  - 不要影响高斯/ParticleDots 的显隐 ShowDuration/HideDuration.
+
+### 现状
+
+- `SetRadarScanEnabled()` 当前在 `durationSeconds < 0` 时默认复用 `RenderStyleSwitchDurationSeconds`.
+- 因此用户无法单独调雷达开/关的淡入淡出速度.
+
+### 设计决定(兼容旧项目)
+
+- 新增两个 LiDAR 专用字段:
+  - `LidarShowDuration` (show 淡入时长)
+  - `LidarHideDuration` (hide 淡出时长)
+- 兼容策略: 默认值为 `-1` 表示“复用 RenderStyleSwitchDurationSeconds”.
+  - 旧项目升级后行为不变.
+  - 需要独立时,把它们改为 `>=0` 即可覆盖.
+
+### 下一步行动
+
+- [x] Runtime: `GsplatRenderer/GsplatSequenceRenderer` 增加上述两个字段.
+- [x] Runtime: `SetRadarScanEnabled()` 在 `durationSeconds < 0` 时,按 show/hide 分别使用 `LidarShowDuration/LidarHideDuration`.
+- [x] Runtime: `ValidateLidarSerializedFields()` 增加 NaN/Inf/负数防御(负数归一化为 -1).
+- [x] Editor: 在 LiDAR 面板中暴露 `LidarShowDuration/LidarHideDuration` 并提示 "<0 复用 RenderStyleSwitchDurationSeconds".
+- [x] Tests: 扩展 `GsplatLidarScanTests` 锁定 clamp 语义.
+- [x] 回归 `_tmp_gsplat_pkgtests` EditMode `Gsplat.Tests`.
+- [ ] git commit.
+
+### 回归(证据)
+
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`):
+  - total=52, passed=50, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_duration_overrides_2026-03-03_142917_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_duration_overrides_2026-03-03_142917_noquit.log`
+
+### 状态
+
+**目前在阶段4(git 提交)**
+- 代码/Editor/Tests/回归已完成.
+- 下一步只剩一次 git commit.

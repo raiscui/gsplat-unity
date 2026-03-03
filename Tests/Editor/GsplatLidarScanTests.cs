@@ -48,6 +48,18 @@ namespace Gsplat.Tests
             return (T)f.GetValue(obj);
         }
 
+        static float InvokeResolveRadarScanVisibilityDurationSeconds(object obj, string ownerName, bool enableRadarScan,
+            float durationSeconds)
+        {
+            // 说明:
+            // - ResolveRadarScanVisibilityDurationSeconds 是 RadarScan 开/关淡入淡出时长的决策逻辑.
+            // - 我们用反射锁定其语义,避免未来又把 LiDAR 的时长重新绑回 RenderStyleSwitchDurationSeconds.
+            var m = obj.GetType().GetMethod("ResolveRadarScanVisibilityDurationSeconds",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(m, $"Expected {ownerName}.ResolveRadarScanVisibilityDurationSeconds to exist.");
+            return (float)m.Invoke(obj, new object[] { enableRadarScan, durationSeconds });
+        }
+
         static void SetLidarFieldsToInvalidValues(GsplatRenderer r)
         {
             // 说明: 这组非法值覆盖常见风险:
@@ -70,6 +82,8 @@ namespace Gsplat.Tests
             r.LidarDepthFar = 0.5f;
 
             r.LidarPointRadiusPixels = float.NegativeInfinity;
+            r.LidarShowDuration = float.NaN;
+            r.LidarHideDuration = float.PositiveInfinity;
             r.LidarShowHideWarpPixels = float.NaN;
             r.LidarShowHideNoiseScale = float.NaN;
             r.LidarShowHideNoiseSpeed = float.PositiveInfinity;
@@ -101,6 +115,8 @@ namespace Gsplat.Tests
             r.LidarDepthFar = 0.5f;
 
             r.LidarPointRadiusPixels = float.NegativeInfinity;
+            r.LidarShowDuration = float.NaN;
+            r.LidarHideDuration = float.PositiveInfinity;
             r.LidarShowHideWarpPixels = float.NaN;
             r.LidarShowHideNoiseScale = float.NaN;
             r.LidarShowHideNoiseSpeed = float.PositiveInfinity;
@@ -137,6 +153,8 @@ namespace Gsplat.Tests
             Assert.AreEqual(2.0f, r.LidarDepthFar);
 
             Assert.AreEqual(2.0f, r.LidarPointRadiusPixels);
+            Assert.AreEqual(-1.0f, r.LidarShowDuration);
+            Assert.AreEqual(-1.0f, r.LidarHideDuration);
             Assert.AreEqual(6.0f, r.LidarShowHideWarpPixels);
             Assert.AreEqual(-1.0f, r.LidarShowHideNoiseScale);
             Assert.AreEqual(-1.0f, r.LidarShowHideNoiseSpeed);
@@ -164,6 +182,8 @@ namespace Gsplat.Tests
             Assert.AreEqual(2048, r.LidarAzimuthBins);
             Assert.AreEqual(GsplatUtils.k_LidarDefaultBeamCount, r.LidarBeamCount);
             Assert.AreEqual(2.0f, r.LidarDepthFar);
+            Assert.AreEqual(-1.0f, r.LidarShowDuration);
+            Assert.AreEqual(-1.0f, r.LidarHideDuration);
             Assert.AreEqual(6.0f, r.LidarShowHideWarpPixels);
             Assert.AreEqual(-1.0f, r.LidarShowHideNoiseScale);
             Assert.AreEqual(-1.0f, r.LidarShowHideNoiseSpeed);
@@ -264,6 +284,69 @@ namespace Gsplat.Tests
 
             var p = GetPrivateField<float>(r, nameof(GsplatSequenceRenderer), "m_lidarColorAnimProgress01");
             Assert.AreEqual(0.5f, p, 1e-6f);
+        }
+
+        [Test]
+        public void ResolveRadarScanVisibilityDurationSeconds_UsesOverridesOrFallback_GsplatRenderer()
+        {
+            var r = (GsplatRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatRenderer));
+
+            r.RenderStyleSwitchDurationSeconds = 1.5f;
+            r.LidarShowDuration = 0.7f;
+            r.LidarHideDuration = 0.9f;
+
+            // durationSeconds<0: 优先用 LiDAR 专用字段.
+            Assert.AreEqual(0.7f,
+                InvokeResolveRadarScanVisibilityDurationSeconds(r, nameof(GsplatRenderer), enableRadarScan: true, durationSeconds: -1.0f),
+                1e-6f);
+            Assert.AreEqual(0.9f,
+                InvokeResolveRadarScanVisibilityDurationSeconds(r, nameof(GsplatRenderer), enableRadarScan: false, durationSeconds: -1.0f),
+                1e-6f);
+
+            // override>=0: 强制使用 override.
+            Assert.AreEqual(2.2f,
+                InvokeResolveRadarScanVisibilityDurationSeconds(r, nameof(GsplatRenderer), enableRadarScan: true, durationSeconds: 2.2f),
+                1e-6f);
+
+            // LiDAR 字段<0: 回退到 RenderStyleSwitchDurationSeconds.
+            r.LidarShowDuration = -1.0f;
+            r.LidarHideDuration = -1.0f;
+            Assert.AreEqual(1.5f,
+                InvokeResolveRadarScanVisibilityDurationSeconds(r, nameof(GsplatRenderer), enableRadarScan: true, durationSeconds: -1.0f),
+                1e-6f);
+            Assert.AreEqual(1.5f,
+                InvokeResolveRadarScanVisibilityDurationSeconds(r, nameof(GsplatRenderer), enableRadarScan: false, durationSeconds: -1.0f),
+                1e-6f);
+        }
+
+        [Test]
+        public void ResolveRadarScanVisibilityDurationSeconds_UsesOverridesOrFallback_GsplatSequenceRenderer()
+        {
+            var r = (GsplatSequenceRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatSequenceRenderer));
+
+            r.RenderStyleSwitchDurationSeconds = 1.5f;
+            r.LidarShowDuration = 0.7f;
+            r.LidarHideDuration = 0.9f;
+
+            Assert.AreEqual(0.7f,
+                InvokeResolveRadarScanVisibilityDurationSeconds(r, nameof(GsplatSequenceRenderer), enableRadarScan: true, durationSeconds: -1.0f),
+                1e-6f);
+            Assert.AreEqual(0.9f,
+                InvokeResolveRadarScanVisibilityDurationSeconds(r, nameof(GsplatSequenceRenderer), enableRadarScan: false, durationSeconds: -1.0f),
+                1e-6f);
+
+            Assert.AreEqual(2.2f,
+                InvokeResolveRadarScanVisibilityDurationSeconds(r, nameof(GsplatSequenceRenderer), enableRadarScan: true, durationSeconds: 2.2f),
+                1e-6f);
+
+            r.LidarShowDuration = -1.0f;
+            r.LidarHideDuration = -1.0f;
+            Assert.AreEqual(1.5f,
+                InvokeResolveRadarScanVisibilityDurationSeconds(r, nameof(GsplatSequenceRenderer), enableRadarScan: true, durationSeconds: -1.0f),
+                1e-6f);
+            Assert.AreEqual(1.5f,
+                InvokeResolveRadarScanVisibilityDurationSeconds(r, nameof(GsplatSequenceRenderer), enableRadarScan: false, durationSeconds: -1.0f),
+                1e-6f);
         }
 
         [Test]

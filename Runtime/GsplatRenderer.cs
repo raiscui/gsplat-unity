@@ -156,6 +156,22 @@ namespace Gsplat
                  "默认 2px,可调.")]
         public float LidarPointRadiusPixels = 2.0f;
 
+        [Tooltip("RadarScan(LiDAR) show(淡入)动画时长(秒).\n" +
+                 "说明:\n" +
+                 "- 仅影响 RadarScan 模式的开关淡入淡出,不影响高斯/ParticleDots 的显隐燃烧环动画(ShowDuration/HideDuration).\n" +
+                 "- < 0: 复用 RenderStyleSwitchDurationSeconds.\n" +
+                 "- = 0: 立即显示(无淡入).\n" +
+                 "- > 0: 使用该时长淡入.")]
+        public float LidarShowDuration = -1.0f;
+
+        [Tooltip("RadarScan(LiDAR) hide(淡出)动画时长(秒).\n" +
+                 "说明:\n" +
+                 "- 仅影响 RadarScan 模式的开关淡入淡出.\n" +
+                 "- < 0: 复用 RenderStyleSwitchDurationSeconds.\n" +
+                 "- = 0: 立即隐藏(无淡出).\n" +
+                 "- > 0: 使用该时长淡出.")]
+        public float LidarHideDuration = -1.0f;
+
         [Min(0.0f)]
         [Tooltip("LiDAR show/hide 期间的噪声位移幅度(屏幕像素,px).\n" +
                  "说明:\n" +
@@ -2112,6 +2128,27 @@ namespace Gsplat
         // --------------------------------------------------------------------
         // Public API: Render style 切换(Gaussian <-> ParticleDots)
         // --------------------------------------------------------------------
+        float ResolveRadarScanVisibilityDurationSeconds(bool enableRadarScan, float durationSeconds)
+        {
+            // 说明:
+            // - SetRadarScanEnabled 支持一个 durationSeconds override.
+            // - 当 override < 0 时,我们使用 LiDAR 专用 show/hide 时长(若 >=0),否则回退到 RenderStyleSwitchDurationSeconds.
+            // - 目标: 让 RadarScan 的淡入/淡出时长可独立调参,且默认不破坏旧项目行为.
+            var d = durationSeconds;
+            if (d < 0.0f)
+            {
+                var overrideD = enableRadarScan ? LidarShowDuration : LidarHideDuration;
+                if (!float.IsNaN(overrideD) && !float.IsInfinity(overrideD) && overrideD >= 0.0f)
+                    d = overrideD;
+                else
+                    d = RenderStyleSwitchDurationSeconds;
+            }
+
+            if (float.IsNaN(d) || float.IsInfinity(d) || d < 0.0f)
+                d = 0.0f;
+            return d;
+        }
+
         public void SetRenderStyleAndRadarScan(GsplatRenderStyle style, bool enableRadarScan, bool animated = true,
             float durationSeconds = -1.0f)
         {
@@ -2143,11 +2180,7 @@ namespace Gsplat
 
         public void SetRadarScanEnabled(bool enableRadarScan, bool animated = true, float durationSeconds = -1.0f)
         {
-            var d = durationSeconds;
-            if (d < 0.0f)
-                d = RenderStyleSwitchDurationSeconds;
-            if (float.IsNaN(d) || float.IsInfinity(d) || d < 0.0f)
-                d = 0.0f;
+            var d = ResolveRadarScanVisibilityDurationSeconds(enableRadarScan, durationSeconds);
 
             EnableLidarScan = enableRadarScan;
 
@@ -3602,6 +3635,14 @@ namespace Gsplat
                 LidarPointRadiusPixels = 2.0f;
             if (LidarPointRadiusPixels < 0.0f)
                 LidarPointRadiusPixels = 0.0f;
+
+            // RadarScan show/hide duration:
+            // - <0 表示复用 RenderStyleSwitchDurationSeconds.
+            // - 这里把所有负数归一化为 -1,避免出现 -0.5 这类“半合法”值污染逻辑.
+            if (float.IsNaN(LidarShowDuration) || float.IsInfinity(LidarShowDuration) || LidarShowDuration < 0.0f)
+                LidarShowDuration = -1.0f;
+            if (float.IsNaN(LidarHideDuration) || float.IsInfinity(LidarHideDuration) || LidarHideDuration < 0.0f)
+                LidarHideDuration = -1.0f;
 
             if (float.IsNaN(LidarShowHideWarpPixels) || float.IsInfinity(LidarShowHideWarpPixels) || LidarShowHideWarpPixels < 0.0f)
                 LidarShowHideWarpPixels = 6.0f;

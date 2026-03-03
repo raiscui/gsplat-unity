@@ -114,3 +114,26 @@
 - 自动化回归:
   - EditMode `Gsplat.Tests`: total=50, passed=48, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_show_start_from_zero_2026-03-03_132849_noquit.xml`
+
+## 2026-03-03 14:23:28 +0800 追加: RadarScan 独立 ShowDuration/HideDuration
+
+- 需求: RadarScan(LiDAR) 的开关淡入/淡出时长要独立调参.
+- 兼容策略: 新字段默认 `-1` 表示复用 `RenderStyleSwitchDurationSeconds`.
+- 目标: 不影响高斯/ParticleDots 的 `ShowDuration/HideDuration`(燃烧环显隐).
+
+- 实际落地:
+  - Runtime:
+    - `GsplatRenderer/GsplatSequenceRenderer` 新增 `LidarShowDuration/LidarHideDuration`.
+    - `SetRadarScanEnabled()` 在 durationSeconds<0 时,show/hide 分别优先使用 LiDAR 专用时长(>=0),否则回退到 RenderStyleSwitchDurationSeconds.
+    - `ValidateLidarSerializedFields()` 对新字段做 NaN/Inf/负数归一化(-1).
+  - Editor:
+    - LiDAR 面板的 Timing 区域暴露 `LidarShowDuration/LidarHideDuration` 并提示 "<0 复用 RenderStyleSwitchDurationSeconds".
+    - RenderStyle 区域 helpbox/warn 文案同步更新,避免误导.
+  - Tests:
+    - `GsplatLidarScanTests` 扩展 clamp 断言.
+    - 新增反射测试锁定 `ResolveRadarScanVisibilityDurationSeconds` 的 override/fallback 语义.
+
+- 自动化回归:
+  - Unity 6000.3.8f1, EditMode `Gsplat.Tests`: total=52, passed=50, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_duration_overrides_2026-03-03_142917_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_duration_overrides_2026-03-03_142917_noquit.log`

@@ -690,3 +690,48 @@
   - total=50, passed=48, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_show_start_from_zero_2026-03-03_132849_noquit.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_show_start_from_zero_2026-03-03_132849_noquit.log`
+
+## 2026-03-03 14:30:00 +0800
+- RadarScan(LiDAR) 支持独立的 ShowDuration/HideDuration(开关淡入淡出),不再强绑定 RenderStyleSwitchDurationSeconds.
+
+### 背景与目标
+
+- 用户需求: RadarScan 的 show/hide 时长要独立设置.
+- 约束: 不能影响高斯/ParticleDots 的显隐燃烧环动画 `ShowDuration/HideDuration`.
+- 兼容策略: 默认保持旧行为.
+
+### 变更内容
+
+- Runtime: 新增 LiDAR 专用时长字段
+  - [GsplatRenderer.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/GsplatRenderer.cs)
+  - [GsplatSequenceRenderer.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/GsplatSequenceRenderer.cs)
+  - 新增字段:
+    - `LidarShowDuration`(show 淡入时长)
+    - `LidarHideDuration`(hide 淡出时长)
+  - 默认值 `-1`: 表示复用 `RenderStyleSwitchDurationSeconds`(兼容旧项目).
+  - `SetRadarScanEnabled()` 行为:
+    - 当 `durationSeconds < 0` 时:
+      - show: 若 `LidarShowDuration >= 0` 则用它,否则回退到 `RenderStyleSwitchDurationSeconds`.
+      - hide: 若 `LidarHideDuration >= 0` 则用它,否则回退到 `RenderStyleSwitchDurationSeconds`.
+    - 当 `durationSeconds >= 0` 时: 强制使用 override.
+  - `ValidateLidarSerializedFields()` 增加 NaN/Inf/负数防御,把负数统一归一为 `-1`.
+
+- Editor: LiDAR 面板暴露新字段
+  - [GsplatRendererEditor.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Editor/GsplatRendererEditor.cs)
+  - [GsplatSequenceRendererEditor.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Editor/GsplatSequenceRendererEditor.cs)
+  - 在 LiDAR 的 "Timing" 区域新增:
+    - `LidarShowDuration`
+    - `LidarHideDuration`
+  - 同步更新 RenderStyle 区域提示文案,解释 RadarScan 的时长来源.
+
+- Tests:
+  - [GsplatLidarScanTests.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Tests/Editor/GsplatLidarScanTests.cs)
+    - clamp 测试覆盖新字段.
+    - 新增测试锁定 "override/fallback" 的决策逻辑.
+
+### 回归(证据)
+
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`):
+  - total=52, passed=50, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_duration_overrides_2026-03-03_142917_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_duration_overrides_2026-03-03_142917_noquit.log`
