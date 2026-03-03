@@ -363,6 +363,8 @@
 
 - [x] Editor: 在 LiDAR 面板中新增 "Transition" 小节.
   - `EnableLidarScan` 关闭时也显示 `LidarShowDuration/LidarHideDuration`.
+- [x] git commit.
+  - commit: `b9ea406`
 
 ### 回归(证据)
 
@@ -373,6 +375,5 @@
 
 ### 状态
 
-**目前在阶段4(git 提交)**
-- 代码改动已完成并回归通过.
-- 下一步: git commit.
+**目前在阶段4(完成)**
+- Transition 字段的可见性补强已提交.
