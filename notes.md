@@ -84,3 +84,12 @@
 - 兼容策略:
   - 默认值用 `-1` 表示“复用全局 NoiseScale/NoiseSpeed”.
   - 这样升级后旧项目行为不变,需要独立时再把值改为 >=0 覆盖即可.
+
+## 2026-03-03 12:28:24 +0800 追加: LiDAR ColorMode(动画)按钮无效的根因
+
+- 现象: Inspector 中 `LidarColorMode` 下方的 “Depth(动画) / SplatColor(动画)” 按钮按下后动画不走,看起来无效.
+- 根因: `SyncLidarColorBlendTargetFromSerializedMode(animated: true)` 的早退条件写错了.
+  - 该函数在 Update/OnValidate 中会被频繁调用,用于“脚本直接改字段”时的自愈同步.
+  - 但旧逻辑在 `m_lidarColorAnimating=true` 时不会早退,反而每帧都重新 `BeginLidarColorTransition(...)`.
+  - 结果是 `m_lidarColorAnimProgress01` 每帧被重置为 0,动画永远走不完.
+- 修复策略: 当 `m_lidarColorAnimTargetBlend01` 已经等于目标 target 时,无论当前是否 animating,都直接早退,避免重复 Begin.

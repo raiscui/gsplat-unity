@@ -638,3 +638,25 @@
   - total=48, passed=46, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_azimuth_uncap_2026-03-03_122028_noquit.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_azimuth_uncap_2026-03-03_122028_noquit.log`
+
+## 2026-03-03 12:29:20 +0800
+- 修复 Inspector 中 `LidarColorMode` 下方 “Depth(动画) / SplatColor(动画)” 按钮无效的问题.
+
+### 根因
+- `SyncLidarColorBlendTargetFromSerializedMode(animated: true)` 在 Update/OnValidate 中会被频繁调用.
+- 旧逻辑在 `m_lidarColorAnimating=true` 时仍会反复 `BeginLidarColorTransition(...)`,导致 progress 每帧被重置为 0,动画永远走不完.
+
+### 修复
+- Runtime:
+  - [GsplatRenderer.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/GsplatRenderer.cs)
+  - [GsplatSequenceRenderer.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/GsplatSequenceRenderer.cs)
+  - 当 `m_lidarColorAnimTargetBlend01` 已经等于目标 target 时,直接早退,避免重复 Begin.
+- Tests:
+  - [GsplatLidarScanTests.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Tests/Editor/GsplatLidarScanTests.cs)
+  - 新增回归: `SyncLidarColorBlendTargetFromSerializedMode_DoesNotRestartWhenAnimating_*`.
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`):
+  - total=50, passed=48, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_color_buttons_2026-03-03_122758_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_color_buttons_2026-03-03_122758_noquit.log`

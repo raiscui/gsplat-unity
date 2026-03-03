@@ -2502,7 +2502,11 @@ namespace Gsplat
         void SyncLidarColorBlendTargetFromSerializedMode(bool animated)
         {
             var target = LidarColorMode == GsplatLidarColorMode.SplatColorSH0 ? 1.0f : 0.0f;
-            if (!m_lidarColorAnimating && Mathf.Abs(m_lidarColorAnimTargetBlend01 - target) < 1e-6f)
+            // 重要:
+            // - 该函数可能会在 Update/OnValidate 中被频繁调用,用于“脚本直接改字段”的自愈同步.
+            // - 但如果我们在已经 animating 且 target 不变时仍反复 Begin,会导致 progress 每帧被重置为 0,
+            //   表现为 Inspector 的 "Depth(动画)/SplatColor(动画)" 按钮按下后动画不走(看起来无效).
+            if (Mathf.Abs(m_lidarColorAnimTargetBlend01 - target) < 1e-6f)
                 return;
 
             BeginLidarColorTransition(target, animated, k_lidarColorSwitchDurationSeconds);

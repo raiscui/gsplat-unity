@@ -23,6 +23,31 @@ namespace Gsplat.Tests
             m.Invoke(obj, null);
         }
 
+        static void InvokeSyncLidarColorBlendTargetFromSerializedMode(object obj, string ownerName, bool animated)
+        {
+            // 说明:
+            // - RadarScan 的颜色切换按钮依赖 LiDAR color transition 的状态机推进.
+            // - 我们用反射直接调用内部 sync 函数,避免把内部实现暴露成 public API.
+            var m = obj.GetType().GetMethod("SyncLidarColorBlendTargetFromSerializedMode",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(m, $"Expected {ownerName}.SyncLidarColorBlendTargetFromSerializedMode to exist.");
+            m.Invoke(obj, new object[] { animated });
+        }
+
+        static void SetPrivateField<T>(object obj, string ownerName, string fieldName, T value)
+        {
+            var f = obj.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(f, $"Expected private field {ownerName}.{fieldName} to exist.");
+            f.SetValue(obj, value);
+        }
+
+        static T GetPrivateField<T>(object obj, string ownerName, string fieldName)
+        {
+            var f = obj.GetType().GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(f, $"Expected private field {ownerName}.{fieldName} to exist.");
+            return (T)f.GetValue(obj);
+        }
+
         static void SetLidarFieldsToInvalidValues(GsplatRenderer r)
         {
             // 说明: 这组非法值覆盖常见风险:
@@ -199,6 +224,46 @@ namespace Gsplat.Tests
 
             InvokeValidateLidarSerializedFields(r, nameof(GsplatSequenceRenderer));
             Assert.AreEqual(16384, r.LidarAzimuthBins);
+        }
+
+        [Test]
+        public void SyncLidarColorBlendTargetFromSerializedMode_DoesNotRestartWhenAnimating_GsplatRenderer()
+        {
+            // 说明:
+            // - 之前的 bug: Update/OnValidate 每帧调用 sync 时,在 m_lidarColorAnimating=true 的情况下会反复 Begin,
+            //   使 progress 被重置为 0,导致 Inspector 的颜色切换按钮看起来“按了但不动”.
+            // - 这里锁定语义: 当已经在向同一 target 动画时,sync 不应重启动画.
+            var r = (GsplatRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatRenderer));
+            r.EnableLidarScan = true;
+            r.LidarColorMode = GsplatLidarColorMode.SplatColorSH0;
+
+            SetPrivateField(r, nameof(GsplatRenderer), "m_lidarColorAnimating", true);
+            SetPrivateField(r, nameof(GsplatRenderer), "m_lidarColorAnimTargetBlend01", 1.0f);
+            SetPrivateField(r, nameof(GsplatRenderer), "m_lidarColorAnimProgress01", 0.5f);
+            SetPrivateField(r, nameof(GsplatRenderer), "m_lidarColorBlend01", 0.25f);
+
+            InvokeSyncLidarColorBlendTargetFromSerializedMode(r, nameof(GsplatRenderer), animated: true);
+
+            var p = GetPrivateField<float>(r, nameof(GsplatRenderer), "m_lidarColorAnimProgress01");
+            Assert.AreEqual(0.5f, p, 1e-6f);
+        }
+
+        [Test]
+        public void SyncLidarColorBlendTargetFromSerializedMode_DoesNotRestartWhenAnimating_GsplatSequenceRenderer()
+        {
+            var r = (GsplatSequenceRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatSequenceRenderer));
+            r.EnableLidarScan = true;
+            r.LidarColorMode = GsplatLidarColorMode.SplatColorSH0;
+
+            SetPrivateField(r, nameof(GsplatSequenceRenderer), "m_lidarColorAnimating", true);
+            SetPrivateField(r, nameof(GsplatSequenceRenderer), "m_lidarColorAnimTargetBlend01", 1.0f);
+            SetPrivateField(r, nameof(GsplatSequenceRenderer), "m_lidarColorAnimProgress01", 0.5f);
+            SetPrivateField(r, nameof(GsplatSequenceRenderer), "m_lidarColorBlend01", 0.25f);
+
+            InvokeSyncLidarColorBlendTargetFromSerializedMode(r, nameof(GsplatSequenceRenderer), animated: true);
+
+            var p = GetPrivateField<float>(r, nameof(GsplatSequenceRenderer), "m_lidarColorAnimProgress01");
+            Assert.AreEqual(0.5f, p, 1e-6f);
         }
 
         [Test]

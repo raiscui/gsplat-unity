@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed RenderStyle switching (Gaussian <-> ParticleDots) popping for splats near the screen edge (those culled by the dot frustum cull at the transition endpoints): they now smoothly fade in/out instead of abruptly disappearing/appearing at the start/end of the animation.
 - Fixed LiDAR point cloud looking "too far" / like a thick outer shell by storing the projected depth onto the bin-center ray (instead of the Euclidean distance), making sampling and reconstruction consistent.
 - Fixed LiDAR mode switches popping: `Depth <-> SplatColorSH0` now blends smoothly, and `RadarScan -> Gaussian/ParticleDots` now fades out LiDAR visibility instead of hard-cutting.
+- Fixed LiDAR `Depth(动画)` / `SplatColor(动画)` Inspector buttons appearing to do nothing by preventing the LiDAR color transition sync from restarting the animation every frame.
 - Fixed a black-frame gap when switching `Gaussian/ParticleDots -> RadarScan` with `HideSplatsWhenLidarEnabled=true`, by delaying splat hiding until radar fade-in is nearly complete.
 - Fixed abrupt bright-sphere popping at `Hide` start by making hide ring/trail radius start very small and then ramp up (geometry-first, not transparency-first).
 - Fixed `Show/Hide` interrupt glitches by introducing source-mask compositing: pressing `Hide` during `Show` (or `Show` during `Hide`) now keeps the current visible distribution as a source mask and overlays the new transition on top, avoiding reverse playback and full-frame pops during rapid toggles.

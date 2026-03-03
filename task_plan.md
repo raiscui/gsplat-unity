@@ -222,6 +222,37 @@
 - [x] Runtime: 移除 `LidarAzimuthBins > 4096` 的 clamp(只保留最小值防御).
 - [x] Tests: 增加单测锁定“大值不再被 clamp”.
 - [x] 回归 `_tmp_gsplat_pkgtests` EditMode `Gsplat.Tests`.
+- [x] git commit.
+  - commit: `c3e3d6c`
+
+### 状态
+
+**目前在阶段4(回归与提交)**
+- 代码与回归已完成,只剩一次 git commit.
+- 已提交 git.
+- 回归(证据):
+  - Unity EditMode `Gsplat.Tests`: total=48, passed=46, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_azimuth_uncap_2026-03-03_122028_noquit.xml`
+
+## 2026-03-03 12:26:01 +0800 新问题: Inspector 的 LiDAR ColorMode(动画)按钮无效
+
+### 现象(用户反馈)
+
+- 在 Inspector 面板中,`LidarColorMode` 下方的 “Depth(动画) / SplatColor(动画)” 按钮按下无效,或表现异常.
+
+### 初步怀疑点(先从最可能的根因下手)
+
+- `GsplatRenderer/GsplatSequenceRenderer.Update()` 里每帧都会调用 `SyncLidarColorBlendTargetFromSerializedMode(animated: true)`.
+- 该函数当前的早退条件包含 `!m_lidarColorAnimating`,导致:
+  - 一旦开始颜色动画(`m_lidarColorAnimating=true`),每帧都会重新 `BeginLidarColorTransition(...)`.
+  - 这会把 `m_lidarColorAnimProgress01` 重置为 0,看起来就像按钮“按了但动画不走”.
+
+### 下一步行动
+
+- [x] Runtime: 修复 `SyncLidarColorBlendTargetFromSerializedMode` 的早退条件,避免在“已在向同一 target 动画”时重复重启动画.
+- [x] Tests: 增加回归单测,锁定该函数在 animating 且 target 不变时不会重置 progress.
+- [x] 回归 `_tmp_gsplat_pkgtests` EditMode `Gsplat.Tests`.
+- [x] Changelog/Worklog 追加记录.
 - [ ] git commit.
 
 ### 状态
@@ -229,5 +260,5 @@
 **目前在阶段4(回归与提交)**
 - 代码与回归已完成,只剩一次 git commit.
 - 回归(证据):
-  - Unity EditMode `Gsplat.Tests`: total=48, passed=46, failed=0, skipped=2
-  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_azimuth_uncap_2026-03-03_122028_noquit.xml`
+  - Unity EditMode `Gsplat.Tests`: total=50, passed=48, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_color_buttons_2026-03-03_122758_noquit.xml`
