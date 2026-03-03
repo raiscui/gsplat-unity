@@ -176,6 +176,20 @@ namespace Gsplat
                  "- 默认 6.")]
         public float LidarShowHideWarpPixels = 6.0f;
 
+        [Tooltip("LiDAR show/hide 的噪声空间频率(基于 model space).\n" +
+                 "说明:\n" +
+                 "- 仅影响 RadarScan(LiDAR) 的 show/hide 遮罩噪声与粒子位移(warp)使用的噪声场.\n" +
+                 "- < 0: 复用全局 NoiseScale.\n" +
+                 "- >= 0: 使用该值作为 LiDAR 专用 NoiseScale.")]
+        public float LidarShowHideNoiseScale = -1.0f;
+
+        [Tooltip("LiDAR show/hide 的噪声随时间变化速度.\n" +
+                 "说明:\n" +
+                 "- 仅影响 RadarScan(LiDAR) 的 show/hide.\n" +
+                 "- < 0: 复用全局 NoiseSpeed.\n" +
+                 "- >= 0: 使用该值作为 LiDAR 专用 NoiseSpeed.")]
+        public float LidarShowHideNoiseSpeed = -1.0f;
+
         [Tooltip("LiDAR show/hide 的 glow 颜色(仅影响 RadarScan 的 show/hide glow).\n" +
                  "说明:\n" +
                  "- 该参数不会影响高斯 show/hide 的 GlowColor.\n" +
@@ -2123,6 +2137,12 @@ namespace Gsplat
             if (float.IsNaN(LidarShowHideWarpPixels) || float.IsInfinity(LidarShowHideWarpPixels) || LidarShowHideWarpPixels < 0.0f)
                 LidarShowHideWarpPixels = 6.0f;
 
+            if (float.IsNaN(LidarShowHideNoiseScale) || float.IsInfinity(LidarShowHideNoiseScale) || LidarShowHideNoiseScale < 0.0f)
+                LidarShowHideNoiseScale = -1.0f;
+
+            if (float.IsNaN(LidarShowHideNoiseSpeed) || float.IsInfinity(LidarShowHideNoiseSpeed) || LidarShowHideNoiseSpeed < 0.0f)
+                LidarShowHideNoiseSpeed = -1.0f;
+
             if (float.IsNaN(LidarShowHideGlowColor.r) || float.IsNaN(LidarShowHideGlowColor.g) || float.IsNaN(LidarShowHideGlowColor.b) ||
                 float.IsInfinity(LidarShowHideGlowColor.r) || float.IsInfinity(LidarShowHideGlowColor.g) || float.IsInfinity(LidarShowHideGlowColor.b))
             {
@@ -2267,6 +2287,8 @@ namespace Gsplat
                 return;
 
             var showHideGlowIntensity = showHideMode == 2 ? LidarHideGlowIntensity : LidarShowGlowIntensity;
+            var showHideNoiseScale = LidarShowHideNoiseScale >= 0.0f ? LidarShowHideNoiseScale : NoiseScale;
+            var showHideNoiseSpeed = LidarShowHideNoiseSpeed >= 0.0f ? LidarShowHideNoiseSpeed : NoiseSpeed;
 
             m_lidarScan.RenderPointCloud(settings, targetCam, gameObject.layer, GammaToLinear,
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
@@ -2280,7 +2302,7 @@ namespace Gsplat
                 showHideGate, showHideMode, showHideProgress,
                 showHideSourceMaskMode, showHideSourceMaskProgress,
                 showHideCenterModel, showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
-                (int)VisibilityNoiseMode, NoiseStrength, NoiseScale, NoiseSpeed,
+                (int)VisibilityNoiseMode, NoiseStrength, showHideNoiseScale, showHideNoiseSpeed,
                 LidarShowHideWarpPixels, WarpStrength,
                 LidarShowHideGlowColor, showHideGlowIntensity);
         }
@@ -2319,6 +2341,8 @@ namespace Gsplat
                 return;
 
             var showHideGlowIntensity = showHideMode == 2 ? LidarHideGlowIntensity : LidarShowGlowIntensity;
+            var showHideNoiseScale = LidarShowHideNoiseScale >= 0.0f ? LidarShowHideNoiseScale : NoiseScale;
+            var showHideNoiseSpeed = LidarShowHideNoiseSpeed >= 0.0f ? LidarShowHideNoiseSpeed : NoiseSpeed;
 
             m_lidarScan.RenderPointCloud(settings, camera, gameObject.layer, GammaToLinear,
                 LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
@@ -2332,7 +2356,7 @@ namespace Gsplat
                 showHideGate, showHideMode, showHideProgress,
                 showHideSourceMaskMode, showHideSourceMaskProgress,
                 showHideCenterModel, showHideMaxRadius, showHideRingWidth, showHideTrailWidth,
-                (int)VisibilityNoiseMode, NoiseStrength, NoiseScale, NoiseSpeed,
+                (int)VisibilityNoiseMode, NoiseStrength, showHideNoiseScale, showHideNoiseSpeed,
                 LidarShowHideWarpPixels, WarpStrength,
                 LidarShowHideGlowColor, showHideGlowIntensity);
         }

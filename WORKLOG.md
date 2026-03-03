@@ -593,3 +593,29 @@
 - 单测补强:
   - [GsplatLidarScanTests.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Tests/Editor/GsplatLidarScanTests.cs)
     - 覆盖 LiDAR glow 字段的 clamp 行为.
+
+## 2026-03-03 12:16:30 +0800
+- RadarScan(LiDAR) show/hide 的 NoiseScale/NoiseSpeed 支持独立设置(不再被全局噪声参数强绑定).
+
+### 变更内容
+- Runtime: 增加 LiDAR 专用的 show/hide 噪声覆盖参数
+  - [GsplatRenderer.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/GsplatRenderer.cs)
+    - 新增: `LidarShowHideNoiseScale`, `LidarShowHideNoiseSpeed`.
+    - 默认值为 `-1`,表示复用全局 `NoiseScale/NoiseSpeed`,以尽量保持旧项目行为不变.
+    - LiDAR draw 提交时会计算 effective noiseScale/noiseSpeed,再传入 `GsplatLidarScan.RenderPointCloud(...)`.
+  - [GsplatSequenceRenderer.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/GsplatSequenceRenderer.cs)
+    - 同步新增字段与传参逻辑.
+
+- Editor: 在 LiDAR "Visual" 区域暴露新字段,并提示 "<0 复用全局"
+  - [GsplatRendererEditor.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Editor/GsplatRendererEditor.cs)
+  - [GsplatSequenceRendererEditor.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Editor/GsplatSequenceRendererEditor.cs)
+
+- Tests: 扩展 LiDAR 字段级 clamp 单测
+  - [GsplatLidarScanTests.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Tests/Editor/GsplatLidarScanTests.cs)
+    - NaN/Inf/负数会回退到 `-1`(复用全局),避免把非法值下发给 shader.
+
+### 测试与回归(证据)
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`):
+  - total=46, passed=44, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_noise_overrides_2026-03-03_121526_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_noise_overrides_2026-03-03_121526_noquit.log`

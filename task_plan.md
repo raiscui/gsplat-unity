@@ -165,3 +165,43 @@
 
 **目前在阶段4(回归与提交)**
 - 代码与测试已完成,接下来只剩一次 git commit,把本轮的 LiDAR glow 独立参数 + shader 节奏调参一起提交。
+
+## 2026-03-03 12:13:09 +0800 新需求: RadarScan 独立 NoiseScale/NoiseSpeed
+
+### 用户需求
+
+- 没看到 RadarScan(LiDAR) 独立的 NoiseScale/NoiseSpeed.
+- 希望它们可以单独设置,不要再复用高斯(show/hide)的全局 NoiseScale/NoiseSpeed.
+
+### 现状与约束
+
+- 当前 LiDAR show/hide 会把 `(int)VisibilityNoiseMode, NoiseStrength, NoiseScale, NoiseSpeed` 直接传入 `GsplatLidarScan.RenderPointCloud(...)`.
+- 这会导致:
+  - 调高斯 show/hide 的 NoiseScale/Speed 会影响 RadarScan.
+  - 用户无法对两条效果做独立调参.
+
+### 设计决定(尽量不破坏旧项目)
+
+- 新增 LiDAR 专用字段:
+  - `LidarShowHideNoiseScale`
+  - `LidarShowHideNoiseSpeed`
+- 默认值设为 `-1` 表示“复用全局 NoiseScale/NoiseSpeed”.
+  - 这样升级后旧项目默认行为不变.
+  - 需要独立时,把该值改为 >=0 即可覆盖.
+
+### 下一步行动
+
+- [x] Runtime: `GsplatRenderer/GsplatSequenceRenderer` 增加上述两个 LiDAR 字段,并在 LiDAR draw 提交时计算 effective noiseScale/noiseSpeed.
+- [x] Editor: 在 LiDAR "Visual" 区域显示两个新字段(用户可直接调参).
+- [x] Tests: 扩展 `ValidateLidarSerializedFields` 的单测,锁定 NaN/Inf/负数时回退到 -1(复用全局).
+- [x] Changelog/Worklog: 追加记录.
+- [x] 回归 `_tmp_gsplat_pkgtests` EditMode `Gsplat.Tests`.
+- [ ] git commit.
+
+### 状态
+
+**目前在阶段4(回归与提交)**
+- 代码与回归已完成,只剩一次 git commit.
+- 回归(证据):
+  - Unity EditMode `Gsplat.Tests`: total=46, passed=44, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_noise_overrides_2026-03-03_121526_noquit.xml`

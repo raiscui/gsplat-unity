@@ -46,6 +46,8 @@ namespace Gsplat.Tests
 
             r.LidarPointRadiusPixels = float.NegativeInfinity;
             r.LidarShowHideWarpPixels = float.NaN;
+            r.LidarShowHideNoiseScale = float.NaN;
+            r.LidarShowHideNoiseSpeed = float.PositiveInfinity;
             r.LidarShowHideGlowColor = new Color(float.NaN, 1.0f, 1.0f, 1.0f);
             r.LidarShowGlowIntensity = float.NaN;
             r.LidarHideGlowIntensity = float.PositiveInfinity;
@@ -75,6 +77,8 @@ namespace Gsplat.Tests
 
             r.LidarPointRadiusPixels = float.NegativeInfinity;
             r.LidarShowHideWarpPixels = float.NaN;
+            r.LidarShowHideNoiseScale = float.NaN;
+            r.LidarShowHideNoiseSpeed = float.PositiveInfinity;
             r.LidarShowHideGlowColor = new Color(float.NaN, 1.0f, 1.0f, 1.0f);
             r.LidarShowGlowIntensity = float.NaN;
             r.LidarHideGlowIntensity = float.PositiveInfinity;
@@ -109,6 +113,8 @@ namespace Gsplat.Tests
 
             Assert.AreEqual(2.0f, r.LidarPointRadiusPixels);
             Assert.AreEqual(6.0f, r.LidarShowHideWarpPixels);
+            Assert.AreEqual(-1.0f, r.LidarShowHideNoiseScale);
+            Assert.AreEqual(-1.0f, r.LidarShowHideNoiseSpeed);
             Assert.AreEqual(1.0f, r.LidarShowHideGlowColor.r);
             Assert.AreEqual(0.45f, r.LidarShowHideGlowColor.g, 1e-6f);
             Assert.AreEqual(0.1f, r.LidarShowHideGlowColor.b, 1e-6f);
@@ -134,6 +140,8 @@ namespace Gsplat.Tests
             Assert.AreEqual(GsplatUtils.k_LidarDefaultBeamCount, r.LidarBeamCount);
             Assert.AreEqual(2.0f, r.LidarDepthFar);
             Assert.AreEqual(6.0f, r.LidarShowHideWarpPixels);
+            Assert.AreEqual(-1.0f, r.LidarShowHideNoiseScale);
+            Assert.AreEqual(-1.0f, r.LidarShowHideNoiseSpeed);
             Assert.AreEqual(1.0f, r.LidarShowHideGlowColor.r);
             Assert.AreEqual(0.45f, r.LidarShowHideGlowColor.g, 1e-6f);
             Assert.AreEqual(0.1f, r.LidarShowHideGlowColor.b, 1e-6f);

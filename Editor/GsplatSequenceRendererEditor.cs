@@ -27,6 +27,8 @@ namespace Gsplat.Editor
                 nameof(GsplatSequenceRenderer.LidarDepthFar),
                 nameof(GsplatSequenceRenderer.LidarPointRadiusPixels),
                 nameof(GsplatSequenceRenderer.LidarShowHideWarpPixels),
+                nameof(GsplatSequenceRenderer.LidarShowHideNoiseScale),
+                nameof(GsplatSequenceRenderer.LidarShowHideNoiseSpeed),
                 nameof(GsplatSequenceRenderer.LidarShowHideGlowColor),
                 nameof(GsplatSequenceRenderer.LidarShowGlowIntensity),
                 nameof(GsplatSequenceRenderer.LidarHideGlowIntensity),
@@ -131,6 +133,12 @@ namespace Gsplat.Editor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarMinSplatOpacity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarPointRadiusPixels)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarShowHideWarpPixels)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarShowHideNoiseScale)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarShowHideNoiseSpeed)));
+                EditorGUILayout.HelpBox(
+                    "提示: LidarShowHideNoiseScale/LidarShowHideNoiseSpeed < 0 时会复用全局 NoiseScale/NoiseSpeed.\n" +
+                    "如需 RadarScan 独立调参,把它们改为 >= 0 即可覆盖.",
+                    MessageType.Info);
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarShowHideGlowColor)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarShowGlowIntensity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarHideGlowIntensity)));

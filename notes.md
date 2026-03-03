@@ -73,3 +73,14 @@
     - glowFactor 只有 ring,没有 tailInside afterglow,导致 hide glow 很快扫完就没了.
 - 计划:
   - 把 LiDAR 的 alphaMask 与 glowFactor 按高斯逻辑补齐,并把 glow 参数改为 LiDAR 专用(独立于高斯).
+
+## 2026-03-03 12:13:09 +0800 追加: RadarScan 独立 NoiseScale/NoiseSpeed
+
+- 用户需求: RadarScan(LiDAR) 想要独立的 NoiseScale/NoiseSpeed,不要复用高斯的全局 NoiseScale/NoiseSpeed.
+- 现状: `GsplatRenderer/GsplatSequenceRenderer` 调 `GsplatLidarScan.RenderPointCloud(...)` 时直接把 `NoiseScale/NoiseSpeed` 传入 LiDAR show/hide.
+- 决策: 增加两个 LiDAR 专用字段:
+  - `LidarShowHideNoiseScale`
+  - `LidarShowHideNoiseSpeed`
+- 兼容策略:
+  - 默认值用 `-1` 表示“复用全局 NoiseScale/NoiseSpeed”.
+  - 这样升级后旧项目行为不变,需要独立时再把值改为 >=0 覆盖即可.
