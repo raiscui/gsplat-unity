@@ -145,3 +145,41 @@
 - 回归:
   - EditMode `Gsplat.Tests`: total=52, passed=50, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_duration_inspector_2026-03-03_143314_noquit.xml`
+
+## 2026-03-03 15:44:19 +0800: LiDAR 扫过后变黑(亮度语义修正)
+
+- 根因:
+  - `GsplatLidar.shader` 旧逻辑让亮度随 `trail` 衰减到接近 0,但 alpha 不随 trail 变化.
+  - 在 alpha blend + ZWrite On 下,当亮度很小但仍未 discard 时,会表现为"黑点/黑片".
+- 修复思路:
+  - 引入未扫到区域的底色强度 `unscannedIntensity`.
+  - 每点强度使用 `lerp(unscannedIntensity, scanIntensity, trail)`.
+  - 当 `unscannedIntensity=0` 时,行为保持旧版.
+
+## 2026-03-03 16:12:40 +0800: LiDAR 强度按距离衰减(近强远弱)
+
+- 需求:
+  - `LidarIntensity` 与 `LidarUnscannedIntensity` 都要随距离衰减.
+  - 并且各自有独立的"衰减乘数"可调.
+- 落地公式(简单且稳定):
+  - `atten(dist)=1/(1+dist*decay)`
+  - `decay=0` 时,atten 恒为 1,保持旧行为.
+- 最终强度语义:
+  - `scanIntensity=LidarIntensity*atten(range, LidarIntensityDistanceDecay)`
+  - `unscannedIntensity=LidarUnscannedIntensity*atten(range, LidarUnscannedIntensityDistanceDecay)`
+  - `intensity=lerp(unscannedIntensity, scanIntensity, trail)`
+
+## 2026-03-03 18:16:30 +0800 追加: LiDAR 距离衰减增加 Exponential 模式(可切换)
+
+- 用户需求: 增加"指数衰减"选项,可切换衰减曲线形态.
+- 设计决定(兼容优先):
+  - 新增模式字段 `LidarIntensityDistanceDecayMode`(`Reciprocal` / `Exponential`),默认 `Reciprocal`.
+  - 继续复用既有两个衰减乘数:
+    - `LidarIntensityDistanceDecay`
+    - `LidarUnscannedIntensityDistanceDecay`
+  - 只改变 atten 函数的形态,不改变 decay 参数语义.
+- shader 端按每点 `range` 计算距离衰减:
+  - `Reciprocal`: `atten(dist)=1/(1+dist*decay)`
+  - `Exponential`: `atten(dist)=exp(-dist*decay)`(实现上使用 `exp2(-dist*decay/ln(2))`)
+- 防御:
+  - `ValidateLidarSerializedFields` 会把非法 enum 回退到 `Reciprocal`,避免序列化坏值导致意外落入指数模式.

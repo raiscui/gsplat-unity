@@ -753,3 +753,97 @@
   - total=52, passed=50, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_duration_inspector_2026-03-03_143314_noquit.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_duration_inspector_2026-03-03_143314_noquit.log`
+
+## 2026-03-03 15:43:07 +0800
+- LiDAR(RadarScan): 增加"未扫到区域底色强度"与"是否保留"选项,用于解决"扫过后变黑".
+  - 新增字段:
+    - `LidarKeepUnscannedPoints`(开关)
+    - `LidarUnscannedIntensity`(底色强度)
+  - Shader:
+    - `Runtime/Shaders/GsplatLidar.shader` 新增 `_LidarUnscannedIntensity`.
+    - 每点强度改为 `lerp(unscannedIntensity, scanIntensity, trail)`.
+  - Runtime:
+    - `Runtime/Lidar/GsplatLidarScan.cs` 增加 `_LidarUnscannedIntensity` MPB 下发.
+    - `Runtime/GsplatRenderer.cs`/`Runtime/GsplatSequenceRenderer.cs` 增加 Keep 决策函数,并把最终值传入 LiDAR draw.
+  - Editor:
+    - `Editor/GsplatRendererEditor.cs`/`Editor/GsplatSequenceRendererEditor.cs` 暴露新字段,并提示语义.
+  - Tests:
+    - `Tests/Editor/GsplatLidarShaderPropertyTests.cs` 增加 `_LidarUnscannedIntensity` 属性契约断言.
+    - `Tests/Editor/GsplatLidarScanTests.cs` 增加 clamp 断言与 Keep 决策逻辑回归.
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`): total=54, passed=52, failed=0, skipped=2
+- XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_unscanned_intensity_2026-03-03_154114_noquit.xml`
+- log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_unscanned_intensity_2026-03-03_154114_noquit.log`
+
+## 2026-03-03 16:11:53 +0800
+- LiDAR(RadarScan): `LidarIntensity`/`LidarUnscannedIntensity` 支持按距离衰减(近强远弱),并提供两个可调的衰减乘数.
+
+### 变更内容
+- Runtime:
+  - `Runtime/GsplatRenderer.cs`/`Runtime/GsplatSequenceRenderer.cs` 新增字段:
+    - `LidarIntensityDistanceDecay`
+    - `LidarUnscannedIntensityDistanceDecay`
+  - `ValidateLidarSerializedFields()` 增加 NaN/Inf/负数防御,非法值回退为 0(不衰减).
+  - `Runtime/Lidar/GsplatLidarScan.cs` 下发到 shader:
+    - `_LidarIntensityDistanceDecay`
+    - `_LidarUnscannedIntensityDistanceDecay`
+- Shader:
+  - `Runtime/Shaders/GsplatLidar.shader`:
+    - 新增 `_LidarIntensityDistanceDecay/_LidarUnscannedIntensityDistanceDecay`.
+    - 强度衰减函数:
+      - `atten(dist)=1/(1+dist*decay)`
+    - 最终强度语义:
+      - `scanIntensity=LidarIntensity*atten(range, LidarIntensityDistanceDecay)`
+      - `unscannedIntensity=LidarUnscannedIntensity*atten(range, LidarUnscannedIntensityDistanceDecay)`
+      - `lerp(unscannedIntensity, scanIntensity, trail)`
+- Editor:
+  - `Editor/GsplatRendererEditor.cs`/`Editor/GsplatSequenceRendererEditor.cs` 暴露两个衰减字段,并提示 0 表示不衰减.
+- Tests:
+  - `Tests/Editor/GsplatLidarShaderPropertyTests.cs` 扩展属性契约断言.
+  - `Tests/Editor/GsplatLidarScanTests.cs` 扩展 clamp 回归覆盖.
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`): total=54, passed=52, failed=0, skipped=2
+- XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_distance_decay_2026-03-03_161038_noquit.xml`
+- log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_distance_decay_2026-03-03_161038_noquit.log`
+
+## 2026-03-03 18:16:10 +0800
+- LiDAR(RadarScan): 距离衰减增加"指数衰减"模式,并提供可切换选项.
+  - 新增字段:
+    - `LidarIntensityDistanceDecayMode`(`Reciprocal` / `Exponential`,默认 `Reciprocal`).
+  - 说明:
+    - 继续复用 `LidarIntensityDistanceDecay/LidarUnscannedIntensityDistanceDecay` 两个衰减乘数.
+    - 仅改变距离衰减函数形态,不改变 decay 参数语义.
+
+### 变更内容
+
+- Runtime:
+  - `Runtime/GsplatUtils.cs`: 新增 enum `GsplatLidarDistanceDecayMode`.
+  - `Runtime/GsplatRenderer.cs`/`Runtime/GsplatSequenceRenderer.cs`:
+    - 新增 `LidarIntensityDistanceDecayMode` 字段(默认 Reciprocal).
+    - `ValidateLidarSerializedFields()` 增加非法 enum 防御,回退到 `Reciprocal`.
+    - LiDAR draw 提交时把 mode 传入 `GsplatLidarScan.RenderPointCloud(...)`.
+  - `Runtime/Lidar/GsplatLidarScan.cs`:
+    - 新增 shader property `_LidarIntensityDistanceDecayMode` 下发(0=Reciprocal,1=Exponential).
+- Shader:
+  - `Runtime/Shaders/GsplatLidar.shader`:
+    - 新增 `_LidarIntensityDistanceDecayMode`.
+    - 按模式选择距离衰减函数:
+      - Reciprocal: `atten(dist)=1/(1+dist*decay)`
+      - Exponential: `atten(dist)=exp(-dist*decay)`(实现上使用 `exp2(-dist*decay/ln(2))`)
+- Editor:
+  - `Editor/GsplatRendererEditor.cs`/`Editor/GsplatSequenceRendererEditor.cs`:
+    - LiDAR 面板暴露 `LidarIntensityDistanceDecayMode` 下拉.
+    - helpbox 同步提示两种衰减函数与 `decay=0` 语义.
+- Tests:
+  - `Tests/Editor/GsplatLidarShaderPropertyTests.cs`: 扩展属性契约断言,覆盖 `_LidarIntensityDistanceDecayMode`.
+  - `Tests/Editor/GsplatLidarScanTests.cs`: 增加非法 enum 回退到 `Reciprocal` 的回归断言.
+- Docs:
+  - `README.md`/`CHANGELOG.md` 同步新增字段与说明.
+
+### 回归(证据)
+
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`): total=54, passed=52, failed=0, skipped=2
+- XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_distance_decay_mode_2026-03-03_181542_noquit.xml`
+- log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_distance_decay_mode_2026-03-03_181542_noquit.log`

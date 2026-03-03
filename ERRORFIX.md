@@ -23,3 +23,36 @@
   - 若 shaderPath 不指向 `Packages/wu.yize.gsplat/Runtime/Shaders/GsplatLidar.shader`,优先修正引用/包来源。
   - 若 noise 参数为 0,回溯 RenderPointCloud 调用参数来源。
   - 若两者都正确但仍不可见,再调整 shader 观感(只改根因点)。
+
+## 2026-03-03
+
+### 现象
+
+- LiDAR(RadarScan) 扫描头扫过后的区域会变黑.
+- 下一次扫描前,老点会提前变暗或消失.
+
+### 根因
+
+- `Runtime/Shaders/GsplatLidar.shader` 旧逻辑:
+  - `brightness = LidarIntensity * trail`.
+  - alpha 不随 trail 变化.
+- 在 alpha blend + ZWrite On 场景下:
+  - 当 brightness 很小但仍未 discard 时,点会表现为"黑点/黑片".
+  - trail 会在 1 圈内衰减到接近 0,因此老点在下一次扫到前会提前变暗或消失.
+
+### 修复
+
+- 引入"未扫到区域底色强度"(亮度下限)与 Keep 开关:
+  - 新增字段:
+    - `LidarKeepUnscannedPoints`(是否在下一次扫描前保留未扫到区域)
+    - `LidarUnscannedIntensity`(未扫到区域底色强度)
+  - Shader 新增 `_LidarUnscannedIntensity`,并把每点强度改为:
+    - `lerp(unscannedIntensity, scanIntensity, trail)`
+  - Runtime 下发 `_LidarUnscannedIntensity`:
+    - Keep 关闭时强制下发 0,保持旧行为.
+    - Keep 开启时下发 `LidarUnscannedIntensity`,避免"扫过后变黑".
+
+### 验证(证据)
+
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`): total=54, passed=52, failed=0, skipped=2
+- XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_unscanned_intensity_2026-03-03_154114_noquit.xml`
