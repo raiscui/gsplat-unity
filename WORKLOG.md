@@ -735,3 +735,21 @@
   - total=52, passed=50, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_duration_overrides_2026-03-03_142917_noquit.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_duration_overrides_2026-03-03_142917_noquit.log`
+
+## 2026-03-03 14:33:41 +0800
+- 补强 Inspector 体验: 即便 EnableLidarScan=false,也能看到并设置 `LidarShowDuration/LidarHideDuration`.
+
+### 变更内容
+
+- Editor:
+  - [GsplatRendererEditor.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Editor/GsplatRendererEditor.cs)
+  - [GsplatSequenceRendererEditor.cs](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Editor/GsplatSequenceRendererEditor.cs)
+  - 在 LiDAR 面板中新增 "Transition" 小节.
+  - `EnableLidarScan` 关闭时也显示 `LidarShowDuration/LidarHideDuration`,避免用户找不到入口.
+
+### 回归(证据)
+
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`):
+  - total=52, passed=50, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_duration_inspector_2026-03-03_143314_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_duration_inspector_2026-03-03_143314_noquit.log`

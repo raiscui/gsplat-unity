@@ -137,3 +137,11 @@
   - Unity 6000.3.8f1, EditMode `Gsplat.Tests`: total=52, passed=50, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_duration_overrides_2026-03-03_142917_noquit.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_duration_overrides_2026-03-03_142917_noquit.log`
+
+## 2026-03-03 14:33:41 +0800 追加: Transition 字段在关闭雷达时也显示
+
+- Editor: LiDAR 面板新增 "Transition" 小节.
+  - `EnableLidarScan=false` 时仍显示 `LidarShowDuration/LidarHideDuration`.
+- 回归:
+  - EditMode `Gsplat.Tests`: total=52, passed=50, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_duration_inspector_2026-03-03_143314_noquit.xml`

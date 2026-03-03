@@ -351,3 +351,28 @@
 
 **目前在阶段4(完成)**
 - RadarScan 独立 ShowDuration/HideDuration 已落地并提交.
+
+## 2026-03-03 14:33:41 +0800 补充: LiDAR 时长字段在 EnableLidarScan=false 时也可见
+
+### 背景
+
+- 用户容易在 RadarScan 未启用时找不到 `LidarShowDuration/LidarHideDuration`.
+- 为了减少“没看到/不知道在哪”的摩擦,把这两个字段放到 LiDAR 面板里,并且不再依赖 EnableLidarScan=true 才显示.
+
+### 变更
+
+- [x] Editor: 在 LiDAR 面板中新增 "Transition" 小节.
+  - `EnableLidarScan` 关闭时也显示 `LidarShowDuration/LidarHideDuration`.
+
+### 回归(证据)
+
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`):
+  - total=52, passed=50, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_duration_inspector_2026-03-03_143314_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_duration_inspector_2026-03-03_143314_noquit.log`
+
+### 状态
+
+**目前在阶段4(git 提交)**
+- 代码改动已完成并回归通过.
+- 下一步: git commit.

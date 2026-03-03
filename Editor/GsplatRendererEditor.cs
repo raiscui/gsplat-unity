@@ -68,6 +68,21 @@ namespace Gsplat.Editor
             var enableLidarProp = serializedObject.FindProperty(nameof(GsplatRenderer.EnableLidarScan));
             EditorGUILayout.PropertyField(enableLidarProp);
 
+            // RadarScan 的开关淡入淡出时长:
+            // - 这是“切换按钮”最常调的参数之一,即便当前未启用 EnableLidarScan,也应允许用户先调好再开.
+            EditorGUI.indentLevel++;
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Transition", EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarShowDuration)));
+            EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarHideDuration)));
+            EditorGUILayout.HelpBox(
+                "提示:\n" +
+                "- LidarShowDuration/LidarHideDuration 仅影响 RadarScan 开/关的淡入淡出.\n" +
+                "- < 0 时会复用 RenderStyleSwitchDurationSeconds.\n" +
+                "- 它们不影响高斯/ParticleDots 的显隐燃烧环动画(ShowDuration/HideDuration).",
+                MessageType.Info);
+            EditorGUI.indentLevel--;
+
             if (enableLidarProp.boolValue)
             {
                 EditorGUI.indentLevel++;
@@ -99,14 +114,6 @@ namespace Gsplat.Editor
                 EditorGUILayout.LabelField("Timing", EditorStyles.boldLabel);
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarUpdateHz)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarRotationHz)));
-                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarShowDuration)));
-                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarHideDuration)));
-                EditorGUILayout.HelpBox(
-                    "提示:\n" +
-                    "- LidarShowDuration/LidarHideDuration 仅影响 RadarScan 开/关的淡入淡出.\n" +
-                    "- < 0 时会复用 RenderStyleSwitchDurationSeconds.\n" +
-                    "- 它们不影响高斯/ParticleDots 的显隐燃烧环动画(ShowDuration/HideDuration).",
-                    MessageType.Info);
 
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField("Visual", EditorStyles.boldLabel);
