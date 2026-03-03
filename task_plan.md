@@ -253,12 +253,13 @@
 - [x] Tests: 增加回归单测,锁定该函数在 animating 且 target 不变时不会重置 progress.
 - [x] 回归 `_tmp_gsplat_pkgtests` EditMode `Gsplat.Tests`.
 - [x] Changelog/Worklog 追加记录.
-- [ ] git commit.
+- [x] git commit.
+  - commit: `f10ef3f`
 
 ### 状态
 
 **目前在阶段4(回归与提交)**
-- 代码与回归已完成,只剩一次 git commit.
+- 代码与回归已完成,并已提交 git.
 - 回归(证据):
   - Unity EditMode `Gsplat.Tests`: total=50, passed=48, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_color_buttons_2026-03-03_122758_noquit.xml`
