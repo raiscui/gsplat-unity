@@ -285,13 +285,13 @@
 
 - [x] Shader(Gsplat.shader): 为 show 增加“早期尺寸门控”,让 ring/trail width 从 0 平滑放大到正常值.
   - 说明: 该改动已在工作区完成,待与 LiDAR 同步后一起回归.
-- [ ] Shader(GsplatLidar.shader):
+- [x] Shader(GsplatLidar.shader):
   - [x] 为 show(mode==1) 增加同款“早期尺寸门控”(ring/trail width).
   - [x] show 初期让 `maxRadius*0.015` 的 jitter 下限也随尺寸门控一起从 0 放大(避免固定半径漏出).
   - [x] progress==0 时强制完全不可见(避免首帧因 ring/noise 漏出).
 - [x] 回归 `_tmp_gsplat_pkgtests` EditMode `Gsplat.Tests`.
 - [ ] 视觉验证: 在工程里按 Show,确认起始阶段不会再突然弹出一个球形范围.
-- [ ] git commit.
+- [x] git commit.
 
 ### 回归(证据)
 
