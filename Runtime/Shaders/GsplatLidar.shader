@@ -340,7 +340,20 @@ Shader "Gsplat/LiDAR"
 
                 float passed0 = saturate((-edgeDist) / trailWidth);
                 float noiseWeight0 = (mode == 1) ? (1.0 - passed0) : passed0;
-                float jitterBase = max(trailWidth * 0.75, maxRadius * 0.015);
+
+                // show 起始门控:
+                // - 让 LiDAR 的边界抖动(jitter)也从 0 开始,避免 show 初期因为 jitter 下限导致“固定半径漏出”.
+                // - 仅影响 mode==1(show). hide 保持原有下限,避免 trailWidth 很小时 noise 完全不可见.
+                float showWidthScale = 1.0;
+                if (mode == 1)
+                {
+                    const float kShowSizeRampEnd = 0.16;
+                    const float kShowStartWidthScale = 0.0;
+                    float showSizeRamp = smoothstep(0.0, kShowSizeRampEnd, progress);
+                    showWidthScale = lerp(kShowStartWidthScale, 1.0, showSizeRamp);
+                }
+
+                float jitterBase = max(trailWidth * 0.75, maxRadius * 0.015 * showWidthScale);
                 float noiseWeightJitter = lerp(0.35, 1.0, noiseWeight0);
                 float jitter = noiseStrength * jitterBase;
                 float edgeDistNoisy = edgeDist + noiseSigned * jitter * noiseWeightJitter;
@@ -372,7 +385,19 @@ Shader "Gsplat/LiDAR"
                 float edgeDist = dist - radius;
                 float passed0 = saturate((-edgeDist) / trailWidth);
                 float noiseWeight0 = (mode == 1) ? (1.0 - passed0) : passed0;
-                float jitterBase = max(trailWidth * 0.75, maxRadius * 0.015);
+
+                // show 起始门控(同 EvalLidarShowHideVisibleMask):
+                // - jitter 下限也要从 0 开始,避免 show 初期 ring 被噪声抖出“固定半径”.
+                float showWidthScale = 1.0;
+                if (mode == 1)
+                {
+                    const float kShowSizeRampEnd = 0.16;
+                    const float kShowStartWidthScale = 0.0;
+                    float showSizeRamp = smoothstep(0.0, kShowSizeRampEnd, progress);
+                    showWidthScale = lerp(kShowStartWidthScale, 1.0, showSizeRamp);
+                }
+
+                float jitterBase = max(trailWidth * 0.75, maxRadius * 0.015 * showWidthScale);
                 float noiseWeight = lerp(0.35, 1.0, noiseWeight0);
                 float jitter = noiseStrength * jitterBase;
                 float edgeDistNoisy = edgeDist + noiseSigned * jitter * noiseWeight;
@@ -507,6 +532,30 @@ Shader "Gsplat/LiDAR"
                         float trailWidth = max(_LidarShowHideTrailWidth, 1e-5);
                         float ringWidth = max(_LidarShowHideRingWidth, 1e-5);
 
+                        // show: 起始时刻(progress=0)必须完全不可见.
+                        // 说明: LiDAR 存在 jitter 下限,如果不显式门控,progress=0 时可能“漏出”一小圈点,
+                        // 观感像是突然弹出一个有尺寸的球形范围.
+                        if (mode == 1 && progress <= 0.0)
+                        {
+                            showHideMul = 0.0;
+                            showHideGlow = 0.0;
+                        }
+
+                        // show 起始“几何尺寸门控”(对齐 splat 的 show 体验):
+                        // - 当 radius 很小时,ringWidth/trailWidth 仍是常量会导致早期可见 band 过厚,
+                        //   观感像“突然出现一个球壳”.
+                        // - 这里让 width 从 0 平滑放大到正常值,让可见范围真正从 0 开始长大.
+                        float showWidthScale = 1.0;
+                        if (mode == 1)
+                        {
+                            const float kShowSizeRampEnd = 0.16;
+                            const float kShowStartWidthScale = 0.0;
+                            float showSizeRamp = smoothstep(0.0, kShowSizeRampEnd, progress);
+                            showWidthScale = lerp(kShowStartWidthScale, 1.0, showSizeRamp);
+                            trailWidth = max(trailWidth * showWidthScale, 1e-5);
+                            ringWidth = max(ringWidth * showWidthScale, 1e-5);
+                        }
+
                         // 与 splat hide 保持一致: 起始宽度从很小开始.
                         if (mode == 2)
                         {
@@ -562,7 +611,9 @@ Shader "Gsplat/LiDAR"
                         // 边界扰动:
                         // - LiDAR 的点云密度更低,这里为 jitter 提供一个更稳态的距离尺度下限(绑定 maxRadius),
                         //   避免 trailWidth 很小时噪声几乎不可见.
-                        float jitterBase = max(trailWidth * 0.75, maxRadius * 0.015);
+                        // - 但在 show 初期,如果不门控这个下限,会导致边界被抖出一个“固定半径的漏出球”.
+                        //   因此让 maxRadius 下限也乘上 showWidthScale(仅 show 早期会 <1).
+                        float jitterBase = max(trailWidth * 0.75, maxRadius * 0.015 * showWidthScale);
                         float noiseWeightJitter = lerp(0.35, 1.0, noiseWeight0);
                         float jitter = noiseStrength * jitterBase;
                         float edgeDistNoisy = edgeDist + noiseSigned * jitter * noiseWeightJitter;

@@ -337,6 +337,23 @@ Shader "Gsplat/Standard"
                         ringWidth = max(ringWidth * widthScale, 1e-5);
                     }
 
+                    // show 起始“几何尺寸门控”:
+                    // - 用户反馈: Show 起始阶段会在不到 1 秒内“突然出现一个球形范围”的粒子,
+                    //   看起来不像从 0 开始扩散.
+                    // - 根因: 当 radius 很小时,ringWidth/trailWidth 仍是常量,且噪声 jitter 与 trailWidth 同量纲,
+                    //   会导致起始阶段的可见区域并不小,像是直接弹出一个“有尺寸”的球.
+                    // - 解决: 在 show 的早期 progress 内,把 ring/trail width 从无限小平滑放大到正常值,
+                    //   让可见范围真正从 0 开始长大(几何优先,不是透明度优先).
+                    if (_VisibilityMode == 1)
+                    {
+                        const float kShowSizeRampEnd = 0.16;
+                        const float kShowStartWidthScale = 0.0;
+                        float showSizeRamp = smoothstep(0.0, kShowSizeRampEnd, progress);
+                        float widthScale = lerp(kShowStartWidthScale, 1.0, showSizeRamp);
+                        trailWidth = max(trailWidth * widthScale, 1e-5);
+                        ringWidth = max(ringWidth * widthScale, 1e-5);
+                    }
+
                     // show: 起始时刻(progress=0)必须完全不可见.
                     // 说明: 即便 ringWidth/noise 存在,也不能在 progress=0 时提前“漏出”任何 splat.
                     if (_VisibilityMode == 1 && progress <= 0.0)

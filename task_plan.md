@@ -263,3 +263,45 @@
 - 回归(证据):
   - Unity EditMode `Gsplat.Tests`: total=50, passed=48, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_color_buttons_2026-03-03_122758_noquit.xml`
+
+## 2026-03-03 13:22:40 +0800 新问题: Show 起始阶段“突然出现球形范围粒子”(希望从 0 开始)
+
+### 用户反馈
+
+- Show 的最开始(不到 1 秒)会突然显示出一个球形范围的粒子区域.
+- 观感像是“直接弹出一个有尺寸的球”,不够自然.
+- 期望: 从无限小(0)开始,逐步长大.
+- 偏好: 用“几何/尺寸”驱动,而不是靠透明度糊过去.
+
+### 初步根因(先按最可能的下手)
+
+- show/hide overlay 中,当 radius 很小时,`ringWidth/trailWidth` 仍是常量.
+  - 结果: 早期可见 band 相对半径过厚,观感像“突然出现一个球壳”.
+- LiDAR(RadarScan) 侧还存在 `jitterBase = max(trailWidth*0.75, maxRadius*0.015)` 这类下限.
+  - 在 show 初期,即使我们把 trailWidth 缩小,`maxRadius*0.015` 仍会让 jitter 保持一个固定量级.
+  - 当 trailWidth 很小时,这个 jitter 可能把边界“抖”出一个固定半径的可见区域,进一步加剧“弹球”感.
+
+### 下一步行动
+
+- [x] Shader(Gsplat.shader): 为 show 增加“早期尺寸门控”,让 ring/trail width 从 0 平滑放大到正常值.
+  - 说明: 该改动已在工作区完成,待与 LiDAR 同步后一起回归.
+- [ ] Shader(GsplatLidar.shader):
+  - [x] 为 show(mode==1) 增加同款“早期尺寸门控”(ring/trail width).
+  - [x] show 初期让 `maxRadius*0.015` 的 jitter 下限也随尺寸门控一起从 0 放大(避免固定半径漏出).
+  - [x] progress==0 时强制完全不可见(避免首帧因 ring/noise 漏出).
+- [x] 回归 `_tmp_gsplat_pkgtests` EditMode `Gsplat.Tests`.
+- [ ] 视觉验证: 在工程里按 Show,确认起始阶段不会再突然弹出一个球形范围.
+- [ ] git commit.
+
+### 回归(证据)
+
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`):
+  - total=50, passed=48, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_show_start_from_zero_2026-03-03_132849_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_show_start_from_zero_2026-03-03_132849_noquit.log`
+
+### 状态
+
+**目前在阶段4(视觉验证与提交)**
+- shader 修复与自动化测试已完成.
+- 接下来只剩: 视觉确认(Show 起始是否仍弹球) + git commit.

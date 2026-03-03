@@ -93,3 +93,24 @@
   - 但旧逻辑在 `m_lidarColorAnimating=true` 时不会早退,反而每帧都重新 `BeginLidarColorTransition(...)`.
   - 结果是 `m_lidarColorAnimProgress01` 每帧被重置为 0,动画永远走不完.
 - 修复策略: 当 `m_lidarColorAnimTargetBlend01` 已经等于目标 target 时,无论当前是否 animating,都直接早退,避免重复 Begin.
+
+## 2026-03-03 13:22:40 +0800 追加: Show 起始“弹出球形范围” - 尺寸门控思路
+
+- 现象: show 最开始(<1s)像是直接出现一个有尺寸的球形粒子范围.
+- 高斯/ParticleDots 的根因:
+  - radius 很小时,ring/trail width 仍是常量,导致 band 相对半径过厚.
+  - 解决: show 早期对 ring/trail width 做 size ramp(从 0 -> 1),让可见范围从 0 开始长大.
+- LiDAR(RadarScan) 的额外根因:
+  - jitterBase 对 `maxRadius*0.015` 有下限,在 show 初期可能让边界被噪声“抖出”固定半径.
+  - 解决: 让这个下限也乘上 show 的 size ramp(仅在 show 早期),避免“固定半径漏出”.
+
+- 实际落地:
+  - `Runtime/Shaders/Gsplat.shader`: show(mode=1) 早期对 ring/trail width 做 size ramp(从 0 -> 1).
+  - `Runtime/Shaders/GsplatLidar.shader`:
+    - show(mode=1) 增加 size ramp(对齐 splat).
+    - progress==0 强制 showHideMul=0,避免首帧漏出.
+    - `jitterBase` 的 `maxRadius*0.015` 下限在 show 初期乘上 size ramp,避免固定半径漏出.
+    - 同步修正 `EvalLidarShowHideVisibleMask/RingMask` 中的 jitter 下限,避免 sourceMask 评估路径出现同类漏出.
+- 自动化回归:
+  - EditMode `Gsplat.Tests`: total=50, passed=48, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_show_start_from_zero_2026-03-03_132849_noquit.xml`

@@ -660,3 +660,33 @@
   - total=50, passed=48, failed=0, skipped=2
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_color_buttons_2026-03-03_122758_noquit.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_color_buttons_2026-03-03_122758_noquit.log`
+
+## 2026-03-03 13:30:21 +0800
+- 修复 Show 起始阶段“突然弹出一个球形范围粒子”的不自然观感,让 show 从 0 尺寸开始平滑长大.
+
+### 背景与根因
+
+- 用户反馈: Show 最开始(不到 1 秒)会突然出现一个球形范围的粒子区域,不像从 0 开始扩散.
+- 根因:
+  - 高斯/ParticleDots: radius 很小时,ring/trail width 仍是常量,早期 band 过厚,看起来像“弹出球壳”.
+  - LiDAR(RadarScan): 还存在 `jitterBase = max(trailWidth*0.75, maxRadius*0.015)` 这类下限.
+    - show 初期如果 trailWidth 被缩小,但 `maxRadius*0.015` 仍会让 jitter 保持固定量级.
+    - 在 show 初期会把边界抖出一个固定半径的“漏出球”,进一步加剧突兀.
+
+### 变更内容
+
+- Shader: show 早期尺寸门控
+  - [Gsplat.shader](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/Shaders/Gsplat.shader)
+    - show(mode=1) 早期对 `trailWidth/ringWidth` 做 size ramp(从 0 -> 1),让可见范围真正从 0 开始长大.
+  - [GsplatLidar.shader](/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Packages/wu.yize.gsplat/Runtime/Shaders/GsplatLidar.shader)
+    - show(mode=1) 增加与 splat 对齐的 size ramp(对 `trailWidth/ringWidth` 从 0 -> 1).
+    - progress==0 强制 `showHideMul=0`(避免首帧 ring/noise 漏出).
+    - show 初期让 `maxRadius*0.015` jitter 下限也乘上 size ramp,避免固定半径漏出.
+    - 同步修正 `EvalLidarShowHideVisibleMask/RingMask` 中的 jitter 下限,避免 sourceMask 评估路径出现同类漏出.
+
+### 回归(证据)
+
+- Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`):
+  - total=50, passed=48, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_show_start_from_zero_2026-03-03_132849_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_show_start_from_zero_2026-03-03_132849_noquit.log`
