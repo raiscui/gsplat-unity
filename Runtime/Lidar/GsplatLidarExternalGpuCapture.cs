@@ -38,8 +38,11 @@ namespace Gsplat
         const string k_dirtyRendererMaterial = "renderer-material";
         const string k_dynamicCadenceDue = "cadence-due";
         const string k_dynamicNowReset = "time-reset";
+        const float k_forwardZClearDepth = 1.0f;
+        const float k_reversedZClearDepth = 0.0f;
 
         static readonly int k_lidarCaptureBaseColor = Shader.PropertyToID("_LidarCaptureBaseColor");
+        static readonly int k_lidarExternalDepthZTest = Shader.PropertyToID("_LidarExternalDepthZTest");
         static readonly int k_lidarCellCount = Shader.PropertyToID("_LidarCellCount");
         static readonly int k_lidarAzimuthBins = Shader.PropertyToID("_LidarAzimuthBins");
         static readonly int k_lidarBeamCount = Shader.PropertyToID("_LidarBeamCount");
@@ -1013,13 +1016,30 @@ namespace Gsplat
             m_cmd.SetViewProjectionMatrices(viewMatrix, projectionMatrix);
 
             BuildDrawableEntries(sourceEntries, m_drawableEntriesScratch);
+            var depthZTest = SystemInfo.usesReversedZBuffer
+                ? (float)CompareFunction.GreaterEqual
+                : (float)CompareFunction.LessEqual;
+            var clearDepth = SystemInfo.usesReversedZBuffer
+                ? k_reversedZClearDepth
+                : k_forwardZClearDepth;
+            m_materialInstance.SetFloat(k_lidarExternalDepthZTest, depthZTest);
 
+            // 关键语义:
+            // - 这里保留 `Cull Off`,避免镜像/负缩放把 front/back 判反.
+            // - 但"最近表面"的选择重新交给硬件 depth buffer:
+            //   depth pass 写入线性 view depth + 深度缓冲.
+            // - 额外注意 reversed-Z 平台:
+            //   如果仍用 `LessEqual + clearDepth=1`,闭合 mesh 会稳定把 far side 留下来.
+            //   因此这里显式按平台切换 compare function 与 clear depth.
+            // - color pass 使用同一个 depth/stencil,只用 `ZTest Equal` 取最近表面对应的颜色.
+            // - 这样可以避免 `RFloat + BlendOp Max` 在某些平台上退化成"最后写入者赢",
+            //   从而把球体/闭合 mesh 的点稳定翻到背面.
             m_cmd.SetRenderTarget(buffers.LinearDepthTexture.colorBuffer, buffers.DepthStencilTexture.depthBuffer);
-            m_cmd.ClearRenderTarget(true, true, Color.clear);
+            m_cmd.ClearRenderTarget(true, true, Color.clear, clearDepth);
             DrawEntriesForPass(m_drawableEntriesScratch, k_depthPassIndex, usePerSubMeshColor: false);
 
             m_cmd.SetRenderTarget(buffers.SurfaceColorTexture.colorBuffer, buffers.DepthStencilTexture.depthBuffer);
-            m_cmd.ClearRenderTarget(true, true, Color.clear);
+            m_cmd.ClearRenderTarget(false, true, Color.clear);
             DrawEntriesForPass(m_drawableEntriesScratch, k_colorPassIndex, usePerSubMeshColor: true);
 
             Graphics.ExecuteCommandBuffer(m_cmd);

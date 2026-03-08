@@ -185,3 +185,33 @@
 - 回溯结果: 本轮 `radarscan-particle-antialiasing-modes` 已完整落地并通过自动化验证,没有新增延期事项.
 - 仍建议后续做人眼手测:
   - 在带 MSAA 的 Camera / RenderTexture 上确认 `AlphaToCoverage` 和 `AnalyticCoveragePlusAlphaToCoverage` 的实际观感收益.
+
+## 2026-03-08 13:18:00 +0800
+- 回溯结果: 本轮已继续把 RadarScan A2C 从“透明混合 + AlphaToMask”修正为 coverage-first,没有新增延期事项.
+- 仍建议后续做人眼手测:
+  - 同一机位下对比 `LegacySoftEdge` / `AnalyticCoverage` / `AlphaToCoverage`
+  - 优先在 `LidarPointRadiusPixels=2` 和更小点径上观察边缘差异
+
+## 2026-03-08 14:07:20 +0800
+- 回溯结果: 本轮“外扩 fringe + coverage-first”已经完成自动化闭环,没有新增必做延期事项.
+- 候选增强(仅当用户继续反馈差异太小):
+  - 把 `aaFringePadPx` 从固定常数提升为更强默认值,或暴露成可调参数,便于在极小点径场景下继续增强边缘存在感.
+
+## 2026-03-08 14:34:00 +0800
+- 回溯结果: 上一条候选增强已经落地为 `LidarParticleAAFringePixels`.
+- 清理: “把 `aaFringePadPx` 暴露成可调参数” 这项不再属于待办.
+- 目前没有新增延期事项.
+
+## 2026-03-08 20:02:50 +0800
+- 回溯结果: 本轮 `LidarExternalHitBiasMeters` 已完整落地并通过自动化验证,没有新增延期事项.
+
+## 2026-03-08 20:52:00 +0800
+- 回溯结果: 本轮 external GPU capture 最近面选择已经改回 `Cull Off + hardware depth nearest surface`,并通过定向/全包自动化验证.
+- 当前没有新增延期事项.
+
+## 2026-03-08 21:23:00 +0800
+- 回溯结果: 本轮又继续把 external GPU capture 的 reversed-Z 语义补齐,并用真实 GPU capture 功能测试锁定了球体前表面深度.
+- 当前没有新增延期事项.
+
+## 2026-03-08 21:36:00 +0800
+- 回溯结果: 本轮仅把 `LidarExternalHitBiasMeters` 默认值收回到 `0`,没有新增延期事项.

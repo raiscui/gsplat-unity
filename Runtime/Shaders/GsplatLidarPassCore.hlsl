@@ -1,6 +1,10 @@
 #ifndef GSPLAT_LIDAR_PASS_CORE_INCLUDED
 #define GSPLAT_LIDAR_PASS_CORE_INCLUDED
 
+#ifndef GSPLAT_LIDAR_A2C_PASS
+#define GSPLAT_LIDAR_A2C_PASS 0
+#endif
+
             // ----------------------------------------------------------------
             // 说明: 该 shader 只负责“看起来像 LiDAR 的规则点云”绘制.
             // - 点云来自 range image(minRangeSqBits/minSplatId),并由 LUT(az/beam sincos)重建方向.
@@ -34,6 +38,14 @@
             // - 0: LegacySoftEdge
             // - 1: AnalyticCoverage
             float _LidarParticleAAAnalyticCoverage;
+            // 非 Legacy 路线的外扩 fringe 宽度(像素):
+            // - 0 表示不额外外扩.
+            // - >0 表示给原始边界外预留 coverage 空间.
+            float _LidarParticleAAFringePixels;
+            // external hit 的渲染前推距离(米):
+            // - 只影响 external mesh 命中的最终点位重建.
+            // - 不改变 first return 竞争,也不改变用于颜色/衰减的真实 range.
+            float _LidarExternalHitBiasMeters;
 
             // 颜色模式:
             // - 0: Depth
@@ -448,13 +460,16 @@
                 uint rangeSqBits = useExternalHit ? externalRangeSqBits : splatRangeSqBits;
                 float rangeSq = asfloat(rangeSqBits);
                 float range = sqrt(max(rangeSq, 0.0));
+                float renderRange = range;
+                if (useExternalHit)
+                    renderRange = max(range - max(_LidarExternalHitBiasMeters, 0.0), 0.0);
 
                 // 方向重建:
                 float2 azSC = _LidarAzSinCos[azBin]; // (sin,cos)
                 float2 beSC = _LidarBeamSinCos[beamIndex]; // (sin,cos)
                 float3 dirLocal = float3(azSC.x * beSC.y, beSC.x, azSC.y * beSC.y);
 
-                float3 worldPos = mul(_LidarMatrixL2W, float4(dirLocal * range, 1.0)).xyz;
+                float3 worldPos = mul(_LidarMatrixL2W, float4(dirLocal * renderRange, 1.0)).xyz;
 
                 // view/proj:
                 float4 view = mul(UNITY_MATRIX_V, float4(worldPos, 1.0));
@@ -773,12 +788,20 @@
                 trail01 = saturate(trail01);
 
                 // 点大小(px radius):
+                // - LegacySoftEdge 仍保持原 footprint.
+                // - 非 Legacy 路线额外给一点点外扩 fringe 空间,
+                //   否则 AA 只能“往里软”,对 2px 小点很难肉眼看出区别.
                 float rPx = max(_LidarPointRadiusPixels, 0.0);
+                float analyticCoverageWeight = saturate(_LidarParticleAAAnalyticCoverage);
+                float coverageAaEnabled = max(analyticCoverageWeight, (float)GSPLAT_LIDAR_A2C_PASS);
+                float aaFringePadPx = (coverageAaEnabled > 0.5 && rPx > 1.0e-4) ? max(_LidarParticleAAFringePixels, 0.0) : 0.0;
+                float paddedRadiusPx = rPx + aaFringePadPx;
+                float uvScale = (rPx > 1.0e-4) ? (paddedRadiusPx / rPx) : 1.0;
                 float2 c = proj.ww / _ScreenParams.xy;
-                float2 offset = float2(v.vertex.x, v.vertex.y) * rPx * c;
+                float2 offset = float2(v.vertex.x, v.vertex.y) * paddedRadiusPx * c;
 
                 o.vertex = proj + float4(offset.x, _ProjectionParams.x * offset.y, 0.0, 0.0);
-                o.uv = float2(v.vertex.x, v.vertex.y);
+                o.uv = float2(v.vertex.x, v.vertex.y) * uvScale;
                 o.rgb = max(baseRgb, float3(0.0, 0.0, 0.0));
                 o.trail01 = trail01;
                 o.showHideMul = showHideMul;
@@ -792,19 +815,40 @@
                 // 形状: 正方形点(屏幕空间)
                 float2 a = abs(i.uv);
                 float d = max(a.x, a.y); // Chebyshev distance
-                if (d > 1.0) discard;
+                float analyticCoverageWeight = saturate(_LidarParticleAAAnalyticCoverage);
+                float coverageAaEnabled = max(analyticCoverageWeight, (float)GSPLAT_LIDAR_A2C_PASS);
 
                 // 实心 + 柔边:
                 // - LegacySoftEdge: 继续使用固定 feather,保持旧项目视觉基线.
-                // - AnalyticCoverage: 改用屏幕导数驱动的 coverage 宽度,让小点边缘更稳定.
+                // - AnalyticCoverage: 改用屏幕导数驱动的 coverage 宽度.
+                //   关键改动:
+                //   - 不再直接在归一化 uv 上做 fwidth.
+                //   - 而是先换算到“边缘距离的像素尺度”,这样 2px 这类小点也能拿到更像样的 AA 过渡带.
+                // - 另外,非 Legacy 路线会给原始边界外多留 1px fringe 几何空间,
+                //   这样 AA 才不是只在原 footprint 里“往里软”.
                 const float kSquareFeather = 0.10;
+                float pointRadiusPx = max(_LidarPointRadiusPixels, 1.0);
+                float aaFringePadPx = (coverageAaEnabled > 0.5 && _LidarPointRadiusPixels > 1.0e-4) ? max(_LidarParticleAAFringePixels, 0.0) : 0.0;
+                float outerLimit = 1.0 + aaFringePadPx / pointRadiusPx;
+                if (d > outerLimit) discard;
                 float inner = 1.0 - kSquareFeather;
                 float legacyAlphaShape = 1.0 - smoothstep(inner, 1.0, d);
                 float signedEdge = 1.0 - d;
-                float analyticWidth = max(fwidth(signedEdge), 1.0e-4);
-                float analyticAlphaShape = saturate(signedEdge / analyticWidth + 0.5);
-                float alphaShape = lerp(legacyAlphaShape, analyticAlphaShape,
-                    saturate(_LidarParticleAAAnalyticCoverage));
+                float signedEdgePx = signedEdge * pointRadiusPx;
+                float fixedCoverageAlphaShape = saturate(signedEdgePx / max(aaFringePadPx, 1.0e-4) + 0.5);
+                float analyticWidthPx = max(fwidth(signedEdgePx), 1.0e-4);
+                float analyticAlphaShape = saturate(signedEdgePx / analyticWidthPx + 0.5);
+                float alphaShape = legacyAlphaShape;
+                if (coverageAaEnabled > 0.5)
+                {
+                    // A2C-only:
+                    // - 使用固定 1px fringe 的 coverage ramp.
+                    // Hybrid / Analytic:
+                    // - 使用导数驱动的 analytic coverage.
+                    alphaShape = (analyticCoverageWeight > 0.5)
+                        ? analyticAlphaShape
+                        : fixedCoverageAlphaShape;
+                }
 
                 // 强度语义:
                 // - Trail 与 Shape 决定点的覆盖范围(Shape)与余辉衰减(Trail).

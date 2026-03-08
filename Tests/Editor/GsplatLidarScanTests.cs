@@ -174,6 +174,8 @@ namespace Gsplat.Tests
 
             r.LidarPointRadiusPixels = float.NegativeInfinity;
             r.LidarParticleAntialiasingMode = (GsplatLidarParticleAntialiasingMode)123;
+            r.LidarParticleAAFringePixels = float.NaN;
+            r.LidarExternalHitBiasMeters = float.PositiveInfinity;
             r.LidarShowDuration = float.NaN;
             r.LidarHideDuration = float.PositiveInfinity;
             r.LidarShowHideWarpPixels = float.NaN;
@@ -218,6 +220,8 @@ namespace Gsplat.Tests
 
             r.LidarPointRadiusPixels = float.NegativeInfinity;
             r.LidarParticleAntialiasingMode = (GsplatLidarParticleAntialiasingMode)123;
+            r.LidarParticleAAFringePixels = float.NaN;
+            r.LidarExternalHitBiasMeters = float.PositiveInfinity;
             r.LidarShowDuration = float.NaN;
             r.LidarHideDuration = float.PositiveInfinity;
             r.LidarShowHideWarpPixels = float.NaN;
@@ -612,6 +616,8 @@ namespace Gsplat.Tests
 
             Assert.AreEqual(2.0f, r.LidarPointRadiusPixels);
             Assert.AreEqual(GsplatLidarParticleAntialiasingMode.LegacySoftEdge, r.LidarParticleAntialiasingMode);
+            Assert.AreEqual(1.0f, r.LidarParticleAAFringePixels);
+            Assert.AreEqual(0.0f, r.LidarExternalHitBiasMeters);
             Assert.AreEqual(-1.0f, r.LidarShowDuration);
             Assert.AreEqual(-1.0f, r.LidarHideDuration);
             Assert.AreEqual(6.0f, r.LidarShowHideWarpPixels);
@@ -653,6 +659,8 @@ namespace Gsplat.Tests
             Assert.AreEqual(GsplatUtils.k_LidarDefaultBeamCount, r.LidarBeamCount);
             Assert.AreEqual(2.0f, r.LidarDepthFar);
             Assert.AreEqual(GsplatLidarParticleAntialiasingMode.LegacySoftEdge, r.LidarParticleAntialiasingMode);
+            Assert.AreEqual(1.0f, r.LidarParticleAAFringePixels);
+            Assert.AreEqual(0.0f, r.LidarExternalHitBiasMeters);
             Assert.AreEqual(-1.0f, r.LidarShowDuration);
             Assert.AreEqual(-1.0f, r.LidarHideDuration);
             Assert.AreEqual(6.0f, r.LidarShowHideWarpPixels);

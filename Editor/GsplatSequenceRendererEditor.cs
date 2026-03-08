@@ -32,7 +32,9 @@ namespace Gsplat.Editor
                 nameof(GsplatSequenceRenderer.LidarDepthNear),
                 nameof(GsplatSequenceRenderer.LidarDepthFar),
                 nameof(GsplatSequenceRenderer.LidarPointRadiusPixels),
+                nameof(GsplatSequenceRenderer.LidarExternalHitBiasMeters),
                 nameof(GsplatSequenceRenderer.LidarParticleAntialiasingMode),
+                nameof(GsplatSequenceRenderer.LidarParticleAAFringePixels),
                 nameof(GsplatSequenceRenderer.LidarShowDuration),
                 nameof(GsplatSequenceRenderer.LidarHideDuration),
                 nameof(GsplatSequenceRenderer.LidarShowHideWarpPixels),
@@ -223,14 +225,25 @@ namespace Gsplat.Editor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDepthFar)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarMinSplatOpacity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarPointRadiusPixels)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarExternalHitBiasMeters)));
                 EditorGUILayout.PropertyField(
                     serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarParticleAntialiasingMode)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarParticleAAFringePixels)));
                 EditorGUILayout.HelpBox(
                     "RadarScan 粒子 AA 说明:\n" +
-                    "- 推荐: AnalyticCoverage. 不依赖 MSAA,一般最稳.\n" +
+                    "- 推荐: AnalyticCoverage. 不依赖 MSAA,现在按像素尺度计算 coverage,小点也更容易看出差异.\n" +
+                    "- `LidarParticleAAFringePixels` 用来控制边缘外扩宽度. 值越大,AA fringe 越明显.\n" +
                     "- AlphaToCoverage / AnalyticCoveragePlusAlphaToCoverage 需要当前实际渲染相机具备有效 MSAA.\n" +
+                    "- A2C 现在走 coverage-first 路线,不是普通透明混合,边缘会更像 sample coverage / cutout.\n" +
                     "- 如果当前 camera 没有 MSAA,运行时会自动回退到 AnalyticCoverage,并在 Console 输出一次说明.\n" +
                     "- LegacySoftEdge 用于保持旧项目当前 fixed feather 的边缘语义.",
+                    MessageType.Info);
+                EditorGUILayout.HelpBox(
+                    "external mesh 命中说明:\n" +
+                    "- `LidarExternalHitBiasMeters` 会把 external hit 的粒子沿传感器射线轻微前推.\n" +
+                    "- 目的是避免原始 mesh 仍可见时,粒子因为深度太贴而看起来落在模型后面.\n" +
+                    "- 默认 0 表示关闭.\n" +
+                    "- 如果你仍觉得点被模型压住,可以从 0.01 开始逐步提到 0.02 或 0.05 继续观察.",
                     MessageType.Info);
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarShowHideWarpPixels)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarShowHideNoiseScale)));

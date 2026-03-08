@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added split external inputs for frustum RadarScan: `LidarExternalStaticTargets`, `LidarExternalDynamicTargets`, and `LidarExternalDynamicUpdateHz` (legacy `LidarExternalTargets` is still accepted and maps to the static array for backward compatibility).
 - Added frustum external GPU capture for RadarScan meshes (explicit render list + override material + command buffer draw, static signature reuse, independent dynamic cadence, and material main-color capture for external hits).
 - Added RadarScan particle antialiasing modes: `LidarParticleAntialiasingMode` now supports `LegacySoftEdge`, `AnalyticCoverage`, `AlphaToCoverage`, and `AnalyticCoveragePlusAlphaToCoverage` (recommended: `AnalyticCoverage`; A2C modes require effective MSAA and automatically fall back to `AnalyticCoverage` when MSAA is unavailable).
+- Refined RadarScan AA semantics after visual validation: non-legacy AA modes now reserve a small outer edge fringe so coverage can grow outside the original footprint, `AnalyticCoverage` evaluates edge coverage in pixel-space for clearer small-point differences, and the A2C shell now uses a coverage-first pass instead of reusing the ordinary alpha-blended LiDAR shell.
+- Added `LidarParticleAAFringePixels` so the outward AA fringe width is now user-adjustable instead of fixed in shader code.
+- Added `LidarExternalHitBiasMeters` so external RadarScan hits can be pushed slightly forward along the sensor ray at render time without changing first-return competition or depth-color semantics.
 
 ### Changed
 
@@ -67,6 +70,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `CurlSmoke` parity in `RadarScan` show/hide: LiDAR `CurlSmoke` now uses a curl-like vector field, and the screen-space jitter amplitude is scaled by `WarpStrength` (0 disables, higher values increase motion).
 - Fixed `RadarScan` show/hide glow: LiDAR now draws the ring in the alpha mask (so show glow is visible), adds an inward afterglow tail (so hide glow lingers longer), and uses a colored additive glow overlay controlled by LiDAR-specific glow parameters.
 - Fixed frustum external RadarScan updates being blocked by `LidarUpdateHz`: external GPU capture now ticks independently from the gsplat range-image rebuild, while the legacy CPU raycast path remains the fallback for surround360 or unsupported GPU-capture platforms.
+- Fixed frustum external RadarScan points appearing behind the visible source mesh by applying a render-only bias (`LidarExternalHitBiasMeters`) when reconstructing external-hit particle positions.
+- Fixed frustum external RadarScan points being captured from the far side of closed meshes on some setups: external GPU capture now keeps `Cull Off`, uses hardware depth with platform-correct compare semantics (`LessEqual` vs `GreaterEqual`) plus `ZWrite On`, and keeps a `ZTest Equal` color pass instead of relying on floating-point RT `BlendOp Max` to decide the nearest surface.
+- Fixed frustum external RadarScan closed-mesh capture on reversed-Z platforms (for example Metal): the external depth pass now switches depth compare (`LessEqual` vs `GreaterEqual`) and clear depth (`1` vs `0`) based on `SystemInfo.usesReversedZBuffer`, preventing sphere-like meshes from consistently resolving to the far side.
 
 ## [1.1.4] - 2026-02-23
 

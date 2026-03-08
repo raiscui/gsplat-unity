@@ -109,6 +109,39 @@
   - 默认值用 `-1` 表示“复用全局 NoiseScale/NoiseSpeed”.
   - 这样升级后旧项目行为不变,需要独立时再把值改为 >=0 覆盖即可.
 
+## 2026-03-08 14:30:39 +0800 追加: RadarScan show/hide noise 与 Unity Value Curl Noise 的关系
+
+- 现象:
+  - 用户询问当前雷达扫描粒子的 show/hide 运动 noise,是否就是 Unity VFX Graph 文档里的 `Value Curl Noise`.
+- 静态证据:
+  - `Runtime/GsplatRenderer.cs`
+    - `VisibilityNoiseMode` 默认值是 `GsplatVisibilityNoiseMode.ValueSmoke`.
+    - `CurlSmoke` 的注释明确写着: "curl-like 旋涡噪声场(基于 value noise 的梯度/旋度构造)".
+  - `Runtime/GsplatRenderer.cs` -> LiDAR draw 提交:
+    - `VisibilityNoiseMode` 会直接传给 LiDAR show/hide 路径,不是 LiDAR 自己另起一套 mode.
+  - `Runtime/Shaders/Gsplat.hlsl`
+    - `GsplatEvalCurlNoise(float3 p)` 的实现是:
+      - 用 3 份独立 value noise 作为 vector potential `A(p)=(Ax,Ay,Az)`
+      - 再显式计算 `curl(A)=∇×A`
+  - `Runtime/Shaders/GsplatLidarPassCore.hlsl`
+    - LiDAR 侧 `EvalCurlNoise(float3 p)` 也是同样思路.
+    - `mode == 1` 时,这个 curl-like 向量场会参与:
+      - show/hide noise 的 domain warp
+      - show/hide 粒子屏幕位移方向(`warpDir`)
+- 官方文档证据:
+  - Unity `Value Curl Noise` 文档写明:
+    - 它基于 `Value Noise` 的数学形式,并额外加入 `curl function`.
+    - 结果是 turbulent noise,并且是 divergence-free/incompressible.
+- 结论:
+  - 不是"直接调用 Unity VFX Graph 那个现成 Operator".
+  - 但当 `VisibilityNoiseMode = CurlSmoke` 时,算法家族是同一类:
+    - 都是 `value noise + curl` 这一思路.
+  - 默认情况下并不是它:
+    - 默认 mode 是 `ValueSmoke`,不是 `CurlSmoke`.
+  - 所以更准确的说法是:
+    - "当前实现里有一个自写的、与 Unity `Value Curl Noise` 同家族的 curl-like noise 模式."
+    - "只有切到 `CurlSmoke` 时,show/hide 运动 noise 才会接近你贴的那种味道."
+
 ## 2026-03-03 12:28:24 +0800 追加: LiDAR ColorMode(动画)按钮无效的根因
 
 - 现象: Inspector 中 `LidarColorMode` 下方的 “Depth(动画) / SplatColor(动画)” 按钮按下后动画不走,看起来无效.
@@ -185,6 +218,136 @@
 - 需求:
   - `LidarIntensity` 与 `LidarUnscannedIntensity` 都要随距离衰减.
   - 并且各自有独立的"衰减乘数"可调.
+
+## 2026-03-08 20:42:00 +0800 追加: external mesh 雷达粒子稳定跑到背光面
+
+- 用户最新现场证据:
+  - `LidarExternalHitBiasMeters` 怎么调都没有用.
+  - 现象不是"轻微埋进表面",而是 external mesh 的雷达粒子整体落在"远离雷达 loc cam"的那一面.
+  - 对球体来说,看起来像粒子稳定跑到了阴影面/背光面.
+
+- 本轮重新判断:
+  - 这说明问题不只是 draw 端的 render bias 太小.
+  - 更像是 external GPU capture 的"最近表面选择"本身出了问题.
+
+- 关键复盘:
+  - 上一轮为了绕开平台 depth 语义,把 external capture depth pass 改成:
+    - 往颜色 RT 写 `1 / linearDepth`
+    - `BlendOp Max`
+    - color pass 再通过 `_LidarExternalResolvedDepthTex` 只认最近深度
+  - 这条路线理论上可行.
+  - 但它隐含依赖了一个更脆弱的前提:
+    - `RFloat/ARGBFloat` 颜色 RT 上的 blending 语义必须稳定且正确
+    - 否则就可能退化成"最后写入者赢"
+  - 一旦退化,闭合 mesh(比如球体)就很容易把 far side/back side 留下来.
+
+- 本轮改法(根因上修):
+  - 保留 `Cull Off`,继续避免镜像/负缩放把 front/back 判反.
+  - 但把"最近表面"选择重新交给硬件 depth buffer:
+    - `DepthCapture`
+      - `ZTest LEqual`
+      - `ZWrite On`
+      - 颜色 RT 直接写最近表面的 `linearDepth`
+    - `SurfaceColorCapture`
+      - 复用同一个 depth/stencil
+      - `ZTest Equal`
+      - 只允许与最近深度相等的表面写颜色
+  - `CaptureGroup(...)` 第二个 pass 改为只清 color,不清 depth:
+    - `ClearRenderTarget(false, true, Color.clear)`
+  - `ResolveExternalFrustumHits` 也同步回归为:
+    - 直接把 capture texture 当 `linearDepth` 读
+    - 然后再 `linearDepth / rayDirSensor.z` 还原 LiDAR ray distance
+
+- 为什么这版更稳:
+  - `Cull Off` 解决的是 front/back 判定问题.
+  - depth buffer 解决的是"当前像素最近表面到底是谁"的问题.
+  - 这两件事分工清晰后,闭合 mesh 的 nearest visible surface 语义更接近 GPU 天然能力.
+  - 也避免把正确性押在 `BlendOp Max` 对浮点 RT 的平台实现上.
+
+- 自动化验证:
+  - 定向:
+    - `Gsplat.Tests.GsplatLidarExternalGpuCaptureTests`
+    - total=`8`, passed=`8`, failed=`0`, skipped=`0`
+    - XML:
+      - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_external_gpu_capture_frontface_2026-03-08.xml`
+  - 全包:
+    - `Gsplat.Tests`
+    - total=`85`, passed=`83`, failed=`0`, skipped=`2`
+    - XML:
+      - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_full_external_frontface_2026-03-08.xml`
+
+## 2026-03-08 21:23:00 +0800 追加: 功能性证据确认真正根因是 reversed-Z 语义错误
+
+- 新增功能测试:
+  - `Tests/Editor/GsplatLidarExternalGpuCaptureTests.cs`
+  - `ExternalGpuCaptureDepthPass_CenterPixelMatchesSphereFrontDepth`
+- 测试场景:
+  - 原点相机朝 +Z
+  - 球体中心在 `(0, 0, 5)`
+  - 半径 `0.5`
+  - 正确前表面深度应为 `4.5`
+  - 错误后表面深度应为 `5.5`
+
+- 关键发现:
+  - 修复前,中心像素读回是 `5.5`
+  - 这直接证明 external capture depth pass 的确把球体 far side 留了下来
+  - 所以当时用户看到“粒子都在阴影面”,不是错觉,而是 capture 真错了
+
+- 真正根因:
+  - external capture depth pass 虽然已经切回了 hardware depth 路线
+  - 但仍然使用了 forward-Z 的固定语义:
+    - `ZTest LEqual`
+    - `ClearRenderTarget(..., depth=1)`
+  - 在 Metal 这类 reversed-Z 平台上,这会把闭合 mesh 的 far side 保留下来
+
+- 本轮修复:
+  - `Runtime/Shaders/GsplatLidarExternalCapture.shader`
+    - depth pass 的 `ZTest` 改为材质属性:
+      - `ZTest [_LidarExternalDepthZTest]`
+  - `Runtime/Lidar/GsplatLidarExternalGpuCapture.cs`
+    - 按 `SystemInfo.usesReversedZBuffer` 设置:
+      - forward-Z: `CompareFunction.LessEqual`, clearDepth=`1`
+      - reversed-Z: `CompareFunction.GreaterEqual`, clearDepth=`0`
+  - color pass 继续保留:
+    - 同一 depth/stencil
+    - `ZTest Equal`
+
+- 修复后验证:
+  - 同一功能测试已通过:
+    - XML:
+      - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_external_capture_functional_2026-03-08_v2.xml`
+  - external 相关整组:
+    - total=`9`, passed=`9`, failed=`0`, skipped=`0`
+    - XML:
+      - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_external_gpu_capture_group_2026-03-08_v3.xml`
+  - 全包:
+    - total=`86`, passed=`85`, failed=`0`, skipped=`1`
+    - XML:
+      - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_full_external_fix_2026-03-08_v4.xml`
+
+## 2026-03-08 21:36:00 +0800 追加: 保留 bias 能力,但默认值收回到 0
+
+- 用户决策:
+  - 不删除 `LidarExternalHitBiasMeters`
+  - 但把默认值与 NaN/Inf fallback 从 `0.01` 收回到 `0`
+
+- 理由:
+  - 现在真正解决“背面”问题的是 reversed-Z capture 修复
+  - `LidarExternalHitBiasMeters` 更适合作为可选的 render-only 微调
+  - 不应该继续以一个非零默认值,把它伪装成主修复的一部分
+
+- 同步调整点:
+  - `GsplatRenderer/GsplatSequenceRenderer`
+    - 序列化默认值改为 `0`
+    - sanitize fallback 改为 `0`
+  - `GsplatLidarScan.RenderPointCloud(...)`
+    - MPB fallback 改为 `0`
+  - `GsplatLidar.shader` / `GsplatLidarAlphaToCoverage.shader`
+    - hidden property 默认值改为 `0`
+  - Inspector / README
+    - 文案改为“默认关闭,按需再开”
+  - `GsplatLidarScanTests`
+    - 默认值断言从 `0.01` 改为 `0`
 - 落地公式(简单且稳定):
   - `atten(dist)=1/(1+dist*decay)`
   - `decay=0` 时,atten 恒为 1,保持旧行为.
@@ -216,8 +379,91 @@
     - tooltip 与非法值回退逻辑已接受第三态.
   - `Editor/*`
     - helpbox 已同步三态说明.
-  - `Tests/Editor/GsplatLidarScanTests.cs`
+- `Tests/Editor/GsplatLidarScanTests.cs`
     - 已新增反射测试,直接锁定三态决策语义.
+
+## 2026-03-08 14:06:30 +0800 追加: RadarScan 粒子 AA 为何“开了 MSAA 也不明显”
+
+- 第二层根因已经确认:
+  - 即使 `AnalyticCoverage` 换成像素尺度 coverage,即使 A2C shell 改成 coverage-first,
+    如果点片几何仍严格卡在原始 footprint 内,AA 也只能“往里软”,无法在原边界外长出真正的 fringe.
+  - 对 `LidarPointRadiusPixels=2` 这类小点来说,这种内收式软化非常容易肉眼不明显.
+
+## 2026-03-08 20:02:50 +0800 追加: external mesh 粒子显示在模型后面 的根因与修复
+
+- 现象澄清:
+  - 用户补充"是模型背后",重点不是"命中了背面三角形",而是"粒子视觉上落在可见 mesh 表面后方".
+- 根因复核:
+  - `Runtime/Shaders/GsplatLidarExternalCapture.shader` 改成 `Cull Off` 只能解决 capture 端 front/back 选择错误.
+  - 但 LiDAR draw 端此前仍直接用 external hit 的真实 `range` 重建 `worldPos`.
+  - 当点位与普通 mesh 表面过贴,再叠加 depth 精度/栅格化差异时,粒子会被源 mesh 挡在后面.
+- 修复策略:
+  - 新增 render-only 参数 `LidarExternalHitBiasMeters`(默认 `0.01f`).
+  - 只在 `useExternalHit` 路径上使用:
+    - `renderRange = max(range - bias, 0)`
+    - `worldPos` 用 `renderRange` 重建
+  - 保持以下语义不变:
+    - first return 竞争仍用真实 external/splat range
+    - `Depth` 颜色映射仍用真实 `range`
+    - 距离衰减仍用真实 `range`
+- 这样做的含义:
+  - 我们只修正"最终显示深度关系",不篡改扫描物理语义.
+  - 这比去改 external capture depth 或 merge 竞争逻辑更稳.
+- 验证与附带结论:
+  - `Gsplat.Tests` 全包回归通过(83 total / 81 passed / 0 failed / 2 skipped).
+  - Unity 6000.3.8f1 下,命令行跑 TestRunner 这版要避免带 `-quit`,否则可能刷新工程后直接退出且不写 XML.
+- 本轮修正:
+  - `Runtime/Shaders/GsplatLidarPassCore.hlsl`
+    - 非 `LegacySoftEdge` 模式统一增加 `aaFringePadPx = 1.0`.
+    - 顶点阶段用 `paddedRadiusPx` 扩大点片几何.
+    - `uv` 同步按比例放大,让 fragment 能看到原边界外的 fringe 区域.
+    - fragment 用 `outerLimit` 截断真正的外扩范围.
+  - `AlphaToCoverage` 路线:
+    - 继续保留 coverage-first pass 语义.
+    - 但 alpha 现在终于有了“原边界外的 coverage 空间”可用,不再只是同 footprint 内的透明软化.
+- 验证结果:
+  - Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests`
+  - total=`82`, passed=`80`, failed=`0`, skipped=`2`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_particle_aa_v3_2026-03-08_noquit.xml`
+
+## 2026-03-08 14:33:20 +0800 追加: 把外扩 fringe 从写死常数升级为调参项
+
+- 用户决定: 不再把 `aaFringePadPx` 固定死在 shader 里,而是要在 Inspector 里可调.
+- 最终命名:
+  - 运行时字段: `LidarParticleAAFringePixels`
+  - shader property: `_LidarParticleAAFringePixels`
+- 设计取舍:
+  - 默认值保持 `1.0`,避免升级后旧场景观感突然变粗.
+  - `0` 允许用户主动关闭“原边界外扩”,回到几乎只在原 footprint 内部软化的状态.
+  - 负值不保留特殊语义,统一 clamp 到 `0`,避免“半合法”的隐藏模式增加理解成本.
+- 辅助改进:
+  - `TryLogParticleAntialiasingDiagnostics(...)` 现在会一起记录 `fringePx`,便于用户排查“面板改了是否真的传到 draw”.
+- 验证:
+  - Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests`
+  - total=`82`, passed=`80`, failed=`0`, skipped=`2`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_particle_aa_fringe_param_2026-03-08.xml`
+
+## 2026-03-08 19:39:20 +0800 追加: external mesh 雷达粒子贴到背面 - 根因收敛
+
+- 用户现象:
+  - “雷达扫描粒子 mesh 上的粒子现在都在 mesh 背面了,之前是正面的.”
+- 排查结论:
+  - 刚刚几轮 `AnalyticCoverage / A2C / fringe` 改动都没有碰 external mesh capture 链.
+  - 真正高风险点在 `Runtime/Shaders/GsplatLidarExternalCapture.shader`:
+    - 它一直在用 `Cull Back`.
+    - 而这份 shader 又运行在手动 `CommandBuffer.SetViewProjectionMatrices(view, projection)` 的离屏 capture 路径里.
+  - 在这种路径下,如果遇到 RT flip、投影手性、负缩放、镜像 transform 等组合,
+    front/back 判定更容易漂移.
+  - 一旦漂移,`Cull Back` 就会稳定保留错误一侧,于是 resolve 出来的 external hit 会落到 mesh 背面.
+- 修复策略:
+  - 不继续依赖面剔除来决定“正面”.
+  - 改成 `Cull Off`,让 depth buffer 自己选最近可见表面.
+  - 对闭合 mesh,这比依赖 winding/cull 更稳健.
+- 验证:
+  - 新增 `ExternalGpuCaptureShader_UsesCullOffToPreferNearestVisibleSurface` 回归测试.
+  - Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests`
+  - total=`83`, passed=`81`, failed=`0`, skipped=`2`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_external_capture_culloff_v2_2026-03-08.xml`
 
 ## 2026-03-08 12:46:01 +0800 追加: RadarScan 粒子抗锯齿模式落地结论
 
@@ -338,6 +584,42 @@
   - https://docs.unity3d.com/cn/2021.3/Manual/SL-AlphaToMask.html
 - Unity Manual: ShaderLab Blending / Alpha-to-coverage
   - https://docs.unity3d.com/cn/2018.4/Manual/SL-Blend.html
+
+## 2026-03-08 13:18:00 +0800 追加: 推荐路线已落地(A2C 改为 coverage-first)
+
+### 本轮修正
+
+- `AnalyticCoverage`
+  - 不再直接在归一化 uv 上做 `fwidth`.
+  - 改为先把 `signedEdge` 换算到像素尺度:
+    - `pointRadiusPx = max(_LidarPointRadiusPixels, 1.0)`
+    - `signedEdgePx = signedEdge * pointRadiusPx`
+    - `analyticWidthPx = fwidth(signedEdgePx)`
+  - 这样 2px 小点也能拿到更明显的 AA 过渡带.
+- `AlphaToCoverage`
+  - 不再沿用普通 LiDAR 的透明混合 pass.
+  - A2C shell 改成 coverage-first:
+    - `RenderType = TransparentCutout`
+    - `Blend One Zero`
+    - `AlphaToMask On`
+    - 保留 `ZWrite On`
+  - `Queue` 仍暂时保留 `Transparent`,尽量减少与现有 LiDAR / splat 提交顺序的连锁变化.
+
+### 关键判断
+
+- 这次不是“参数没切到 shader”.
+- 而是用户反馈逼出了一个更本质的问题:
+  - 原来的 A2C shell 只是“透明混合 pass + AlphaToMask On”,很难体现 sample coverage 的真实收益.
+- 现在改完后:
+  - `AnalyticCoverage` 的视觉差异应该更容易看出来
+  - `AlphaToCoverage` 的边缘语义会更接近 cutout / sample coverage,不再是假装透明混合也能得到完整 A2C 收益
+
+### 自动化验证
+
+- Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests`
+  - total=`82`, passed=`80`, failed=`0`, skipped=`2`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_particle_aa_v2_2026-03-08_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_particle_aa_v2_2026-03-08_noquit.log`
 
 ## 2026-03-08 10:50:00 +0800: 归档前 continuous-learning 四文件摘要
 

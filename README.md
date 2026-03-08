@@ -159,6 +159,7 @@ External targets share the same **first return** semantics with gsplat:
 - The frustum GPU resolve converts captured view-depth back into LiDAR ray-distance / `depthSq` semantics before writing the external hit buffer. It does not compare raw hardware depth against the LiDAR range image.
 - `Surround360`, unsupported GPU-capture platforms, or missing capture resources still fall back to the legacy CPU `RaycastCommand` route.
 - The LiDAR show/hide coverage radius now uses the combined bounds of gsplat + external targets, so external meshes outside the original gsplat bounds still participate in the reveal/burn radius.
+- `LidarExternalHitBiasMeters` can push external-hit particles slightly forward along the sensor ray at render time, which helps keep RadarScan points from sitting just behind the visible source mesh. This is a render-only bias: it does not change first-return competition, stored hit distance, or depth-color evaluation. The default is `0` (off), so only opt in when you actually need the extra forward push.
 
 Default scanning setup (as discussed in the spec):
 
@@ -173,10 +174,15 @@ Default scanning setup (as discussed in the spec):
 - Point size: `LidarPointRadiusPixels` (default `2px` radius)
 - Particle antialiasing:
   - `LidarParticleAntialiasingMode`
+  - `LidarParticleAAFringePixels`
   - `LegacySoftEdge` = compatibility default, keeps the old fixed-feather edge look
-  - `AnalyticCoverage` = recommended general mode, uses derivative-driven local coverage AA and does not depend on MSAA
-  - `AlphaToCoverage` / `AnalyticCoveragePlusAlphaToCoverage` = require effective MSAA on the actual render camera; if MSAA is unavailable, runtime falls back to `AnalyticCoverage`
-- Rendering: screen-space square points, alpha blend (opaque when alpha=1)
+  - `AnalyticCoverage` = recommended general mode, uses derivative-driven local coverage AA in pixel-space, and non-legacy AA modes now reserve a configurable outer fringe around each point so small LiDAR points show a clearer edge difference without requiring MSAA
+  - `AlphaToCoverage` / `AnalyticCoveragePlusAlphaToCoverage` = require effective MSAA on the actual render camera; these modes now use a coverage-first pass instead of the regular alpha-blended LiDAR shell, and reuse the same outer fringe space so the edge looks more like sample coverage / cutout than soft transparent blending
+  - If MSAA is unavailable, runtime falls back to `AnalyticCoverage`
+  - `LidarParticleAAFringePixels` controls how much outer fringe space non-legacy AA modes get. `0` means no extra outward fringe. `1` is the current default baseline.
+- Rendering: screen-space square points
+  - `LegacySoftEdge` / `AnalyticCoverage` use the original alpha-blended LiDAR pass
+  - A2C modes use a coverage-first pass on MSAA targets
   - Scan head + trail: `LidarTrailGamma`, `LidarIntensity`
   - Optional base intensity (prevents "black after sweep"): `LidarKeepUnscannedPoints`, `LidarUnscannedIntensity`
   - Optional distance attenuation (near stronger, far weaker):
@@ -195,11 +201,13 @@ r.LidarExternalStaticTargets = new[] { roadSignsRoot, roadSurfaceRoot };
 r.LidarExternalDynamicTargets = new[] { carRoot, characterRoot };
 r.LidarExternalDynamicUpdateHz = 15.0f;
 r.LidarExternalTargetVisibilityMode = GsplatLidarExternalTargetVisibilityMode.ForceRenderingOffInPlayMode;
+r.LidarExternalHitBiasMeters = 0.0f; // keep at 0 by default, opt in only if points look slightly behind the mesh
 r.HideSplatsWhenLidarEnabled = true;
 r.LidarColorMode = GsplatLidarColorMode.Depth;
 r.LidarDepthOpacity = 1.0f;
 r.LidarPointRadiusPixels = 2.0f;
 r.LidarParticleAntialiasingMode = GsplatLidarParticleAntialiasingMode.AnalyticCoverage;
+r.LidarParticleAAFringePixels = 1.0f;
 r.LidarKeepUnscannedPoints = true;
 r.LidarUnscannedIntensity = 0.2f;
 r.LidarIntensityDistanceDecayMode = GsplatLidarDistanceDecayMode.Exponential;
@@ -220,9 +228,11 @@ Manual verification checklist:
 - In `CameraFrustum` mode, dynamic external meshes refresh at `LidarExternalDynamicUpdateHz` and can remain stale between refreshes by design
 - With `LidarExternalTargetVisibilityMode=ForceRenderingOff`, external targets disappear as ordinary meshes but still remain valid LiDAR scan targets
 - With `LidarExternalTargetVisibilityMode=ForceRenderingOffInPlayMode`, external targets remain visible while editing but switch to scan-only during Play mode
+- With ordinary meshes still visible, `LidarExternalHitBiasMeters` can stay at `0` by default, and only be increased slightly (`0.01`, `0.02`, ...) if the RadarScan particles look like they are sitting just behind the source mesh surface
 - In `SplatColorSH0`, external hits use the hit material main color instead of SH0
-- `LidarParticleAntialiasingMode=AnalyticCoverage` gives a visibly smoother edge than `LegacySoftEdge` on small LiDAR points
+- `LidarParticleAntialiasingMode=AnalyticCoverage` now computes coverage in pixel-space and uses `LidarParticleAAFringePixels` as the outer fringe width, so small points should show a more obvious edge difference than the legacy fixed-feather path
 - `LidarParticleAntialiasingMode=AlphaToCoverage` or `AnalyticCoveragePlusAlphaToCoverage` only stays active when the actual render camera has MSAA; otherwise runtime falls back to `AnalyticCoverage`
+- When A2C is active, the LiDAR A2C shell uses a coverage-first pass instead of ordinary alpha blending, so expect a more cutout/sample-coverage style edge
 - `SkinnedMeshRenderer` targets update after pose changes on the next `LidarExternalDynamicUpdateHz` capture tick (or the next CPU fallback scan tick)
 - `HideSplatsWhenLidarEnabled=true` stops splat sort/draw while LiDAR still works
 

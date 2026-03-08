@@ -25,6 +25,8 @@ namespace Gsplat.Tests
 
             // Shader 反射: propertyIndex 必须存在.
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarParticleAAAnalyticCoverage"), 0);
+            Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarParticleAAFringePixels"), 0);
+            Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarExternalHitBiasMeters"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideNoiseMode"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideNoiseStrength"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideNoiseScale"), 0);
@@ -43,6 +45,8 @@ namespace Gsplat.Tests
             try
             {
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarParticleAAAnalyticCoverage")));
+                Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarParticleAAFringePixels")));
+                Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarExternalHitBiasMeters")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideNoiseMode")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideNoiseStrength")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideNoiseScale")));
@@ -86,12 +90,26 @@ namespace Gsplat.Tests
 
             StringAssert.Contains("#include \"GsplatLidarPassCore.hlsl\"", shaderText);
             StringAssert.Contains("float _LidarParticleAAAnalyticCoverage;", passCoreText);
-            StringAssert.Contains("float analyticWidth = max(fwidth(signedEdge), 1.0e-4);", passCoreText);
+            StringAssert.Contains("float _LidarParticleAAFringePixels;", passCoreText);
+            StringAssert.Contains("float _LidarExternalHitBiasMeters;", passCoreText);
+            StringAssert.Contains("#define GSPLAT_LIDAR_A2C_PASS 0", passCoreText);
+            StringAssert.Contains("float aaFringePadPx = (coverageAaEnabled > 0.5 && rPx > 1.0e-4) ? max(_LidarParticleAAFringePixels, 0.0) : 0.0;", passCoreText);
+            StringAssert.Contains("float paddedRadiusPx = rPx + aaFringePadPx;", passCoreText);
+            StringAssert.Contains("float outerLimit = 1.0 + aaFringePadPx / pointRadiusPx;", passCoreText);
+            StringAssert.Contains("float fixedCoverageAlphaShape = saturate(signedEdgePx / max(aaFringePadPx, 1.0e-4) + 0.5);",
+                passCoreText);
+            StringAssert.Contains("float pointRadiusPx = max(_LidarPointRadiusPixels, 1.0);", passCoreText);
+            StringAssert.Contains("float signedEdgePx = signedEdge * pointRadiusPx;", passCoreText);
+            StringAssert.Contains("float analyticWidthPx = max(fwidth(signedEdgePx), 1.0e-4);", passCoreText);
             StringAssert.Contains("saturate(_LidarParticleAAAnalyticCoverage)", passCoreText);
             StringAssert.Contains("uint externalRangeSqBits = _LidarExternalRangeSqBits[cellId];", passCoreText);
             StringAssert.Contains("bool useExternalHit = hasExternalHit && (!hasSplatHit || externalRangeSqBits < splatRangeSqBits);",
                 passCoreText);
             StringAssert.Contains("uint rangeSqBits = useExternalHit ? externalRangeSqBits : splatRangeSqBits;", passCoreText);
+            StringAssert.Contains("float renderRange = range;", passCoreText);
+            StringAssert.Contains("renderRange = max(range - max(_LidarExternalHitBiasMeters, 0.0), 0.0);", passCoreText);
+            StringAssert.Contains("float3 worldPos = mul(_LidarMatrixL2W, float4(dirLocal * renderRange, 1.0)).xyz;",
+                passCoreText);
         }
 
         [Test]
@@ -112,7 +130,14 @@ namespace Gsplat.Tests
 
             var shaderText = File.ReadAllText(shaderFullPath);
             StringAssert.Contains("AlphaToMask On", shaderText);
+            StringAssert.Contains("_LidarParticleAAFringePixels", shaderText);
+            StringAssert.Contains("_LidarExternalHitBiasMeters", shaderText);
+            StringAssert.Contains("#define GSPLAT_LIDAR_A2C_PASS 1", shaderText);
             StringAssert.Contains("#include \"GsplatLidarPassCore.hlsl\"", shaderText);
+            StringAssert.Contains("\"RenderType\"=\"TransparentCutout\"", shaderText);
+            StringAssert.Contains("Blend One Zero", shaderText);
+            Assert.IsFalse(shaderText.Contains("Blend SrcAlpha OneMinusSrcAlpha"),
+                "A2C shell 不应继续沿用普通透明混合,否则很难体现 coverage-first 的差异.");
         }
     }
 }

@@ -383,6 +383,8 @@ namespace Gsplat
         static readonly int k_lidarMatrixW2M = Shader.PropertyToID("_LidarMatrixW2M");
         static readonly int k_lidarPointRadiusPixels = Shader.PropertyToID("_LidarPointRadiusPixels");
         static readonly int k_lidarParticleAaAnalyticCoverage = Shader.PropertyToID("_LidarParticleAAAnalyticCoverage");
+        static readonly int k_lidarParticleAaFringePixels = Shader.PropertyToID("_LidarParticleAAFringePixels");
+        static readonly int k_lidarExternalHitBiasMeters = Shader.PropertyToID("_LidarExternalHitBiasMeters");
         static readonly int k_lidarColorMode = Shader.PropertyToID("_LidarColorMode");
         static readonly int k_lidarColorBlend = Shader.PropertyToID("_LidarColorBlend");
         static readonly int k_lidarVisibility = Shader.PropertyToID("_LidarVisibility");
@@ -721,9 +723,10 @@ namespace Gsplat
 
         void TryLogParticleAntialiasingDiagnostics(Camera camera,
             GsplatLidarParticleAntialiasingMode requestedMode,
-            GsplatLidarParticleAntialiasingMode effectiveMode)
+            GsplatLidarParticleAntialiasingMode effectiveMode,
+            float fringePixels)
         {
-            if (!GsplatUtils.UsesLidarParticleAlphaToCoverage(requestedMode))
+            if (requestedMode == GsplatLidarParticleAntialiasingMode.LegacySoftEdge)
                 return;
 
             var cameraId = camera ? camera.GetInstanceID() : 0;
@@ -742,20 +745,27 @@ namespace Gsplat
             m_debugLastLoggedParticleAaCameraId = cameraId;
 
             var cameraName = camera ? camera.name : "<null-camera>";
-            if (effectiveMode != requestedMode)
+            var materialShader = m_materialInstance ? m_materialInstance.shader : null;
+            var shaderName = materialShader ? materialShader.name : "<null-shader>";
+            var analyticCoverageEnabled = GsplatUtils.UsesLidarParticleAnalyticCoverage(effectiveMode) ? 1 : 0;
+            var coverageMode = GsplatUtils.UsesLidarParticleAlphaToCoverage(effectiveMode) ? "coverage-first" : "alpha-blend";
+
+            if (GsplatUtils.UsesLidarParticleAlphaToCoverage(requestedMode) && effectiveMode != requestedMode)
             {
                 Debug.LogWarning(
                     "[Gsplat][LiDAR][AA] " +
                     $"camera={cameraName} requested={requestedMode} effective={effectiveMode}. " +
                     $"A2C 当前未生效,已回退到 {effectiveMode}. " +
-                    $"allowMSAA={(camera && camera.allowMSAA ? 1 : 0)} msaaSamples={msaaSamples}.");
+                    $"allowMSAA={(camera && camera.allowMSAA ? 1 : 0)} msaaSamples={msaaSamples} " +
+                    $"shader={shaderName} analytic={analyticCoverageEnabled} fringePx={Mathf.Max(fringePixels, 0.0f):0.###} passMode={coverageMode}.");
                 return;
             }
 
             Debug.Log(
                 "[Gsplat][LiDAR][AA] " +
                 $"camera={cameraName} requested={requestedMode} effective={effectiveMode}. " +
-                $"A2C 当前已生效,msaaSamples={msaaSamples}.");
+                $"allowMSAA={(camera && camera.allowMSAA ? 1 : 0)} msaaSamples={msaaSamples} " +
+                $"shader={shaderName} analytic={analyticCoverageEnabled} fringePx={Mathf.Max(fringePixels, 0.0f):0.###} passMode={coverageMode}.");
         }
 
         static int GetEffectiveMsaaSampleCount(Camera camera)
@@ -776,13 +786,13 @@ namespace Gsplat
         public bool RenderPointCloud(GsplatSettings settings, Camera camera, int layer, bool gammaToLinear,
             in GsplatLidarLayout layout,
             Matrix4x4 lidarLocalToWorld, float lidarTime, float rotationHz,
-            float depthNear, float depthFar, float pointRadiusPixels,
+            float depthNear, float depthFar, float pointRadiusPixels, float particleAaFringePixels,
             GsplatLidarParticleAntialiasingMode requestedParticleAntialiasingMode,
             GsplatLidarParticleAntialiasingMode effectiveParticleAntialiasingMode,
             GsplatLidarColorMode colorMode, float colorBlend01, float visibility01,
             float trailGamma, float intensity, float unscannedIntensity,
             float intensityDistanceDecay, float unscannedIntensityDistanceDecay, GsplatLidarDistanceDecayMode intensityDistanceDecayMode,
-            float depthOpacity,
+            float depthOpacity, float externalHitBiasMeters,
             GraphicsBuffer splatColorBuffer,
             Matrix4x4 worldToModel, float showHideGate, int showHideMode, float showHideProgress,
             int showHideSourceMaskMode, float showHideSourceMaskProgress,
@@ -826,7 +836,7 @@ namespace Gsplat
 
 #if UNITY_EDITOR
             TryLogParticleAntialiasingDiagnostics(camera, requestedParticleAntialiasingMode,
-                effectiveParticleAntialiasingMode);
+                effectiveParticleAntialiasingMode, particleAaFringePixels);
 #endif
 
             if (!EnsureMaterialInstance(effectiveMaterial))
@@ -862,6 +872,11 @@ namespace Gsplat
             m_propertyBlock.SetFloat(k_lidarPointRadiusPixels, Mathf.Max(pointRadiusPixels, 0.0f));
             m_propertyBlock.SetFloat(k_lidarParticleAaAnalyticCoverage,
                 GsplatUtils.UsesLidarParticleAnalyticCoverage(effectiveParticleAntialiasingMode) ? 1.0f : 0.0f);
+            m_propertyBlock.SetFloat(k_lidarParticleAaFringePixels, Mathf.Max(particleAaFringePixels, 0.0f));
+            m_propertyBlock.SetFloat(k_lidarExternalHitBiasMeters,
+                (float.IsNaN(externalHitBiasMeters) || float.IsInfinity(externalHitBiasMeters) || externalHitBiasMeters < 0.0f)
+                    ? 0.0f
+                    : externalHitBiasMeters);
             m_propertyBlock.SetInt(k_lidarColorMode, (int)colorMode);
             m_propertyBlock.SetFloat(k_lidarColorBlend, Mathf.Clamp01(colorBlend01));
             m_propertyBlock.SetFloat(k_lidarVisibility, Mathf.Clamp01(visibility01));

@@ -209,6 +209,15 @@ namespace Gsplat
                  "默认 2px,可调.")]
         public float LidarPointRadiusPixels = 2.0f;
 
+        [Min(0.0f)]
+        [Tooltip("external mesh 命中的 RadarScan 粒子前推距离(米).\n" +
+                 "说明:\n" +
+                 "- 仅作用于 external target hit 的最终粒子渲染,不会改 first return 竞争结果.\n" +
+                 "- 作用是沿 LiDAR/sensor 射线把粒子轻微往前推,避免原始 mesh 仍可见时,粒子因为深度太贴而看起来落在模型后面.\n" +
+                 "- 设为 0 表示不做前推.\n" +
+                 "- 默认 0m(关闭).")]
+        public float LidarExternalHitBiasMeters = 0.0f;
+
         [Tooltip("RadarScan(LiDAR) 粒子抗锯齿模式.\n" +
                  "说明:\n" +
                  "- LegacySoftEdge: 保持当前固定 feather 的旧边缘语义.\n" +
@@ -218,6 +227,15 @@ namespace Gsplat
                  "- 默认 LegacySoftEdge,以保持旧场景升级后的视觉兼容.")]
         public GsplatLidarParticleAntialiasingMode LidarParticleAntialiasingMode =
             GsplatLidarParticleAntialiasingMode.LegacySoftEdge;
+
+        [Min(0.0f)]
+        [Tooltip("RadarScan(LiDAR) 粒子 AA 的外扩 fringe 宽度(像素).\n" +
+                 "说明:\n" +
+                 "- 仅在非 LegacySoftEdge 模式生效.\n" +
+                 "- 值越大,原始点边界外可用于 coverage 过渡的空间越大,边缘更容易看出来.\n" +
+                 "- 设为 0 表示不额外外扩,AA 基本只会在原 footprint 内部软化.\n" +
+                 "- 默认 1px,保持当前外扩 AA 的基线观感.")]
+        public float LidarParticleAAFringePixels = 1.0f;
 
         [Tooltip("RadarScan(LiDAR) show(淡入)动画时长(秒).\n" +
                  "说明:\n" +
@@ -3853,12 +3871,12 @@ namespace Gsplat
             m_lidarScan.RenderPointCloud(settings, targetCam, gameObject.layer, GammaToLinear,
                 layout,
                 lidarLocalToWorld, Time.realtimeSinceStartup, LidarRotationHz,
-                LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
+                LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels, LidarParticleAAFringePixels,
                 LidarParticleAntialiasingMode, effectiveLidarParticleAaMode,
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
                 LidarTrailGamma, LidarIntensity, lidarUnscannedIntensity,
                 LidarIntensityDistanceDecay, LidarUnscannedIntensityDistanceDecay, LidarIntensityDistanceDecayMode,
-                LidarDepthOpacity,
+                LidarDepthOpacity, LidarExternalHitBiasMeters,
                 m_renderer.ColorBuffer,
                 transform.worldToLocalMatrix,
                 showHideGate, showHideMode, showHideProgress,
@@ -3915,12 +3933,12 @@ namespace Gsplat
             m_lidarScan.RenderPointCloud(settings, camera, gameObject.layer, GammaToLinear,
                 layout,
                 lidarLocalToWorld, Time.realtimeSinceStartup, LidarRotationHz,
-                LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
+                LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels, LidarParticleAAFringePixels,
                 LidarParticleAntialiasingMode, effectiveLidarParticleAaMode,
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
                 LidarTrailGamma, LidarIntensity, lidarUnscannedIntensity,
                 LidarIntensityDistanceDecay, LidarUnscannedIntensityDistanceDecay, LidarIntensityDistanceDecayMode,
-                LidarDepthOpacity,
+                LidarDepthOpacity, LidarExternalHitBiasMeters,
                 m_renderer.ColorBuffer,
                 transform.worldToLocalMatrix,
                 showHideGate, showHideMode, showHideProgress,
@@ -4065,9 +4083,17 @@ namespace Gsplat
                 LidarPointRadiusPixels = 2.0f;
             if (LidarPointRadiusPixels < 0.0f)
                 LidarPointRadiusPixels = 0.0f;
+            if (float.IsNaN(LidarExternalHitBiasMeters) || float.IsInfinity(LidarExternalHitBiasMeters))
+                LidarExternalHitBiasMeters = 0.0f;
+            if (LidarExternalHitBiasMeters < 0.0f)
+                LidarExternalHitBiasMeters = 0.0f;
 
             LidarParticleAntialiasingMode =
                 GsplatUtils.SanitizeLidarParticleAntialiasingMode(LidarParticleAntialiasingMode);
+            if (float.IsNaN(LidarParticleAAFringePixels) || float.IsInfinity(LidarParticleAAFringePixels))
+                LidarParticleAAFringePixels = 1.0f;
+            if (LidarParticleAAFringePixels < 0.0f)
+                LidarParticleAAFringePixels = 0.0f;
 
             // RadarScan show/hide duration:
             // - <0 表示复用 RenderStyleSwitchDurationSeconds.

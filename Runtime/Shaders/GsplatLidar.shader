@@ -13,6 +13,8 @@ Shader "Gsplat/LiDAR"
         // - 因此这里把 show/hide / AA 参数显式声明为隐藏属性,用于稳态绑定与诊断.
         // ----------------------------------------------------------------
         [HideInInspector] _LidarParticleAAAnalyticCoverage("_LidarParticleAAAnalyticCoverage", Float) = 0
+        [HideInInspector] _LidarParticleAAFringePixels("_LidarParticleAAFringePixels", Float) = 1
+        [HideInInspector] _LidarExternalHitBiasMeters("_LidarExternalHitBiasMeters", Float) = 0
         [HideInInspector] _LidarShowHideNoiseMode("_LidarShowHideNoiseMode", Float) = 0
         [HideInInspector] _LidarShowHideNoiseStrength("_LidarShowHideNoiseStrength", Float) = 0
         [HideInInspector] _LidarShowHideNoiseScale("_LidarShowHideNoiseScale", Float) = 0

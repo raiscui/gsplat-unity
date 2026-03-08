@@ -12,6 +12,8 @@ Shader "Gsplat/LiDARAlphaToCoverage"
         //   避免 show/hide / external hit / 颜色路径维护成两份.
         // ----------------------------------------------------------------
         [HideInInspector] _LidarParticleAAAnalyticCoverage("_LidarParticleAAAnalyticCoverage", Float) = 0
+        [HideInInspector] _LidarParticleAAFringePixels("_LidarParticleAAFringePixels", Float) = 1
+        [HideInInspector] _LidarExternalHitBiasMeters("_LidarExternalHitBiasMeters", Float) = 0
         [HideInInspector] _LidarShowHideNoiseMode("_LidarShowHideNoiseMode", Float) = 0
         [HideInInspector] _LidarShowHideNoiseStrength("_LidarShowHideNoiseStrength", Float) = 0
         [HideInInspector] _LidarShowHideNoiseScale("_LidarShowHideNoiseScale", Float) = 0
@@ -29,14 +31,19 @@ Shader "Gsplat/LiDARAlphaToCoverage"
     {
         Tags
         {
-            "RenderType"="Transparent"
+            // 说明:
+            // - 这里不再把 A2C 当成“普通透明混合 pass 顺手加 AlphaToMask”.
+            // - 改成 coverage-first 路线:
+            //   alpha 主要用于 sample coverage,颜色写入走不透明式覆盖.
+            // - Queue 仍保留 Transparent,尽量减少与现有 LiDAR / splat 提交顺序的耦合变化.
+            "RenderType"="TransparentCutout"
             "Queue"="Transparent"
         }
 
         Pass
         {
             ZWrite On
-            Blend SrcAlpha OneMinusSrcAlpha
+            Blend One Zero
             ColorMask RGB
             Cull Off
             AlphaToMask On
@@ -47,6 +54,7 @@ Shader "Gsplat/LiDARAlphaToCoverage"
             #pragma require compute
 
             #include "UnityCG.cginc"
+            #define GSPLAT_LIDAR_A2C_PASS 1
             #include "GsplatLidarPassCore.hlsl"
             ENDHLSL
         }

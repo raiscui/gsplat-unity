@@ -2,9 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.IO;
 using System.Reflection;
+using System.Text.RegularExpressions;
 using NUnit.Framework;
+using UnityEditor;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace Gsplat.Tests
 {
@@ -195,6 +199,189 @@ namespace Gsplat.Tests
             var depthSq = InvokeDebugComputeRayDepthSqFromLinearViewDepth(5.0f, 0.5f);
             Assert.AreEqual(100.0f, depthSq, 1.0e-6f,
                 "Expected helper to convert linear view depth into LiDAR ray-distance squared.");
+        }
+
+        [Test]
+        public void ExternalGpuCaptureShader_UsesCullOffAndHardwareDepthToPreferNearestVisibleSurface()
+        {
+            const string kShaderAssetPath = "Packages/wu.yize.gsplat/Runtime/Shaders/GsplatLidarExternalCapture.shader";
+
+            var shader = AssetDatabase.LoadAssetAtPath<Shader>(kShaderAssetPath);
+            Assert.IsNotNull(shader, $"Failed to load LiDAR external capture shader at path: {kShaderAssetPath}");
+            Assert.AreEqual("Hidden/Gsplat/LidarExternalCapture", shader.name,
+                "Unexpected LiDAR external capture shader name. Possibly loaded a different asset.");
+
+            var projectRoot = Directory.GetParent(Application.dataPath);
+            Assert.IsNotNull(projectRoot, "Failed to resolve Unity project root from Application.dataPath.");
+
+            var shaderFullPath = Path.Combine(projectRoot.FullName, kShaderAssetPath);
+            Assert.IsTrue(File.Exists(shaderFullPath), $"Expected shader source file to exist: {shaderFullPath}");
+
+            var shaderText = File.ReadAllText(shaderFullPath);
+            StringAssert.IsMatch(@"(?m)^\s*Cull Off\s*$", shaderText);
+            Assert.IsFalse(Regex.IsMatch(shaderText, @"(?m)^\s*Cull Back\s*$"),
+                "External capture 不应继续依赖背面剔除,否则在手动 VP / 负缩放等场景下容易把 front/back 判反.");
+            StringAssert.Contains("_LidarExternalDepthZTest", shaderText,
+                "DepthCapture 的 ZTest 必须可按平台切换,否则 reversed-Z 平台会稳定把 far side 留下来.");
+            StringAssert.Contains("ZTest [_LidarExternalDepthZTest]", shaderText,
+                "DepthCapture 应通过材质属性切换 LessEqual / GreaterEqual.");
+            StringAssert.Contains("ZWrite On", shaderText,
+                "DepthCapture 必须写入深度,否则 color pass 无法只保留最近表面.");
+            StringAssert.Contains("return input.linearDepth;", shaderText,
+                "DepthCapture 应直接把最近表面的线性 view depth 写入颜色 RT.");
+            StringAssert.Contains("ZTest Equal", shaderText,
+                "SurfaceColorCapture 应只保留与最近深度一致的表面颜色.");
+            Assert.IsFalse(shaderText.Contains("BlendOp Max"),
+                "本轮修复不应继续依赖 `RFloat + BlendOp Max`,避免某些平台退化成最后写入者赢.");
+            Assert.IsFalse(shaderText.Contains("_LidarExternalResolvedDepthTex"),
+                "SurfaceColorCapture 不应再依赖额外的 resolved depth 纹理.");
+        }
+
+        [Test]
+        public void ExternalGpuResolve_UsesLinearDepthTextureBeforeRayDistanceConversion()
+        {
+            const string kComputeAssetPath = "Packages/wu.yize.gsplat/Runtime/Shaders/Gsplat.compute";
+
+            var projectRoot = Directory.GetParent(Application.dataPath);
+            Assert.IsNotNull(projectRoot, "Failed to resolve Unity project root from Application.dataPath.");
+
+            var computeFullPath = Path.Combine(projectRoot.FullName, kComputeAssetPath);
+            Assert.IsTrue(File.Exists(computeFullPath), $"Expected compute source file to exist: {computeFullPath}");
+
+            var computeText = File.ReadAllText(computeFullPath);
+            StringAssert.Contains("float linearDepth = _LidarExternalStaticLinearDepthTex.Load(int3(staticPixel, 0)).x;",
+                computeText);
+            StringAssert.Contains("float linearDepth = _LidarExternalDynamicLinearDepthTex.Load(int3(dynamicPixel, 0)).x;",
+                computeText);
+            Assert.IsFalse(computeText.Contains("float linearDepth = rcp(encodedDepth);"),
+                "Resolve 不应再把 capture texture 当作 encoded depth 解码.");
+        }
+
+        [Test]
+        public void ExternalGpuCaptureSource_PreservesDepthBufferForColorPass()
+        {
+            const string kSourceAssetPath = "Packages/wu.yize.gsplat/Runtime/Lidar/GsplatLidarExternalGpuCapture.cs";
+
+            var projectRoot = Directory.GetParent(Application.dataPath);
+            Assert.IsNotNull(projectRoot, "Failed to resolve Unity project root from Application.dataPath.");
+
+            var sourceFullPath = Path.Combine(projectRoot.FullName, kSourceAssetPath);
+            Assert.IsTrue(File.Exists(sourceFullPath), $"Expected source file to exist: {sourceFullPath}");
+
+            var sourceText = File.ReadAllText(sourceFullPath);
+            StringAssert.Contains("m_materialInstance.SetFloat(k_lidarExternalDepthZTest, depthZTest);", sourceText,
+                "capture helper 必须按平台设置 external depth 的 compare function.");
+            StringAssert.Contains("m_cmd.ClearRenderTarget(true, true, Color.clear, clearDepth);", sourceText,
+                "depth pass 必须按平台使用正确的 clearDepth,否则 reversed-Z 平台会稳定留下 far side.");
+            StringAssert.Contains("m_cmd.ClearRenderTarget(false, true, Color.clear);", sourceText,
+                "Surface color pass 必须保留上一 pass 的 depth buffer,否则无法稳定锁定最近表面颜色.");
+        }
+
+        [Test]
+        public void ExternalGpuCaptureDepthPass_CenterPixelMatchesSphereFrontDepth()
+        {
+            if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
+                Assert.Ignore("当前图形设备为 Null,无法执行真实 external GPU capture 深度验证.");
+
+            const int kCaptureSize = 65;
+            var cameraGo = new GameObject("ExternalGpuCapture_DepthCamera");
+            var sphere = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            Material material = null;
+            CommandBuffer cmd = null;
+            RenderTexture linearDepthRt = null;
+            RenderTexture depthRt = null;
+            Texture2D readbackTexture = null;
+
+            try
+            {
+                var camera = cameraGo.AddComponent<Camera>();
+                camera.orthographic = false;
+                camera.nearClipPlane = 0.1f;
+                camera.farClipPlane = 100.0f;
+                camera.fieldOfView = 60.0f;
+                camera.aspect = 1.0f;
+
+                sphere.transform.position = new Vector3(0.0f, 0.0f, 5.0f);
+                sphere.transform.localScale = Vector3.one;
+
+                var shader = Shader.Find("Hidden/Gsplat/LidarExternalCapture");
+                Assert.IsNotNull(shader, "Expected hidden LiDAR external capture shader to exist.");
+                material = new Material(shader);
+                material.SetFloat("_LidarExternalDepthZTest",
+                    SystemInfo.usesReversedZBuffer
+                        ? (float)CompareFunction.GreaterEqual
+                        : (float)CompareFunction.LessEqual);
+
+                var linearDepthFormat = SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.RFloat)
+                    ? RenderTextureFormat.RFloat
+                    : RenderTextureFormat.ARGBFloat;
+                linearDepthRt = new RenderTexture(kCaptureSize, kCaptureSize, 0, linearDepthFormat, RenderTextureReadWrite.Linear)
+                {
+                    filterMode = FilterMode.Point,
+                    wrapMode = TextureWrapMode.Clamp,
+                    antiAliasing = 1
+                };
+                linearDepthRt.Create();
+
+                depthRt = new RenderTexture(kCaptureSize, kCaptureSize, 24, RenderTextureFormat.Depth)
+                {
+                    filterMode = FilterMode.Point,
+                    wrapMode = TextureWrapMode.Clamp,
+                    antiAliasing = 1
+                };
+                depthRt.Create();
+
+                cmd = new CommandBuffer { name = "Gsplat.Tests.ExternalGpuCaptureDepthPass" };
+                cmd.SetViewProjectionMatrices(camera.worldToCameraMatrix,
+                    GL.GetGPUProjectionMatrix(camera.projectionMatrix, true));
+                cmd.SetRenderTarget(linearDepthRt.colorBuffer, depthRt.depthBuffer);
+                cmd.ClearRenderTarget(true, true, Color.clear, SystemInfo.usesReversedZBuffer ? 0.0f : 1.0f);
+                cmd.DrawMesh(sphere.GetComponent<MeshFilter>().sharedMesh,
+                    sphere.transform.localToWorldMatrix,
+                    material,
+                    0,
+                    0);
+                Graphics.ExecuteCommandBuffer(cmd);
+
+                readbackTexture = new Texture2D(kCaptureSize, kCaptureSize, TextureFormat.RGBAFloat, false, true);
+                var previousActive = RenderTexture.active;
+                RenderTexture.active = linearDepthRt;
+                readbackTexture.ReadPixels(new Rect(0, 0, kCaptureSize, kCaptureSize), 0, 0);
+                readbackTexture.Apply(false, false);
+                RenderTexture.active = previousActive;
+
+                var centerPixel = readbackTexture.GetPixel(kCaptureSize / 2, kCaptureSize / 2).r;
+                const float kExpectedFrontDepth = 4.5f;
+                const float kExpectedBackDepth = 5.5f;
+
+                Assert.That(centerPixel, Is.EqualTo(kExpectedFrontDepth).Within(0.15f),
+                    $"Expected capture center pixel to land on sphere front depth (~{kExpectedFrontDepth}), but got {centerPixel:0.###}.");
+                Assert.That(Mathf.Abs(centerPixel - kExpectedBackDepth), Is.GreaterThan(0.5f),
+                    "Capture center pixel unexpectedly looks like the sphere back depth, which would explain用户看到粒子落在背面.");
+            }
+            finally
+            {
+                if (cmd != null)
+                    cmd.Release();
+
+                if (readbackTexture)
+                    UnityEngine.Object.DestroyImmediate(readbackTexture);
+
+                if (linearDepthRt)
+                    UnityEngine.Object.DestroyImmediate(linearDepthRt);
+
+                if (depthRt)
+                    UnityEngine.Object.DestroyImmediate(depthRt);
+
+                if (material)
+                    UnityEngine.Object.DestroyImmediate(material);
+
+                if (sphere)
+                    UnityEngine.Object.DestroyImmediate(sphere);
+
+                if (cameraGo)
+                    UnityEngine.Object.DestroyImmediate(cameraGo);
+            }
         }
 
         [Test]
