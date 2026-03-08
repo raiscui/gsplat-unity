@@ -102,13 +102,66 @@ namespace Gsplat
                  "说明:\n" +
                  "- 默认关闭,不影响现有渲染.\n" +
                  "- 启用后会额外 dispatch compute(按 UpdateHz)生成 range image,并绘制规则点云.\n" +
-                 "- 如果 LidarOrigin 为空,将不会渲染 LiDAR 点云(并输出一次提示日志).")]
+                 "- 如果当前口径模式缺少必需的 sensor 配置,将不会渲染 LiDAR 点云(并输出一次提示日志).")]
         public bool EnableLidarScan;
 
-        [Tooltip("LiDAR 原点与朝向.\n" +
+        [Tooltip("LiDAR 扫描口径模式.\n" +
+                 "说明:\n" +
+                 "- Surround360: 继续使用传统 360 度扫描,传感器位姿来自 LidarOrigin.\n" +
+                 "- CameraFrustum: 扫描口径与传感器位姿都直接来自 LidarFrustumCamera.")]
+        public GsplatLidarApertureMode LidarApertureMode = GsplatLidarApertureMode.Surround360;
+
+        [Tooltip("frustum 模式下的 LiDAR 相机.\n" +
+                 "说明:\n" +
+                 "- 该 camera 直接提供 sensor origin + rotation + projection.\n" +
+                 "- 当前阶段会先把它作为 authoritative sensor pose.\n" +
+                 "- 后续 active cells / GPU capture 也会继续对齐这个 camera.")]
+        public Camera LidarFrustumCamera;
+
+        [Tooltip("360 模式下的 LiDAR 原点与朝向.\n" +
                  "系统将以该 Transform 的 world position/rotation 作为 LiDAR 安装位姿.\n" +
-                 "注意: EnableLidarScan=true 时该字段必须指定.")]
+                 "注意: 仅在 LidarApertureMode=Surround360 时该字段才是必填项.")]
         public Transform LidarOrigin;
+
+        [FormerlySerializedAs("LidarExternalTargets")]
+        [Tooltip("参与 RadarScan 的 static external 目标根对象数组.\n" +
+                 "说明:\n" +
+                 "- 数组中的每个元素都会被视为一个 static 扫描根对象.\n" +
+                 "- 后续会递归收集其子层级中的 MeshRenderer / SkinnedMeshRenderer.\n" +
+                 "- 旧字段 LidarExternalTargets 会自动迁到这里.\n" +
+                 "- 留空时保持当前纯 gsplat LiDAR 行为不变.")]
+        public GameObject[] LidarExternalStaticTargets = Array.Empty<GameObject>();
+
+        [Tooltip("参与 RadarScan 的 dynamic external 目标根对象数组.\n" +
+                 "说明:\n" +
+                 "- 适合会动的 mesh / skinned mesh / 动画物体.\n" +
+                 "- 当前起手阶段先把它接入现有 external scan 输入.\n" +
+                 "- 后续 frustum GPU capture 路线会对它应用独立更新门禁.")]
+        public GameObject[] LidarExternalDynamicTargets = Array.Empty<GameObject>();
+
+        [Min(0.0f)]
+        [Tooltip("dynamic external targets 的独立更新频率(Hz).\n" +
+                 "说明:\n" +
+                 "- <=0 或非法值会回退到 10Hz.\n" +
+                 "- 当前阶段先完成字段与 Inspector 接线.\n" +
+                 "- 后续 frustum GPU capture 路线会消费该门禁,用于 dynamic 组复用上一轮 capture.")]
+        public float LidarExternalDynamicUpdateHz = 10.0f;
+
+        [Obsolete("Use LidarExternalStaticTargets and LidarExternalDynamicTargets instead.")]
+        public GameObject[] LidarExternalTargets
+        {
+            get => LidarExternalStaticTargets;
+            set => LidarExternalStaticTargets = value ?? Array.Empty<GameObject>();
+        }
+
+        [Tooltip("external target 的普通 mesh 可见性模式.\n" +
+                 "说明:\n" +
+                 "- KeepVisible: 外部目标继续显示普通 mesh,同时参与 RadarScan.\n" +
+                 "- ForceRenderingOff: 外部目标继续参与 RadarScan,但不再显示普通 mesh shader 效果.\n" +
+                 "- ForceRenderingOffInPlayMode: 仅在 Play 模式隐藏普通 mesh,编辑器平时仍显示.\n" +
+                 "- 默认 ForceRenderingOff,更贴合\"scan-only 外部目标\"语义.")]
+        public GsplatLidarExternalTargetVisibilityMode LidarExternalTargetVisibilityMode =
+            GsplatLidarExternalTargetVisibilityMode.ForceRenderingOff;
 
         [Min(0.0f)]
         [Tooltip("LiDAR 扫描头旋转频率(Hz).\n" +
@@ -166,6 +219,16 @@ namespace Gsplat
         [Tooltip("LiDAR 点云的点半径(屏幕像素,px radius).\n" +
                  "默认 2px,可调.")]
         public float LidarPointRadiusPixels = 2.0f;
+
+        [Tooltip("RadarScan(LiDAR) 粒子抗锯齿模式.\n" +
+                 "说明:\n" +
+                 "- LegacySoftEdge: 保持当前固定 feather 的旧边缘语义.\n" +
+                 "- AnalyticCoverage: 推荐模式. 使用屏幕导数驱动的本地 coverage AA,不依赖 MSAA.\n" +
+                 "- AlphaToCoverage: 依赖有效 MSAA. 无 MSAA 时会自动回退到 AnalyticCoverage.\n" +
+                 "- AnalyticCoveragePlusAlphaToCoverage: analytic coverage 与 A2C 叠加. 无 MSAA 时同样回退到 AnalyticCoverage.\n" +
+                 "- 默认 LegacySoftEdge,以保持旧场景升级后的视觉兼容.")]
+        public GsplatLidarParticleAntialiasingMode LidarParticleAntialiasingMode =
+            GsplatLidarParticleAntialiasingMode.LegacySoftEdge;
 
         [Tooltip("RadarScan(LiDAR) show(淡入)动画时长(秒).\n" +
                  "说明:\n" +
@@ -567,7 +630,7 @@ namespace Gsplat
             // LiDAR 扫描前沿(亮度余辉)是纯时间驱动:
             // - EditMode 下如果没有持续 repaint,会出现“鼠标不动就不动”的错觉.
             // - 因此当雷达 runtime 链路仍在(包括 fade-out 期间)且已指定 Origin 时,都需要 ticker 驱动 Repaint.
-            if (IsLidarRuntimeActive() && LidarOrigin)
+            if (IsLidarRuntimeActive() && ResolveConfiguredLidarSensorTransformOrNull())
                 return true;
 
             return false;
@@ -659,7 +722,7 @@ namespace Gsplat
                 r.AdvanceLidarAnimationStateIfNeeded();
 
                 // LiDAR 扫描前沿需要持续 repaint 才能看到"旋转"与余辉变化(尤其是 EditMode).
-                if (r.IsLidarRuntimeActive() && r.LidarOrigin)
+                if (r.IsLidarRuntimeActive() && r.ResolveConfiguredLidarSensorTransformOrNull())
                     r.RequestEditorRepaintForVisibilityAnimation(force: false, reason: "LiDAR");
 
                 // 诊断(可选): 仅在 EnableEditorDiagnostics=true 时记录,并做额外节流.
@@ -756,7 +819,10 @@ namespace Gsplat
         // - compute dispatch 与 draw call 会在后续 tasks 中实现,这里先把资源管理打底.
         // --------------------------------------------------------------------
         GsplatLidarScan m_lidarScan;
+        GsplatLidarExternalTargetHelper m_lidarExternalTargetHelper;
+        GsplatLidarExternalGpuCapture m_lidarExternalGpuCapture;
         bool m_lidarLoggedMissingOrigin;
+        GameObject[] m_lidarCombinedExternalTargetsScratch = Array.Empty<GameObject>();
 
         bool m_disabledDueToError;
         float m_timeNormalizedThisFrame;
@@ -841,10 +907,11 @@ namespace Gsplat
             // - HideSplatsWhenLidarEnabled=true 时仅显示 LiDAR 点云,不提交 splat 的 sort/draw.
             if (ShouldSubmitSplatsThisFrame())
             {
-                PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
+                var localBounds = ResolveVisibilityLocalBoundsForThisFrame();
+                PushVisibilityUniformsForThisFrame(localBounds);
                 PushRenderStyleUniformsForThisFrame();
 
-                var boundsForRender = CalcVisibilityExpandedRenderBounds(SequenceAsset.UnionBounds);
+                var boundsForRender = CalcVisibilityExpandedRenderBounds(localBounds);
                 m_renderer.RenderForCamera(camera, SplatCount, transform, boundsForRender, gameObject.layer,
                     GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
                     timeModel: 1, temporalCutoff: 0.01f,
@@ -1759,6 +1826,236 @@ namespace Gsplat
             return baseBounds;
         }
 
+        Bounds ResolveVisibilityLocalBoundsForThisFrame()
+        {
+            var localBounds = SequenceAsset ? SequenceAsset.UnionBounds : new Bounds(Vector3.zero, Vector3.one);
+            if (!GsplatLidarExternalTargetHelper.TryComputeWorldBounds(ResolveAllLidarExternalTargetsForScan(),
+                    out var externalWorldBounds))
+                return localBounds;
+
+            var externalLocalBounds = GsplatUtils.TransformBounds(externalWorldBounds, transform.worldToLocalMatrix);
+            localBounds.Encapsulate(externalLocalBounds);
+            return localBounds;
+        }
+
+        bool UsesFrustumLidarAperture()
+        {
+            return LidarApertureMode == GsplatLidarApertureMode.CameraFrustum;
+        }
+
+        Camera ResolveConfiguredLidarFrustumCameraOrNull()
+        {
+            return UsesFrustumLidarAperture() && LidarFrustumCamera ? LidarFrustumCamera : null;
+        }
+
+        Transform ResolveConfiguredLidarSensorTransformOrNull()
+        {
+            var frustumCamera = ResolveConfiguredLidarFrustumCameraOrNull();
+            if (frustumCamera)
+                return frustumCamera.transform;
+
+            return UsesFrustumLidarAperture() ? null : LidarOrigin;
+        }
+
+        void LogMissingLidarSensorConfigurationOnce()
+        {
+            if (m_lidarLoggedMissingOrigin)
+                return;
+
+            m_lidarLoggedMissingOrigin = true;
+            if (UsesFrustumLidarAperture())
+            {
+                Debug.LogWarning(
+                    "[Gsplat][Sequence][LiDAR] EnableLidarScan=true 且 LidarApertureMode=CameraFrustum, " +
+                    "但 LidarFrustumCamera 为空或失效. 当前不会渲染 LiDAR 点云.");
+                return;
+            }
+
+            Debug.LogWarning(
+                "[Gsplat][Sequence][LiDAR] EnableLidarScan=true 但 LidarOrigin 为空. " +
+                "请在 Surround360 模式下指定 LidarOrigin Transform.");
+        }
+
+        void LogInvalidLidarFrustumConfigurationOnce(string invalidReason)
+        {
+            if (m_lidarLoggedMissingOrigin)
+                return;
+
+            m_lidarLoggedMissingOrigin = true;
+            Debug.LogWarning(
+                "[Gsplat][Sequence][LiDAR] LidarApertureMode=CameraFrustum, " +
+                $"但当前 frustum camera 配置无效: {invalidReason}. LiDAR 点云与 external scan 本轮将跳过.");
+        }
+
+        bool TryGetEffectiveLidarLayout(out GsplatLidarLayout layout, out Camera frustumCamera, bool logWhenMissing = true)
+        {
+            frustumCamera = ResolveConfiguredLidarFrustumCameraOrNull();
+            if (!UsesFrustumLidarAperture())
+            {
+                layout = GsplatLidarLayout.CreateSurround360(
+                    LidarAzimuthBins,
+                    LidarBeamCount,
+                    LidarUpFovDeg,
+                    LidarDownFovDeg);
+                return true;
+            }
+
+            if (!frustumCamera)
+            {
+                layout = default;
+                if (logWhenMissing)
+                    LogMissingLidarSensorConfigurationOnce();
+                return false;
+            }
+
+            if (!GsplatLidarLayout.TryCreateCameraFrustum(
+                    frustumCamera,
+                    LidarAzimuthBins,
+                    LidarBeamCount,
+                    LidarUpFovDeg,
+                    LidarDownFovDeg,
+                    out layout,
+                    out var invalidReason))
+            {
+                if (logWhenMissing)
+                    LogInvalidLidarFrustumConfigurationOnce(invalidReason);
+                return false;
+            }
+
+            m_lidarLoggedMissingOrigin = false;
+            return true;
+        }
+
+        bool TryGetEffectiveLidarRuntimeContext(out GsplatLidarLayout layout,
+            out Matrix4x4 lidarLocalToWorld, out Matrix4x4 worldToLidar,
+            out Camera frustumCamera, bool logWhenMissing = true)
+        {
+            lidarLocalToWorld = Matrix4x4.identity;
+            worldToLidar = Matrix4x4.identity;
+
+            if (!TryGetEffectiveLidarLayout(out layout, out frustumCamera, logWhenMissing))
+                return false;
+
+            var sensorTransform = ResolveConfiguredLidarSensorTransformOrNull();
+            if (!sensorTransform)
+            {
+                if (logWhenMissing)
+                    LogMissingLidarSensorConfigurationOnce();
+                return false;
+            }
+
+            m_lidarLoggedMissingOrigin = false;
+            lidarLocalToWorld = sensorTransform.localToWorldMatrix;
+            worldToLidar = sensorTransform.worldToLocalMatrix;
+            return true;
+        }
+
+        bool TryGetEffectiveLidarSensorFrame(out Matrix4x4 lidarLocalToWorld, out Matrix4x4 worldToLidar,
+            out Camera frustumCamera, bool logWhenMissing = true)
+        {
+            return TryGetEffectiveLidarRuntimeContext(out _, out lidarLocalToWorld, out worldToLidar,
+                out frustumCamera, logWhenMissing);
+        }
+
+        GameObject[] ResolveAllLidarExternalTargetsForScan()
+        {
+            var staticTargets = LidarExternalStaticTargets ?? Array.Empty<GameObject>();
+            var dynamicTargets = LidarExternalDynamicTargets ?? Array.Empty<GameObject>();
+
+            if (staticTargets.Length == 0)
+                return dynamicTargets;
+
+            if (dynamicTargets.Length == 0)
+                return staticTargets;
+
+            var combinedCount = staticTargets.Length + dynamicTargets.Length;
+            if (m_lidarCombinedExternalTargetsScratch == null ||
+                m_lidarCombinedExternalTargetsScratch.Length != combinedCount)
+            {
+                m_lidarCombinedExternalTargetsScratch = new GameObject[combinedCount];
+            }
+
+            Array.Copy(staticTargets, 0, m_lidarCombinedExternalTargetsScratch, 0, staticTargets.Length);
+            Array.Copy(dynamicTargets, 0, m_lidarCombinedExternalTargetsScratch, staticTargets.Length,
+                dynamicTargets.Length);
+            return m_lidarCombinedExternalTargetsScratch;
+        }
+
+        void DisposeLidarExternalTargetHelper()
+        {
+            m_lidarExternalTargetHelper?.Dispose();
+            m_lidarExternalTargetHelper = null;
+        }
+
+        void DisposeLidarExternalGpuCapture()
+        {
+            m_lidarExternalGpuCapture?.Dispose();
+            m_lidarExternalGpuCapture = null;
+        }
+
+        void TickLidarExternalHitsIfNeeded(bool rangeImageUpdatedThisFrame)
+        {
+            if (m_lidarScan == null)
+                return;
+
+            var cellCount = m_lidarScan.RangeCellCount;
+            if (cellCount <= 0)
+                cellCount = Mathf.Max(Mathf.Max(LidarAzimuthBins, 1) * Mathf.Max(LidarBeamCount, 1), 1);
+            var externalTargets = ResolveAllLidarExternalTargetsForScan();
+
+            if (externalTargets == null || externalTargets.Length == 0)
+            {
+                DisposeLidarExternalTargetHelper();
+                DisposeLidarExternalGpuCapture();
+                m_lidarScan.ClearExternalHits(cellCount);
+                return;
+            }
+
+            if (!TryGetEffectiveLidarLayout(out var layout, out var frustumCamera, logWhenMissing: false))
+            {
+                DisposeLidarExternalTargetHelper();
+                DisposeLidarExternalGpuCapture();
+                m_lidarScan.ClearExternalHits(cellCount);
+                return;
+            }
+
+            // external route 选择规则:
+            // - frustum 模式优先走 GPU capture,因为这是当前主路径.
+            // - surround360 或 GPU 路线不可用时,继续回退旧 CPU helper.
+            var settings = GsplatSettings.Instance;
+            if (layout.IsFrustum && frustumCamera && settings)
+            {
+                m_lidarExternalGpuCapture ??= new GsplatLidarExternalGpuCapture();
+                if (m_lidarExternalGpuCapture.TryCaptureExternalHits(m_lidarScan,
+                        settings,
+                        frustumCamera,
+                        layout,
+                        LidarExternalStaticTargets,
+                        LidarExternalDynamicTargets,
+                        LidarExternalDynamicUpdateHz,
+                        LidarExternalTargetVisibilityMode))
+                {
+                    DisposeLidarExternalTargetHelper();
+                    return;
+                }
+            }
+            else
+            {
+                DisposeLidarExternalGpuCapture();
+            }
+
+            if (!rangeImageUpdatedThisFrame)
+                return;
+
+            m_lidarExternalTargetHelper ??= new GsplatLidarExternalTargetHelper();
+            m_lidarExternalTargetHelper.TryUpdateExternalHits(m_lidarScan,
+                externalTargets,
+                LidarExternalTargetVisibilityMode,
+                ResolveConfiguredLidarSensorTransformOrNull(),
+                layout,
+                LidarDepthFar);
+        }
+
         void OnEnable()
         {
             GsplatSorter.Instance.RegisterGsplat(this);
@@ -1789,7 +2086,7 @@ namespace Gsplat
             InitVisibilityOnEnable();
             InitRenderStyleOnEnable();
             InitLidarAnimationOnEnable();
-            PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
+            PushVisibilityUniformsForThisFrame(ResolveVisibilityLocalBoundsForThisFrame());
             PushRenderStyleUniformsForThisFrame();
         }
 
@@ -1801,6 +2098,8 @@ namespace Gsplat
 #endif
             GsplatSorter.Instance.UnregisterGsplat(this);
             DisposeDecodeResources();
+            DisposeLidarExternalTargetHelper();
+            DisposeLidarExternalGpuCapture();
             m_lidarScan?.Dispose();
             m_lidarScan = null;
             m_renderer?.Dispose();
@@ -1885,6 +2184,8 @@ namespace Gsplat
                 // - LiDAR 默认关闭,因此当用户把开关关掉时,我们选择立即释放 range/LUT buffers,
                 //   避免长时间占用 GPU 内存.
                 // - 下次再打开时会按当前参数重建.
+                DisposeLidarExternalTargetHelper();
+                DisposeLidarExternalGpuCapture();
                 m_lidarScan.Dispose();
                 m_lidarScan = null;
             }
@@ -1967,7 +2268,8 @@ namespace Gsplat
 
             // LiDAR range image 更新:
             // - 序列后端的 PositionBuffer 是每帧 decode 生成的,因此 LiDAR 的采样必须发生在 decode 之后.
-            TickLidarRangeImageIfNeeded();
+            var rangeImageUpdatedThisFrame = TickLidarRangeImageIfNeeded();
+            TickLidarExternalHitsIfNeeded(rangeImageUpdatedThisFrame);
 
 #if UNITY_EDITOR
             var settings = GsplatSettings.Instance;
@@ -1982,10 +2284,11 @@ namespace Gsplat
             {
                 if (ShouldSubmitSplatsThisFrame())
                 {
-                    PushVisibilityUniformsForThisFrame(SequenceAsset.UnionBounds);
+                    var localBounds = ResolveVisibilityLocalBoundsForThisFrame();
+                    PushVisibilityUniformsForThisFrame(localBounds);
                     PushRenderStyleUniformsForThisFrame();
 
-                    var boundsForRender = CalcVisibilityExpandedRenderBounds(SequenceAsset.UnionBounds);
+                    var boundsForRender = CalcVisibilityExpandedRenderBounds(localBounds);
                     m_renderer.Render(SplatCount, transform, boundsForRender, gameObject.layer,
                         GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
                         timeModel: 1, temporalCutoff: 0.01f);
@@ -2191,6 +2494,50 @@ namespace Gsplat
             m_kernelDecodeSHV2 = -1;
         }
 
+        static void NormalizeLidarExternalTargets(ref GameObject[] lidarExternalTargets)
+        {
+            // 说明:
+            // - Unity 历史场景升级后,新字段常见状态是 null.
+            // - 这里统一归一化成空数组,避免后续 helper/遍历逻辑反复判空.
+            if (lidarExternalTargets == null || lidarExternalTargets.Length == 0)
+            {
+                lidarExternalTargets = Array.Empty<GameObject>();
+                return;
+            }
+
+            // 说明:
+            // - Inspector 的数组槽位经常会残留 Missing/None.
+            // - 这里仅清理空引用,保留用户原始顺序,不偷偷做去重或重排.
+            var validCount = 0;
+            for (var i = 0; i < lidarExternalTargets.Length; i++)
+            {
+                if (lidarExternalTargets[i])
+                    validCount++;
+            }
+
+            if (validCount == lidarExternalTargets.Length)
+                return;
+
+            if (validCount == 0)
+            {
+                lidarExternalTargets = Array.Empty<GameObject>();
+                return;
+            }
+
+            var normalizedTargets = new GameObject[validCount];
+            var writeIndex = 0;
+            for (var i = 0; i < lidarExternalTargets.Length; i++)
+            {
+                var target = lidarExternalTargets[i];
+                if (!target)
+                    continue;
+
+                normalizedTargets[writeIndex++] = target;
+            }
+
+            lidarExternalTargets = normalizedTargets;
+        }
+
         void ValidateLidarSerializedFields()
         {
             // 说明:
@@ -2202,6 +2549,18 @@ namespace Gsplat
 
             if (float.IsNaN(LidarUpdateHz) || float.IsInfinity(LidarUpdateHz) || LidarUpdateHz <= 0.0f)
                 LidarUpdateHz = 10.0f;
+
+            if (LidarApertureMode != GsplatLidarApertureMode.Surround360 &&
+                LidarApertureMode != GsplatLidarApertureMode.CameraFrustum)
+            {
+                LidarApertureMode = GsplatLidarApertureMode.Surround360;
+            }
+
+            if (float.IsNaN(LidarExternalDynamicUpdateHz) || float.IsInfinity(LidarExternalDynamicUpdateHz) ||
+                LidarExternalDynamicUpdateHz <= 0.0f)
+            {
+                LidarExternalDynamicUpdateHz = 10.0f;
+            }
 
             if (LidarAzimuthBins < 64)
                 LidarAzimuthBins = 2048;
@@ -2236,6 +2595,9 @@ namespace Gsplat
                 LidarPointRadiusPixels = 2.0f;
             if (LidarPointRadiusPixels < 0.0f)
                 LidarPointRadiusPixels = 0.0f;
+
+            LidarParticleAntialiasingMode =
+                GsplatUtils.SanitizeLidarParticleAntialiasingMode(LidarParticleAntialiasingMode);
 
             if (float.IsNaN(LidarShowDuration) || float.IsInfinity(LidarShowDuration) || LidarShowDuration < 0.0f)
                 LidarShowDuration = -1.0f;
@@ -2281,6 +2643,13 @@ namespace Gsplat
                 LidarIntensityDistanceDecayMode = GsplatLidarDistanceDecayMode.Reciprocal;
             }
 
+            if (LidarExternalTargetVisibilityMode != GsplatLidarExternalTargetVisibilityMode.KeepVisible &&
+                LidarExternalTargetVisibilityMode != GsplatLidarExternalTargetVisibilityMode.ForceRenderingOff &&
+                LidarExternalTargetVisibilityMode != GsplatLidarExternalTargetVisibilityMode.ForceRenderingOffInPlayMode)
+            {
+                LidarExternalTargetVisibilityMode = GsplatLidarExternalTargetVisibilityMode.ForceRenderingOff;
+            }
+
             if (float.IsNaN(LidarIntensityDistanceDecay) || float.IsInfinity(LidarIntensityDistanceDecay) || LidarIntensityDistanceDecay < 0.0f)
                 LidarIntensityDistanceDecay = 0.0f;
 
@@ -2294,6 +2663,9 @@ namespace Gsplat
             if (float.IsNaN(LidarMinSplatOpacity) || float.IsInfinity(LidarMinSplatOpacity) || LidarMinSplatOpacity < 0.0f)
                 LidarMinSplatOpacity = 1.0f / 255.0f;
             LidarMinSplatOpacity = Mathf.Clamp01(LidarMinSplatOpacity);
+
+            NormalizeLidarExternalTargets(ref LidarExternalStaticTargets);
+            NormalizeLidarExternalTargets(ref LidarExternalDynamicTargets);
         }
 
         void EnsureLidarResources()
@@ -2304,45 +2676,37 @@ namespace Gsplat
             if (SystemInfo.graphicsDeviceType == GraphicsDeviceType.Null)
                 return;
 
-            var azBins = Mathf.Max(LidarAzimuthBins, 1);
-            var beamCount = Mathf.Max(LidarBeamCount, 1);
+            if (!TryGetEffectiveLidarLayout(out var layout, out _, logWhenMissing: true))
+                return;
 
             m_lidarScan ??= new GsplatLidarScan();
-            m_lidarScan.EnsureRangeImageBuffers(azBins, beamCount);
-            m_lidarScan.EnsureLutBuffers(azBins, LidarUpFovDeg, LidarDownFovDeg, beamCount);
+            m_lidarScan.EnsureRangeImageBuffers(layout);
+            m_lidarScan.EnsureLutBuffers(layout);
         }
 
-        void TickLidarRangeImageIfNeeded()
+        bool TickLidarRangeImageIfNeeded()
         {
             // 说明:
             // - v1 采用方案 X: UpdateHz 门禁下,每次全量重建一次 360 range image.
             // - 序列后端的 PositionBuffer 是每帧 decode 生成的,因此该函数必须在 TryDecodeThisFrame 之后调用.
             if (!EnableLidarScan || m_lidarScan == null || m_renderer == null || !m_renderer.Valid)
-                return;
+                return false;
 
-            if (!LidarOrigin)
-            {
-                if (!m_lidarLoggedMissingOrigin)
-                {
-                    m_lidarLoggedMissingOrigin = true;
-                    Debug.LogWarning("[Gsplat][Sequence][LiDAR] EnableLidarScan=true 但 LidarOrigin 为空. 请在 Inspector 中指定 LidarOrigin Transform.");
-                }
-                return;
-            }
-
-            m_lidarLoggedMissingOrigin = false;
+            if (!TryGetEffectiveLidarRuntimeContext(out var layout, out _, out var worldToLidar, out _,
+                    logWhenMissing: true))
+                return false;
 
             var settings = GsplatSettings.Instance;
             if (!settings || !settings.ComputeShader)
-                return;
+                return false;
 
             var now = (double)Time.realtimeSinceStartup;
             if (!m_lidarScan.IsRangeImageUpdateDue(now, LidarUpdateHz))
-                return;
+                return false;
 
             // sequence 后端目前没有 keyframe segment 子范围,因此采样全量 splats.
             var count = SplatCount > int.MaxValue ? int.MaxValue : (int)SplatCount;
-            var modelToLidar = LidarOrigin.worldToLocalMatrix * transform.localToWorldMatrix;
+            var modelToLidar = worldToLidar * transform.localToWorldMatrix;
 
             var needsSplatId = LidarNeedsSplatIdThisFrame();
             if (m_lidarScan.TryRebuildRangeImage(settings.ComputeShader,
@@ -2357,13 +2721,15 @@ namespace Gsplat
                     temporalCutoff: 0.01f,
                     LidarMinSplatOpacity,
                     modelToLidar, splatBaseIndex: 0, splatCount: count,
-                    LidarAzimuthBins, LidarBeamCount,
-                    LidarUpFovDeg, LidarDownFovDeg,
+                    layout,
                     LidarDepthNear, LidarDepthFar,
                     needsSplatId))
             {
                 m_lidarScan.MarkRangeImageUpdated(now);
+                return true;
             }
+
+            return false;
         }
 
         void RenderLidarInUpdateIfNeeded()
@@ -2371,7 +2737,8 @@ namespace Gsplat
             if (!IsLidarRuntimeActive() || m_lidarScan == null || m_renderer == null || !m_renderer.Valid)
                 return;
 
-            if (!LidarOrigin)
+            if (!TryGetEffectiveLidarRuntimeContext(out var layout, out var lidarLocalToWorld, out _, out _,
+                    logWhenMissing: true))
                 return;
 
             var settings = GsplatSettings.Instance;
@@ -2397,7 +2764,7 @@ namespace Gsplat
                 targetCam = cam;
             }
 
-            var localBounds = SequenceAsset ? SequenceAsset.UnionBounds : new Bounds(Vector3.zero, Vector3.one);
+            var localBounds = ResolveVisibilityLocalBoundsForThisFrame();
             BuildLidarShowHideOverlayForThisFrame(localBounds,
                 out var showHideGate,
                 out var showHideMode,
@@ -2416,11 +2783,14 @@ namespace Gsplat
             var showHideNoiseScale = LidarShowHideNoiseScale >= 0.0f ? LidarShowHideNoiseScale : NoiseScale;
             var showHideNoiseSpeed = LidarShowHideNoiseSpeed >= 0.0f ? LidarShowHideNoiseSpeed : NoiseSpeed;
             var lidarUnscannedIntensity = ResolveLidarUnscannedIntensityForShader();
+            var effectiveLidarParticleAaMode =
+                GsplatUtils.ResolveEffectiveLidarParticleAntialiasingMode(LidarParticleAntialiasingMode, targetCam);
 
             m_lidarScan.RenderPointCloud(settings, targetCam, gameObject.layer, GammaToLinear,
-                LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
-                LidarAzimuthBins, LidarBeamCount,
+                layout,
+                lidarLocalToWorld, Time.realtimeSinceStartup, LidarRotationHz,
                 LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
+                LidarParticleAntialiasingMode, effectiveLidarParticleAaMode,
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
                 LidarTrailGamma, LidarIntensity, lidarUnscannedIntensity,
                 LidarIntensityDistanceDecay, LidarUnscannedIntensityDistanceDecay, LidarIntensityDistanceDecayMode,
@@ -2443,7 +2813,8 @@ namespace Gsplat
             if (!camera)
                 return;
 
-            if (!LidarOrigin)
+            if (!TryGetEffectiveLidarRuntimeContext(out var layout, out var lidarLocalToWorld, out _, out _,
+                    logWhenMissing: true))
                 return;
 
             if ((camera.cullingMask & (1 << gameObject.layer)) == 0)
@@ -2453,7 +2824,7 @@ namespace Gsplat
             if (!settings)
                 return;
 
-            var localBounds = SequenceAsset ? SequenceAsset.UnionBounds : new Bounds(Vector3.zero, Vector3.one);
+            var localBounds = ResolveVisibilityLocalBoundsForThisFrame();
             BuildLidarShowHideOverlayForThisFrame(localBounds,
                 out var showHideGate,
                 out var showHideMode,
@@ -2472,11 +2843,14 @@ namespace Gsplat
             var showHideNoiseScale = LidarShowHideNoiseScale >= 0.0f ? LidarShowHideNoiseScale : NoiseScale;
             var showHideNoiseSpeed = LidarShowHideNoiseSpeed >= 0.0f ? LidarShowHideNoiseSpeed : NoiseSpeed;
             var lidarUnscannedIntensity = ResolveLidarUnscannedIntensityForShader();
+            var effectiveLidarParticleAaMode =
+                GsplatUtils.ResolveEffectiveLidarParticleAntialiasingMode(LidarParticleAntialiasingMode, camera);
 
             m_lidarScan.RenderPointCloud(settings, camera, gameObject.layer, GammaToLinear,
-                LidarOrigin.localToWorldMatrix, Time.realtimeSinceStartup, LidarRotationHz,
-                LidarAzimuthBins, LidarBeamCount,
+                layout,
+                lidarLocalToWorld, Time.realtimeSinceStartup, LidarRotationHz,
                 LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels,
+                LidarParticleAntialiasingMode, effectiveLidarParticleAaMode,
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
                 LidarTrailGamma, LidarIntensity, lidarUnscannedIntensity,
                 LidarIntensityDistanceDecay, LidarUnscannedIntensityDistanceDecay, LidarIntensityDistanceDecayMode,

@@ -84,5 +84,25 @@ namespace Gsplat.Tests
                 Object.DestroyImmediate(go);
             }
         }
+
+        [Test]
+        public void TransformBounds_RotatesAabbAndKeepsTranslation()
+        {
+            // 目的:
+            // - 锁定 `TransformBounds` 的核心几何语义: 它返回的是“变换后的 AABB”,不是简单平移 center.
+            // - 这里选 90 度绕 Y 旋转,便于直接验证 x/z extents 交换.
+            var sourceBounds = new Bounds(Vector3.zero, new Vector3(2.0f, 4.0f, 6.0f));
+            var matrix = Matrix4x4.TRS(new Vector3(10.0f, 1.0f, -2.0f), Quaternion.Euler(0.0f, 90.0f, 0.0f),
+                Vector3.one);
+
+            var transformed = GsplatUtils.TransformBounds(sourceBounds, matrix);
+
+            Assert.That(transformed.center.x, Is.EqualTo(10.0f).Within(1.0e-5f));
+            Assert.That(transformed.center.y, Is.EqualTo(1.0f).Within(1.0e-5f));
+            Assert.That(transformed.center.z, Is.EqualTo(-2.0f).Within(1.0e-5f));
+            Assert.That(transformed.size.x, Is.EqualTo(6.0f).Within(1.0e-5f));
+            Assert.That(transformed.size.y, Is.EqualTo(4.0f).Within(1.0e-5f));
+            Assert.That(transformed.size.z, Is.EqualTo(2.0f).Within(1.0e-5f));
+        }
     }
 }

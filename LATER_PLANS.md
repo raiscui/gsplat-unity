@@ -150,3 +150,38 @@
 
 ## 2026-03-03 01:39:30 +0800
 - 回溯结果: 本轮 `RadarScan show/hide noise` 修复已完整落地并验证,暂无新增延期事项.
+
+## 2026-03-07 12:16:43 +0800
+- 候选扩展(暂不在本轮实现): 为 external target visibility mode 增加 `HiddenLayer` 路线.
+  - 适用场景:
+    - 希望主相机隐藏普通 mesh,但调试相机/专用相机仍能看见原始模型
+  - 当前为什么没做:
+    - 它会牵连用户已有 camera culling mask 与 physics layer matrix
+    - 相比 `forceRenderingOff`,侵入明显更强
+
+## 2026-03-07 13:20:40 +0800
+- 回溯结果: 本轮 `ForceRenderingOffInPlayMode` 已完整落地并验证,暂无新增延期事项.
+- 仍保留上一条 `HiddenLayer` 作为未来可选扩展,本轮不继续推进.
+
+## 2026-03-07 14:44:00 +0800
+- 回溯结果: 本轮只完成 `lidar-camera-frustum-external-gpu-scan` 的 OpenSpec 起草闭环,暂无新增延期事项.
+
+## 2026-03-07 15:40:54 +0800
+- 回溯结果: 本轮是对 `lidar-camera-frustum-external-gpu-scan` 进行规格补强,没有新增延期事项.
+
+## 2026-03-08 00:23:12 +0800
+- 回溯结果: 本轮完成了 `lidar-camera-frustum-external-gpu-scan` 的 frustum active-cell / layout / sensor-frame 地基,没有新增延期事项.
+
+## 2026-03-08 01:09:10 +0800
+- 回溯结果: 本轮完成了 `lidar-camera-frustum-external-gpu-scan` 的 external GPU capture 基础设施与主链接线,没有新增延期事项.
+
+## 2026-03-08 02:39:00 +0800
+- 回溯结果: 本轮已完成 `lidar-camera-frustum-external-gpu-scan` 的 static signature / dynamic cadence / docs / tests / OpenSpec 收尾,没有新增延期事项.
+
+## 2026-03-08 11:31:00 +0800
+- 回溯结果: 本轮 `radarscan-particle-antialiasing-modes` 已完成 OpenSpec 四件套起草,暂时没有新增延期事项.
+
+## 2026-03-08 12:46:01 +0800
+- 回溯结果: 本轮 `radarscan-particle-antialiasing-modes` 已完整落地并通过自动化验证,没有新增延期事项.
+- 仍建议后续做人眼手测:
+  - 在带 MSAA 的 Camera / RenderTexture 上确认 `AlphaToCoverage` 和 `AnalyticCoveragePlusAlphaToCoverage` 的实际观感收益.

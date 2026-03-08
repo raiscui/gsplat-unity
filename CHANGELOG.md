@@ -25,6 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added LiDAR-specific show/hide glow tuning (`LidarShowHideGlowColor`, `LidarShowGlowIntensity`, `LidarHideGlowIntensity`) so RadarScan glow can be adjusted independently from Gaussian.
 - Added LiDAR-specific show/hide noise tuning (`LidarShowHideNoiseScale`, `LidarShowHideNoiseSpeed`) so RadarScan show/hide noise can be adjusted independently (defaults to reusing global `NoiseScale` / `NoiseSpeed` when the LiDAR overrides are negative).
 - Added `SetRenderStyleAndRadarScan(...)` API to `GsplatRenderer` and `GsplatSequenceRenderer` for a single-call switch between Gaussian/ParticleDots and RadarScan mode (enables LiDAR + forces ParticleDots when RadarScan is active).
+- Added `LidarExternalTargets` to `GsplatRenderer` and `GsplatSequenceRenderer`, allowing RadarScan to scan external Unity `GameObject[]` roots with real mesh geometry (recursive `MeshRenderer` / `SkinnedMeshRenderer` collection, isolated `PhysicsScene` proxy raycasts, per-cell nearest-hit competition with gsplat, and material main-color output for external hits in `SplatColorSH0`).
+- Added `LidarExternalTargetVisibilityMode` (`KeepVisible` / `ForceRenderingOff` / `ForceRenderingOffInPlayMode`) so external RadarScan targets can either stay visible, stay scan-only all the time, or remain visible in the Editor while automatically switching to scan-only during Play mode.
+- Added `LidarApertureMode=CameraFrustum` + `LidarFrustumCamera` support, so RadarScan can use a camera frustum as the LiDAR aperture and treat that camera as the authoritative sensor-frame (position + rotation + projection + aspect + pixelRect).
+- Added split external inputs for frustum RadarScan: `LidarExternalStaticTargets`, `LidarExternalDynamicTargets`, and `LidarExternalDynamicUpdateHz` (legacy `LidarExternalTargets` is still accepted and maps to the static array for backward compatibility).
+- Added frustum external GPU capture for RadarScan meshes (explicit render list + override material + command buffer draw, static signature reuse, independent dynamic cadence, and material main-color capture for external hits).
+- Added RadarScan particle antialiasing modes: `LidarParticleAntialiasingMode` now supports `LegacySoftEdge`, `AnalyticCoverage`, `AlphaToCoverage`, and `AnalyticCoveragePlusAlphaToCoverage` (recommended: `AnalyticCoverage`; A2C modes require effective MSAA and automatically fall back to `AnalyticCoverage` when MSAA is unavailable).
 
 ### Changed
 
@@ -33,8 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tuned burn-ring hide warp so it cannot push splats outward past the burn front (keeps the afterglow trail visually inside the ring even with strong `WarpStrength`).
 - LiDAR scan visualization now uses a single `LidarBeamCount` (no Up/Down split) and samples vertical beam directions uniformly over `[LidarDownFovDeg..LidarUpFovDeg]` (more down-beams naturally come from a larger downward FOV range).
 - LiDAR point cloud rendering now uses screen-space square points with alpha blending (opaque when alpha=1), and the `Depth` color mode maps depth from cyan -> blue -> purple -> red.
+- The package now declares `com.unity.modules.physics` as a dependency because external RadarScan targets rely on `PhysicsScene`, `MeshCollider`, and batch raycasts.
 - The Inspector `Render Style` quick-action row now includes `RadarScan(动画)`, and `Gaussian(动画)` / `ParticleDots(动画)` now also disable RadarScan in the same action so switching is bidirectional.
 - Removed the max clamp for `LidarShowHideWarpPixels` (was 64), allowing larger values for stronger RadarScan show/hide jitter.
+- In frustum RadarScan mode, external mesh hits are now resolved back into LiDAR ray-distance / `depthSq` semantics before the nearest-hit merge, instead of relying on raw camera hardware depth.
+- In frustum RadarScan mode, static external meshes no longer recapture every LiDAR update tick when their signature is unchanged, and dynamic external meshes can refresh on their own cadence (`LidarExternalDynamicUpdateHz`).
 
 ### Fixed
 
@@ -57,6 +66,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed missing "ParticleDots-like" noise motion in `RadarScan` show/hide by adding edge-weighted screen-space point jitter (noise-driven position warp) during transition, so radar points now exhibit visible granular displacement instead of only brightness-mask noise.
 - Fixed `CurlSmoke` parity in `RadarScan` show/hide: LiDAR `CurlSmoke` now uses a curl-like vector field, and the screen-space jitter amplitude is scaled by `WarpStrength` (0 disables, higher values increase motion).
 - Fixed `RadarScan` show/hide glow: LiDAR now draws the ring in the alpha mask (so show glow is visible), adds an inward afterglow tail (so hide glow lingers longer), and uses a colored additive glow overlay controlled by LiDAR-specific glow parameters.
+- Fixed frustum external RadarScan updates being blocked by `LidarUpdateHz`: external GPU capture now ticks independently from the gsplat range-image rebuild, while the legacy CPU raycast path remains the fallback for surround360 or unsupported GPU-capture platforms.
 
 ## [1.1.4] - 2026-02-23
 

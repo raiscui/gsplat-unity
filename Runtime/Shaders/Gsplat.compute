@@ -28,6 +28,7 @@
 #pragma kernel ClearRangeImage
 #pragma kernel ReduceMinRangeSq
 #pragma kernel ResolveMinSplatId
+#pragma kernel ResolveExternalFrustumHits
 
 // GPU sorting needs wave ops
 #pragma require wavebasic
@@ -56,10 +57,14 @@ uint e_baseIndex;
 // --------------------------------------------------------------------
 RWStructuredBuffer<uint> _LidarMinRangeSqBits;
 RWStructuredBuffer<uint> _LidarMinSplatId;
+RWStructuredBuffer<uint> _LidarExternalRangeSqBits;
+RWStructuredBuffer<float4> _LidarExternalBaseColor;
 
 float4x4 _LidarMatrixModelToLidar;
 int _LidarCellCount;
 int _LidarAzimuthBins;
+float _LidarAzimuthMinRad;
+float _LidarAzimuthMaxRad;
 int _LidarBeamCount;
 float _LidarUpFovRad;
 float _LidarDownFovRad;
@@ -74,6 +79,14 @@ int _LidarSplatCount;
 // - beamSinCos[beamIndex] = (sin(elevCenter), cos(elevCenter))
 StructuredBuffer<float2> _LidarAzSinCos;
 StructuredBuffer<float2> _LidarBeamSinCos;
+
+Texture2D<float4> _LidarExternalStaticLinearDepthTex;
+Texture2D<float4> _LidarExternalStaticSurfaceColorTex;
+Texture2D<float4> _LidarExternalDynamicLinearDepthTex;
+Texture2D<float4> _LidarExternalDynamicSurfaceColorTex;
+float4x4 _LidarExternalCaptureProjection;
+float4 _LidarExternalStaticCaptureSize;
+float4 _LidarExternalDynamicCaptureSize;
 
 static const uint kLidarInfBits = 0x7f7fffff; // float max
 static const uint kLidarInvalidId = 0xffffffff;
@@ -137,16 +150,24 @@ bool TryComputeLidarCell(uint splatId, out uint outCellIndex, out uint outDepthS
 
     float3 posLidar = mul(_LidarMatrixModelToLidar, float4(posModel, 1)).xyz;
 
+    if (_LidarAzimuthBins <= 0 || _LidarBeamCount <= 0)
+        return false;
+
     // elevation(竖直角):
     float h = length(float2(posLidar.x, posLidar.z));
     float elev = atan2(posLidar.y, max(h, 1e-6));
     if (elev > _LidarUpFovRad || elev < _LidarDownFovRad)
         return false;
 
-    // azimuth(水平角): [-pi,pi]
+    // azimuth(水平角):
+    // - 360 模式: [-pi,pi]
+    // - frustum 模式: [AzimuthMinRad,AzimuthMaxRad]
     float az = atan2(posLidar.x, posLidar.z);
-    float az01 = (az + 3.14159265) * (0.5 / 3.14159265); // (az+pi)/(2pi)
-    az01 = saturate(az01);
+    if (az < _LidarAzimuthMinRad || az > _LidarAzimuthMaxRad)
+        return false;
+
+    float azSpan = max(_LidarAzimuthMaxRad - _LidarAzimuthMinRad, 1e-6);
+    float az01 = saturate((az - _LidarAzimuthMinRad) / azSpan);
 
     // 映射到 azimuth bin:
     // - 这里用 floor,与 LUT 的 bin center 配合更稳.
@@ -155,8 +176,6 @@ bool TryComputeLidarCell(uint splatId, out uint outCellIndex, out uint outDepthS
         azBin = (uint)_LidarAzimuthBins - 1u;
 
     // elevation -> beamIndex(上下统一: 在 [downFov..upFov] 匀角度采样):
-    if (_LidarBeamCount <= 0)
-        return false;
     float denom = max(_LidarUpFovRad - _LidarDownFovRad, 1e-6);
     float t = saturate((elev - _LidarDownFovRad) / denom);
     uint beamIndex = (uint)min((int)(t * (float)_LidarBeamCount), _LidarBeamCount - 1);
@@ -226,6 +245,101 @@ void ResolveMinSplatId(uint3 id : SV_DispatchThreadID)
     // - 只在 rangeSqBits 与 minRangeSqBits 匹配时才写入 id,保证颜色与距离来自同一个 splat.
     // - tie-breaker: 多候选时取最小 splatId(确定性).
     InterlockedMin(_LidarMinSplatId[cell], splatId);
+}
+
+[numthreads(LIDAR_GROUP_SIZE,1,1)]
+void ResolveExternalFrustumHits(uint3 id : SV_DispatchThreadID)
+{
+    uint cell = id.x;
+    if (cell >= (uint)_LidarCellCount)
+        return;
+
+    _LidarExternalRangeSqBits[cell] = kLidarInfBits;
+    _LidarExternalBaseColor[cell] = 0.0;
+
+    if (_LidarAzimuthBins <= 0 || _LidarBeamCount <= 0)
+        return;
+
+    uint azBin = cell % (uint)_LidarAzimuthBins;
+    uint beamIndex = cell / (uint)_LidarAzimuthBins;
+    if (azBin >= (uint)_LidarAzimuthBins || beamIndex >= (uint)_LidarBeamCount)
+        return;
+
+    float2 azSC = _LidarAzSinCos[azBin];
+    float2 beSC = _LidarBeamSinCos[beamIndex];
+    float3 rayDirSensor = float3(azSC.x * beSC.y, beSC.x, azSC.y * beSC.y);
+
+    // 这里要显式转成 Unity view space 约定:
+    // - sensor/camera local 是 +Z forward
+    // - 但 Unity shader/view projection 约定里,前方是 -Z
+    float4 clipPos = mul(_LidarExternalCaptureProjection, float4(rayDirSensor.x, rayDirSensor.y, -rayDirSensor.z, 1.0));
+    if (abs(clipPos.w) <= 1e-6)
+        return;
+
+    float2 uv = clipPos.xy / clipPos.w * 0.5 + 0.5;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0)
+        return;
+
+    if (rayDirSensor.z <= 1e-6)
+        return;
+
+    uint bestDepthSqBits = kLidarInfBits;
+    float4 bestBaseColor = 0.0;
+
+    int staticCaptureWidth = (int)_LidarExternalStaticCaptureSize.x;
+    int staticCaptureHeight = (int)_LidarExternalStaticCaptureSize.y;
+    if (staticCaptureWidth > 0 && staticCaptureHeight > 0)
+    {
+        int2 staticPixel = int2(
+            min((int)(uv.x * (float)staticCaptureWidth), staticCaptureWidth - 1),
+            min((int)(uv.y * (float)staticCaptureHeight), staticCaptureHeight - 1));
+
+        float linearDepth = _LidarExternalStaticLinearDepthTex.Load(int3(staticPixel, 0)).x;
+        if (linearDepth > 0.0 && isfinite(linearDepth))
+        {
+            float depth = linearDepth / rayDirSensor.z;
+            if (depth > 0.0 && isfinite(depth))
+            {
+                float depthSq = depth * depth;
+                if (depthSq > 0.0 && isfinite(depthSq))
+                {
+                    bestDepthSqBits = asuint(depthSq);
+                    bestBaseColor = _LidarExternalStaticSurfaceColorTex.Load(int3(staticPixel, 0));
+                }
+            }
+        }
+    }
+
+    int dynamicCaptureWidth = (int)_LidarExternalDynamicCaptureSize.x;
+    int dynamicCaptureHeight = (int)_LidarExternalDynamicCaptureSize.y;
+    if (dynamicCaptureWidth > 0 && dynamicCaptureHeight > 0)
+    {
+        int2 dynamicPixel = int2(
+            min((int)(uv.x * (float)dynamicCaptureWidth), dynamicCaptureWidth - 1),
+            min((int)(uv.y * (float)dynamicCaptureHeight), dynamicCaptureHeight - 1));
+
+        float linearDepth = _LidarExternalDynamicLinearDepthTex.Load(int3(dynamicPixel, 0)).x;
+        if (linearDepth > 0.0 && isfinite(linearDepth))
+        {
+            float depth = linearDepth / rayDirSensor.z;
+            if (depth > 0.0 && isfinite(depth))
+            {
+                float depthSq = depth * depth;
+                if (depthSq > 0.0 && isfinite(depthSq))
+                {
+                    uint depthSqBits = asuint(depthSq);
+                    if (depthSqBits < bestDepthSqBits)
+                    {
+                        bestDepthSqBits = depthSqBits;
+                        bestBaseColor = _LidarExternalDynamicSurfaceColorTex.Load(int3(dynamicPixel, 0));
+                    }
+                }
+            }
+        }
+    }
+
+    _LidarExternalRangeSqBits[cell] = bestDepthSqBits;
+    _LidarExternalBaseColor[cell] = bestBaseColor;
 }
 
 [numthreads(GROUP_SIZE,1,1)]

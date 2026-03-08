@@ -8,6 +8,245 @@ using UnityEngine.Rendering;
 namespace Gsplat
 {
     /// <summary>
+    /// LiDAR 的离散采样布局.
+    ///
+    /// 设计目的:
+    /// - 把“active cell 数量”和“真实角域范围”绑成一个整体.
+    /// - 让 360 模式与 frustum 模式共用同一套 buffer/LUT/compute/draw 入口.
+    /// - 避免外层只改了 count,却漏改角域或 cell 映射,导致语义撕裂.
+    /// </summary>
+    internal readonly struct GsplatLidarLayout
+    {
+        const float k_minSpanRad = 1.0e-6f;
+
+        public GsplatLidarApertureMode ApertureMode { get; }
+        public int ActiveAzimuthBins { get; }
+        public int ActiveBeamCount { get; }
+        public float AzimuthMinRad { get; }
+        public float AzimuthMaxRad { get; }
+        public float BeamMinRad { get; }
+        public float BeamMaxRad { get; }
+
+        public bool IsFrustum => ApertureMode == GsplatLidarApertureMode.CameraFrustum;
+        public int CellCount => Mathf.Max(ActiveAzimuthBins * ActiveBeamCount, 1);
+        public float AzimuthSpanRad => Mathf.Max(AzimuthMaxRad - AzimuthMinRad, k_minSpanRad);
+        public float BeamSpanRad => Mathf.Max(BeamMaxRad - BeamMinRad, k_minSpanRad);
+
+        GsplatLidarLayout(GsplatLidarApertureMode apertureMode,
+            int activeAzimuthBins, int activeBeamCount,
+            float azimuthMinRad, float azimuthMaxRad,
+            float beamMinRad, float beamMaxRad)
+        {
+            ApertureMode = apertureMode;
+            ActiveAzimuthBins = Mathf.Max(activeAzimuthBins, 1);
+            ActiveBeamCount = Mathf.Max(activeBeamCount, 1);
+
+            if (!IsFinite(azimuthMinRad))
+                azimuthMinRad = -Mathf.PI;
+            if (!IsFinite(azimuthMaxRad))
+                azimuthMaxRad = Mathf.PI;
+            if (!IsFinite(beamMinRad))
+                beamMinRad = -0.5f;
+            if (!IsFinite(beamMaxRad))
+                beamMaxRad = 0.5f;
+
+            if (azimuthMaxRad - azimuthMinRad < k_minSpanRad)
+                azimuthMaxRad = azimuthMinRad + k_minSpanRad;
+            if (beamMaxRad - beamMinRad < k_minSpanRad)
+                beamMaxRad = beamMinRad + k_minSpanRad;
+
+            AzimuthMinRad = azimuthMinRad;
+            AzimuthMaxRad = azimuthMaxRad;
+            BeamMinRad = beamMinRad;
+            BeamMaxRad = beamMaxRad;
+        }
+
+        public static GsplatLidarLayout CreateSurround360(int azimuthBins, int beamCount,
+            float upFovDeg, float downFovDeg)
+        {
+            return new GsplatLidarLayout(
+                GsplatLidarApertureMode.Surround360,
+                Mathf.Max(azimuthBins, 1),
+                Mathf.Max(beamCount, 1),
+                -Mathf.PI,
+                Mathf.PI,
+                downFovDeg * Mathf.Deg2Rad,
+                upFovDeg * Mathf.Deg2Rad);
+        }
+
+        public static bool TryCreateCameraFrustum(Camera frustumCamera,
+            int baseAzimuthBins, int baseBeamCount,
+            float baselineUpFovDeg, float baselineDownFovDeg,
+            out GsplatLidarLayout layout, out string invalidReason)
+        {
+            layout = CreateSurround360(baseAzimuthBins, baseBeamCount, baselineUpFovDeg, baselineDownFovDeg);
+            invalidReason = null;
+
+            if (!frustumCamera)
+            {
+                invalidReason = "LidarFrustumCamera 为空或已经失效";
+                return false;
+            }
+
+            if (frustumCamera.orthographic)
+            {
+                invalidReason = "当前只支持 perspective camera, orthographic camera 不能作为 LiDAR frustum aperture";
+                return false;
+            }
+
+            var pixelRect = frustumCamera.pixelRect;
+            var hasValidPixelRect = IsFinite(pixelRect.width) && IsFinite(pixelRect.height) &&
+                                    pixelRect.width > 0.0f && pixelRect.height > 0.0f;
+            var aspect = frustumCamera.aspect;
+            if (!hasValidPixelRect && (!IsFinite(aspect) || aspect <= 0.0f))
+            {
+                invalidReason = "camera.pixelRect 与 camera.aspect 同时无效";
+                return false;
+            }
+
+            var fieldOfView = frustumCamera.fieldOfView;
+            if (!IsFinite(fieldOfView) || fieldOfView <= 0.0f || fieldOfView >= 179.0f)
+            {
+                invalidReason = $"camera.fieldOfView 无效({fieldOfView})";
+                return false;
+            }
+
+            if (!TryComputeFrustumAngleBounds(frustumCamera,
+                    out var azimuthMinRad, out var azimuthMaxRad,
+                    out var beamMinRad, out var beamMaxRad,
+                    out invalidReason))
+            {
+                return false;
+            }
+
+            var activeAzimuthBins = ScaleCountKeepingDensity(baseAzimuthBins, azimuthMaxRad - azimuthMinRad,
+                Mathf.PI * 2.0f);
+            var baselineBeamSpanRad = Mathf.Max((baselineUpFovDeg - baselineDownFovDeg) * Mathf.Deg2Rad, k_minSpanRad);
+            var activeBeamCount = ScaleCountKeepingDensity(baseBeamCount, beamMaxRad - beamMinRad,
+                baselineBeamSpanRad);
+
+            layout = new GsplatLidarLayout(
+                GsplatLidarApertureMode.CameraFrustum,
+                activeAzimuthBins,
+                activeBeamCount,
+                azimuthMinRad,
+                azimuthMaxRad,
+                beamMinRad,
+                beamMaxRad);
+            return true;
+        }
+
+        static bool TryComputeFrustumAngleBounds(Camera frustumCamera,
+            out float azimuthMinRad, out float azimuthMaxRad,
+            out float beamMinRad, out float beamMaxRad,
+            out string invalidReason)
+        {
+            azimuthMinRad = float.PositiveInfinity;
+            azimuthMaxRad = float.NegativeInfinity;
+            beamMinRad = float.PositiveInfinity;
+            beamMaxRad = float.NegativeInfinity;
+            invalidReason = null;
+
+            // 关键说明:
+            // - 水平/垂直极值不一定在 corner 上.
+            // - 对称透视相机里,最大 elev 往往出现在 top-center,最大 azimuth 往往出现在 left/right-center.
+            // - 因此这里采样 corner + edge-center,避免只看 corner 导致 FOV 被系统性低估.
+            var viewportSamples = new[]
+            {
+                new Vector2(0.0f, 0.0f),
+                new Vector2(1.0f, 0.0f),
+                new Vector2(0.0f, 1.0f),
+                new Vector2(1.0f, 1.0f),
+                new Vector2(0.5f, 0.0f),
+                new Vector2(0.5f, 1.0f),
+                new Vector2(0.0f, 0.5f),
+                new Vector2(1.0f, 0.5f),
+            };
+
+            for (var i = 0; i < viewportSamples.Length; i++)
+            {
+                var sample = viewportSamples[i];
+                var worldPoint = frustumCamera.ViewportToWorldPoint(new Vector3(sample.x, sample.y, 1.0f));
+                var localDirection = frustumCamera.transform.InverseTransformPoint(worldPoint);
+
+                if (!TryComputeAngles(localDirection, out var azimuthRad, out var beamRad))
+                {
+                    invalidReason = "camera frustum 角域计算失败(投影或 frustum sample 无效)";
+                    return false;
+                }
+
+                azimuthMinRad = Mathf.Min(azimuthMinRad, azimuthRad);
+                azimuthMaxRad = Mathf.Max(azimuthMaxRad, azimuthRad);
+                beamMinRad = Mathf.Min(beamMinRad, beamRad);
+                beamMaxRad = Mathf.Max(beamMaxRad, beamRad);
+            }
+
+            if (!IsFinite(azimuthMinRad) || !IsFinite(azimuthMaxRad) ||
+                !IsFinite(beamMinRad) || !IsFinite(beamMaxRad))
+            {
+                invalidReason = "camera frustum 角域出现 NaN/Inf";
+                return false;
+            }
+
+            if (azimuthMaxRad - azimuthMinRad < k_minSpanRad)
+            {
+                invalidReason = "camera frustum 的水平角域过小,无法生成有效 LiDAR layout";
+                return false;
+            }
+
+            if (beamMaxRad - beamMinRad < k_minSpanRad)
+            {
+                invalidReason = "camera frustum 的垂直角域过小,无法生成有效 LiDAR layout";
+                return false;
+            }
+
+            return true;
+        }
+
+        static bool TryComputeAngles(Vector3 localDirection, out float azimuthRad, out float beamRad)
+        {
+            azimuthRad = 0.0f;
+            beamRad = 0.0f;
+
+            if (!IsFinite(localDirection.x) || !IsFinite(localDirection.y) || !IsFinite(localDirection.z))
+                return false;
+
+            var direction = localDirection.normalized;
+            if (!IsFinite(direction.x) || !IsFinite(direction.y) || !IsFinite(direction.z))
+                return false;
+
+            var horizontal = Mathf.Sqrt(direction.x * direction.x + direction.z * direction.z);
+            if (!IsFinite(horizontal))
+                return false;
+
+            azimuthRad = Mathf.Atan2(direction.x, direction.z);
+            beamRad = Mathf.Atan2(direction.y, Mathf.Max(horizontal, k_minSpanRad));
+            return IsFinite(azimuthRad) && IsFinite(beamRad);
+        }
+
+        static int ScaleCountKeepingDensity(int baseCount, float activeSpanRad, float baselineSpanRad)
+        {
+            baseCount = Mathf.Max(baseCount, 1);
+            if (!IsFinite(activeSpanRad) || activeSpanRad <= 0.0f ||
+                !IsFinite(baselineSpanRad) || baselineSpanRad <= 0.0f)
+            {
+                return 1;
+            }
+
+            var scaled = (double)baseCount * activeSpanRad / baselineSpanRad;
+            if (double.IsNaN(scaled) || double.IsInfinity(scaled) || scaled <= 0.0)
+                return 1;
+
+            return Mathf.Max(1, Mathf.RoundToInt((float)scaled));
+        }
+
+        static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+    }
+
+    /// <summary>
     /// LiDAR 采集显示: GPU 资源与 LUT 管理器.
     ///
     /// 职责边界(很重要):
@@ -30,6 +269,8 @@ namespace Gsplat
         // --------------------------------------------------------------------
         public GraphicsBuffer MinRangeSqBitsBuffer { get; private set; }
         public GraphicsBuffer MinSplatIdBuffer { get; private set; }
+        public GraphicsBuffer ExternalRangeSqBitsBuffer { get; private set; }
+        public GraphicsBuffer ExternalBaseColorBuffer { get; private set; }
 
         // --------------------------------------------------------------------
         // LUT:
@@ -49,11 +290,15 @@ namespace Gsplat
         int m_cachedLutAzimuthBins;
         int m_cachedLutBeamCount;
 
-        float m_cachedUpFovDeg;
-        float m_cachedDownFovDeg;
+        float m_cachedLutAzimuthMinRad = float.NaN;
+        float m_cachedLutAzimuthMaxRad = float.NaN;
+        float m_cachedLutBeamMinRad = float.NaN;
+        float m_cachedLutBeamMaxRad = float.NaN;
 
         Vector2[] m_azSinCosScratch;
         Vector2[] m_beamSinCosScratch;
+        uint[] m_externalRangeSqBitsScratch;
+        Vector4[] m_externalBaseColorScratch;
 
         // --------------------------------------------------------------------
         // UpdateHz 调度状态:
@@ -82,9 +327,13 @@ namespace Gsplat
         static readonly int k_durationBuffer = Shader.PropertyToID("_DurationBuffer");
         static readonly int k_lidarMinRangeSqBits = Shader.PropertyToID("_LidarMinRangeSqBits");
         static readonly int k_lidarMinSplatId = Shader.PropertyToID("_LidarMinSplatId");
+        static readonly int k_lidarExternalRangeSqBits = Shader.PropertyToID("_LidarExternalRangeSqBits");
+        static readonly int k_lidarExternalBaseColor = Shader.PropertyToID("_LidarExternalBaseColor");
         static readonly int k_lidarMatrixModelToLidar = Shader.PropertyToID("_LidarMatrixModelToLidar");
         static readonly int k_lidarCellCount = Shader.PropertyToID("_LidarCellCount");
         static readonly int k_lidarAzimuthBins = Shader.PropertyToID("_LidarAzimuthBins");
+        static readonly int k_lidarAzimuthMinRad = Shader.PropertyToID("_LidarAzimuthMinRad");
+        static readonly int k_lidarAzimuthMaxRad = Shader.PropertyToID("_LidarAzimuthMaxRad");
         static readonly int k_lidarUpFovRad = Shader.PropertyToID("_LidarUpFovRad");
         static readonly int k_lidarDownFovRad = Shader.PropertyToID("_LidarDownFovRad");
         static readonly int k_lidarDepthNearSq = Shader.PropertyToID("_LidarDepthNearSq");
@@ -98,6 +347,7 @@ namespace Gsplat
         static readonly int k_temporalCutoff = Shader.PropertyToID("_TemporalCutoff");
 
         const int k_lidarThreads = 256; // 与 compute shader 内的 LIDAR_GROUP_SIZE 保持一致
+        const uint k_lidarInfBits = 0x7f7fffff; // float max,与 shader 侧保持一致
 
         // --------------------------------------------------------------------
         // Render(点云)相关:
@@ -120,6 +370,10 @@ namespace Gsplat
         double m_debugLastLoggedShowHideRealtime = -1.0;
         int m_debugLastLoggedShowHideMode;
         float m_debugLastLoggedShowHideProgress01;
+        int m_debugLastLoggedParticleAaRequestedMode = int.MinValue;
+        int m_debugLastLoggedParticleAaEffectiveMode = int.MinValue;
+        int m_debugLastLoggedParticleAaMsaaSamples = int.MinValue;
+        int m_debugLastLoggedParticleAaCameraId = int.MinValue;
 #endif
 
         static readonly int k_gammaToLinear = Shader.PropertyToID("_GammaToLinear");
@@ -128,6 +382,7 @@ namespace Gsplat
         static readonly int k_lidarMatrixL2W = Shader.PropertyToID("_LidarMatrixL2W");
         static readonly int k_lidarMatrixW2M = Shader.PropertyToID("_LidarMatrixW2M");
         static readonly int k_lidarPointRadiusPixels = Shader.PropertyToID("_LidarPointRadiusPixels");
+        static readonly int k_lidarParticleAaAnalyticCoverage = Shader.PropertyToID("_LidarParticleAAAnalyticCoverage");
         static readonly int k_lidarColorMode = Shader.PropertyToID("_LidarColorMode");
         static readonly int k_lidarColorBlend = Shader.PropertyToID("_LidarColorBlend");
         static readonly int k_lidarVisibility = Shader.PropertyToID("_LidarVisibility");
@@ -185,19 +440,23 @@ namespace Gsplat
 
         public bool RangeImageValid =>
             MinRangeSqBitsBuffer != null && MinRangeSqBitsBuffer.IsValid() &&
-            MinSplatIdBuffer != null && MinSplatIdBuffer.IsValid();
+            MinSplatIdBuffer != null && MinSplatIdBuffer.IsValid() &&
+            ExternalRangeSqBitsBuffer != null && ExternalRangeSqBitsBuffer.IsValid() &&
+            ExternalBaseColorBuffer != null && ExternalBaseColorBuffer.IsValid();
 
         public bool LutValid =>
             AzSinCosBuffer != null && AzSinCosBuffer.IsValid() &&
             BeamSinCosBuffer != null && BeamSinCosBuffer.IsValid();
 
-        public void EnsureRangeImageBuffers(int azimuthBins, int beamCount)
+        public int RangeCellCount => RangeImageValid ? Mathf.Max(MinRangeSqBitsBuffer.count, 0) : 0;
+
+        public void EnsureRangeImageBuffers(in GsplatLidarLayout layout)
         {
             // 说明:
             // - buffer 的尺寸规则是: cellCount = beamCount * azimuthBins.
             // - 当任意一个维度变化时,必须重建 buffer,否则会出现越界/旧数据残留.
-            azimuthBins = Mathf.Max(azimuthBins, 1);
-            beamCount = Mathf.Max(beamCount, 1);
+            var azimuthBins = Mathf.Max(layout.ActiveAzimuthBins, 1);
+            var beamCount = Mathf.Max(layout.ActiveBeamCount, 1);
 
             var cellCount = azimuthBins * beamCount;
             if (cellCount <= 0)
@@ -217,25 +476,37 @@ namespace Gsplat
             // - stride=4 bytes(uint).
             MinRangeSqBitsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, cellCount, sizeof(uint));
             MinSplatIdBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, cellCount, sizeof(uint));
+            ExternalRangeSqBitsBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, cellCount, sizeof(uint));
+            ExternalBaseColorBuffer =
+                new GraphicsBuffer(GraphicsBuffer.Target.Structured, cellCount, sizeof(float) * 4);
 
             m_cachedRangeAzimuthBins = azimuthBins;
             m_cachedRangeBeamCount = beamCount;
 
             // buffer 发生变化时强制下一次更新.
             m_lastRangeImageUpdateRealtime = -1.0;
+
+            // external hit buffer 不依赖 compute clear.
+            // - 因此在重建时先主动填成“无命中(inf + 黑色)”,避免首次渲染读到脏数据.
+            ClearExternalHits(cellCount);
         }
 
-        public void EnsureLutBuffers(int azimuthBins, float upFovDeg, float downFovDeg, int beamCount)
+        public void EnsureRangeImageBuffers(int azimuthBins, int beamCount)
+        {
+            EnsureRangeImageBuffers(GsplatLidarLayout.CreateSurround360(azimuthBins, beamCount, 0.0f, 0.0f));
+        }
+
+        public void EnsureLutBuffers(in GsplatLidarLayout layout)
         {
             // 说明:
             // - LUT 的尺寸规则:
             //   - azSinCos: azimuthBins
             //   - beamSinCos: beamCount
             // - LUT 的内容规则:
-            //   - az: [-pi,pi) 的 bin center.
-            //   - beam: 在 [downFov..upFov] 的 bin center 做匀角度采样(上下统一).
-            azimuthBins = Mathf.Max(azimuthBins, 1);
-            beamCount = Mathf.Max(beamCount, 1);
+            //   - az: [azimuthMinRad,azimuthMaxRad] 的 bin center.
+            //   - beam: [beamMinRad,beamMaxRad] 的 bin center.
+            var azimuthBins = Mathf.Max(layout.ActiveAzimuthBins, 1);
+            var beamCount = Mathf.Max(layout.ActiveBeamCount, 1);
 
             var needRecreateBuffers = !LutValid ||
                                       AzSinCosBuffer.count != azimuthBins ||
@@ -252,22 +523,31 @@ namespace Gsplat
 
             var needRegen = m_cachedLutAzimuthBins != azimuthBins ||
                             m_cachedLutBeamCount != beamCount ||
-                            m_cachedUpFovDeg != upFovDeg ||
-                            m_cachedDownFovDeg != downFovDeg;
+                            !Mathf.Approximately(m_cachedLutAzimuthMinRad, layout.AzimuthMinRad) ||
+                            !Mathf.Approximately(m_cachedLutAzimuthMaxRad, layout.AzimuthMaxRad) ||
+                            !Mathf.Approximately(m_cachedLutBeamMinRad, layout.BeamMinRad) ||
+                            !Mathf.Approximately(m_cachedLutBeamMaxRad, layout.BeamMaxRad);
 
             if (!needRegen)
                 return;
 
-            EnsureAzSinCos(azimuthBins);
-            EnsureBeamSinCos(upFovDeg, downFovDeg, beamCount);
+            EnsureAzSinCos(layout);
+            EnsureBeamSinCos(layout);
 
             m_cachedLutAzimuthBins = azimuthBins;
             m_cachedLutBeamCount = beamCount;
-            m_cachedUpFovDeg = upFovDeg;
-            m_cachedDownFovDeg = downFovDeg;
+            m_cachedLutAzimuthMinRad = layout.AzimuthMinRad;
+            m_cachedLutAzimuthMaxRad = layout.AzimuthMaxRad;
+            m_cachedLutBeamMinRad = layout.BeamMinRad;
+            m_cachedLutBeamMaxRad = layout.BeamMaxRad;
 
             // 方向映射发生变化时,range image 的语义也改变了,下一次应立即重建.
             m_lastRangeImageUpdateRealtime = -1.0;
+        }
+
+        public void EnsureLutBuffers(int azimuthBins, float upFovDeg, float downFovDeg, int beamCount)
+        {
+            EnsureLutBuffers(GsplatLidarLayout.CreateSurround360(azimuthBins, beamCount, upFovDeg, downFovDeg));
         }
 
         // --------------------------------------------------------------------
@@ -303,6 +583,58 @@ namespace Gsplat
         public void ForceRangeImageUpdateDue()
         {
             m_lastRangeImageUpdateRealtime = -1.0;
+        }
+
+        public void UploadExternalHits(uint[] externalRangeSqBits, Vector4[] externalBaseColors, int cellCount)
+        {
+            if (!RangeImageValid)
+                return;
+
+            cellCount = Mathf.Clamp(cellCount, 0, ExternalRangeSqBitsBuffer.count);
+            if (cellCount <= 0)
+                return;
+
+            if (externalRangeSqBits == null || externalBaseColors == null ||
+                externalRangeSqBits.Length < cellCount || externalBaseColors.Length < cellCount)
+            {
+                ClearExternalHits(cellCount);
+                return;
+            }
+
+            ExternalRangeSqBitsBuffer.SetData(externalRangeSqBits, 0, 0, cellCount);
+            ExternalBaseColorBuffer.SetData(externalBaseColors, 0, 0, cellCount);
+        }
+
+        public void ClearExternalHits(int cellCount)
+        {
+            if (ExternalRangeSqBitsBuffer == null || !ExternalRangeSqBitsBuffer.IsValid() ||
+                ExternalBaseColorBuffer == null || !ExternalBaseColorBuffer.IsValid())
+            {
+                return;
+            }
+
+            cellCount = Mathf.Clamp(cellCount, 0, ExternalRangeSqBitsBuffer.count);
+            if (cellCount <= 0)
+                return;
+
+            EnsureExternalHitScratch(cellCount);
+            for (var i = 0; i < cellCount; i++)
+            {
+                m_externalRangeSqBitsScratch[i] = k_lidarInfBits;
+                m_externalBaseColorScratch[i] = Vector4.zero;
+            }
+
+            ExternalRangeSqBitsBuffer.SetData(m_externalRangeSqBitsScratch, 0, 0, cellCount);
+            ExternalBaseColorBuffer.SetData(m_externalBaseColorScratch, 0, 0, cellCount);
+        }
+
+        void EnsureExternalHitScratch(int cellCount)
+        {
+            if (m_externalRangeSqBitsScratch == null || m_externalRangeSqBitsScratch.Length != cellCount)
+                m_externalRangeSqBitsScratch = new uint[cellCount];
+
+            if (m_externalBaseColorScratch == null || m_externalBaseColorScratch.Length != cellCount)
+                m_externalBaseColorScratch = new Vector4[cellCount];
         }
 
 #if UNITY_EDITOR
@@ -386,15 +718,67 @@ namespace Gsplat
                 return "null";
             return $"{shader.name}#{shader.GetInstanceID()}";
         }
+
+        void TryLogParticleAntialiasingDiagnostics(Camera camera,
+            GsplatLidarParticleAntialiasingMode requestedMode,
+            GsplatLidarParticleAntialiasingMode effectiveMode)
+        {
+            if (!GsplatUtils.UsesLidarParticleAlphaToCoverage(requestedMode))
+                return;
+
+            var cameraId = camera ? camera.GetInstanceID() : 0;
+            var msaaSamples = GetEffectiveMsaaSampleCount(camera);
+            if (m_debugLastLoggedParticleAaRequestedMode == (int)requestedMode &&
+                m_debugLastLoggedParticleAaEffectiveMode == (int)effectiveMode &&
+                m_debugLastLoggedParticleAaMsaaSamples == msaaSamples &&
+                m_debugLastLoggedParticleAaCameraId == cameraId)
+            {
+                return;
+            }
+
+            m_debugLastLoggedParticleAaRequestedMode = (int)requestedMode;
+            m_debugLastLoggedParticleAaEffectiveMode = (int)effectiveMode;
+            m_debugLastLoggedParticleAaMsaaSamples = msaaSamples;
+            m_debugLastLoggedParticleAaCameraId = cameraId;
+
+            var cameraName = camera ? camera.name : "<null-camera>";
+            if (effectiveMode != requestedMode)
+            {
+                Debug.LogWarning(
+                    "[Gsplat][LiDAR][AA] " +
+                    $"camera={cameraName} requested={requestedMode} effective={effectiveMode}. " +
+                    $"A2C 当前未生效,已回退到 {effectiveMode}. " +
+                    $"allowMSAA={(camera && camera.allowMSAA ? 1 : 0)} msaaSamples={msaaSamples}.");
+                return;
+            }
+
+            Debug.Log(
+                "[Gsplat][LiDAR][AA] " +
+                $"camera={cameraName} requested={requestedMode} effective={effectiveMode}. " +
+                $"A2C 当前已生效,msaaSamples={msaaSamples}.");
+        }
+
+        static int GetEffectiveMsaaSampleCount(Camera camera)
+        {
+            if (!camera || !camera.allowMSAA)
+                return 1;
+
+            if (camera.targetTexture)
+                return Mathf.Max(camera.targetTexture.antiAliasing, 1);
+
+            return Mathf.Max(QualitySettings.antiAliasing, 1);
+        }
 #endif
 
         // --------------------------------------------------------------------
         // Render: 规则点云绘制
         // --------------------------------------------------------------------
         public bool RenderPointCloud(GsplatSettings settings, Camera camera, int layer, bool gammaToLinear,
+            in GsplatLidarLayout layout,
             Matrix4x4 lidarLocalToWorld, float lidarTime, float rotationHz,
-            int azimuthBins, int beamCount,
             float depthNear, float depthFar, float pointRadiusPixels,
+            GsplatLidarParticleAntialiasingMode requestedParticleAntialiasingMode,
+            GsplatLidarParticleAntialiasingMode effectiveParticleAntialiasingMode,
             GsplatLidarColorMode colorMode, float colorBlend01, float visibility01,
             float trailGamma, float intensity, float unscannedIntensity,
             float intensityDistanceDecay, float unscannedIntensityDistanceDecay, GsplatLidarDistanceDecayMode intensityDistanceDecayMode,
@@ -422,12 +806,35 @@ namespace Gsplat
             if (splatColorBuffer == null || !splatColorBuffer.IsValid())
                 return false;
 
-            if (!EnsureMaterialInstance(settings.LidarMaterial))
+            requestedParticleAntialiasingMode =
+                GsplatUtils.SanitizeLidarParticleAntialiasingMode(requestedParticleAntialiasingMode);
+            effectiveParticleAntialiasingMode =
+                GsplatUtils.SanitizeLidarParticleAntialiasingMode(effectiveParticleAntialiasingMode);
+
+            var effectiveMaterial = settings.LidarMaterial;
+            if (GsplatUtils.UsesLidarParticleAlphaToCoverage(effectiveParticleAntialiasingMode))
+            {
+                if (settings.LidarAlphaToCoverageMaterial)
+                {
+                    effectiveMaterial = settings.LidarAlphaToCoverageMaterial;
+                }
+                else
+                {
+                    effectiveParticleAntialiasingMode = GsplatLidarParticleAntialiasingMode.AnalyticCoverage;
+                }
+            }
+
+#if UNITY_EDITOR
+            TryLogParticleAntialiasingDiagnostics(camera, requestedParticleAntialiasingMode,
+                effectiveParticleAntialiasingMode);
+#endif
+
+            if (!EnsureMaterialInstance(effectiveMaterial))
                 return false;
 
-            azimuthBins = Mathf.Max(azimuthBins, 1);
-            beamCount = Mathf.Max(beamCount, 1);
-            var cellCount = Mathf.Max(azimuthBins * beamCount, 1);
+            var azimuthBins = Mathf.Max(layout.ActiveAzimuthBins, 1);
+            var beamCount = Mathf.Max(layout.ActiveBeamCount, 1);
+            var cellCount = layout.CellCount;
 
             var instanceSize = Mathf.Max((int)settings.SplatInstanceSize, 1);
             var instanceCount = DivRoundUp(cellCount, instanceSize);
@@ -448,9 +855,13 @@ namespace Gsplat
             m_propertyBlock.SetInt(k_lidarCellCount, cellCount);
             m_propertyBlock.SetInt(k_lidarAzimuthBins, azimuthBins);
             m_propertyBlock.SetInt(k_lidarBeamCount, beamCount);
+            m_propertyBlock.SetFloat(k_lidarAzimuthMinRad, layout.AzimuthMinRad);
+            m_propertyBlock.SetFloat(k_lidarAzimuthMaxRad, layout.AzimuthMaxRad);
             m_propertyBlock.SetMatrix(k_lidarMatrixL2W, lidarLocalToWorld);
             m_propertyBlock.SetMatrix(k_lidarMatrixW2M, worldToModel);
             m_propertyBlock.SetFloat(k_lidarPointRadiusPixels, Mathf.Max(pointRadiusPixels, 0.0f));
+            m_propertyBlock.SetFloat(k_lidarParticleAaAnalyticCoverage,
+                GsplatUtils.UsesLidarParticleAnalyticCoverage(effectiveParticleAntialiasingMode) ? 1.0f : 0.0f);
             m_propertyBlock.SetInt(k_lidarColorMode, (int)colorMode);
             m_propertyBlock.SetFloat(k_lidarColorBlend, Mathf.Clamp01(colorBlend01));
             m_propertyBlock.SetFloat(k_lidarVisibility, Mathf.Clamp01(visibility01));
@@ -579,8 +990,8 @@ namespace Gsplat
             float temporalCutoff,
             float minSplatOpacity,
             Matrix4x4 modelToLidar, int splatBaseIndex, int splatCount,
-            int azimuthBins, int beamCount,
-            float upFovDeg, float downFovDeg, float depthNear, float depthFar,
+            in GsplatLidarLayout layout,
+            float depthNear, float depthFar,
             bool needsSplatId)
         {
             // 说明:
@@ -605,9 +1016,9 @@ namespace Gsplat
             if (!EnsureKernels(computeShader))
                 return false;
 
-            azimuthBins = Mathf.Max(azimuthBins, 1);
-            beamCount = Mathf.Max(beamCount, 1);
-            var cellCount = Mathf.Max(azimuthBins * beamCount, 1);
+            var azimuthBins = Mathf.Max(layout.ActiveAzimuthBins, 1);
+            var beamCount = Mathf.Max(layout.ActiveBeamCount, 1);
+            var cellCount = layout.CellCount;
 
             // depth gate(平方):
             depthNear = Mathf.Max(depthNear, 0.0f);
@@ -628,8 +1039,10 @@ namespace Gsplat
             m_cmd.SetComputeIntParam(computeShader, k_lidarCellCount, cellCount);
             m_cmd.SetComputeIntParam(computeShader, k_lidarAzimuthBins, azimuthBins);
             m_cmd.SetComputeIntParam(computeShader, k_lidarBeamCount, beamCount);
-            m_cmd.SetComputeFloatParam(computeShader, k_lidarUpFovRad, upFovDeg * Mathf.Deg2Rad);
-            m_cmd.SetComputeFloatParam(computeShader, k_lidarDownFovRad, downFovDeg * Mathf.Deg2Rad);
+            m_cmd.SetComputeFloatParam(computeShader, k_lidarAzimuthMinRad, layout.AzimuthMinRad);
+            m_cmd.SetComputeFloatParam(computeShader, k_lidarAzimuthMaxRad, layout.AzimuthMaxRad);
+            m_cmd.SetComputeFloatParam(computeShader, k_lidarUpFovRad, layout.BeamMaxRad);
+            m_cmd.SetComputeFloatParam(computeShader, k_lidarDownFovRad, layout.BeamMinRad);
             m_cmd.SetComputeFloatParam(computeShader, k_lidarDepthNearSq, nearSq);
             m_cmd.SetComputeFloatParam(computeShader, k_lidarDepthFarSq, farSq);
             m_cmd.SetComputeFloatParam(computeShader, k_lidarMinSplatOpacity, Mathf.Clamp01(minSplatOpacity));
@@ -693,43 +1106,41 @@ namespace Gsplat
             return true;
         }
 
-        void EnsureAzSinCos(int azimuthBins)
+        void EnsureAzSinCos(in GsplatLidarLayout layout)
         {
+            var azimuthBins = Mathf.Max(layout.ActiveAzimuthBins, 1);
             if (m_azSinCosScratch == null || m_azSinCosScratch.Length != azimuthBins)
                 m_azSinCosScratch = new Vector2[azimuthBins];
 
             // 使用 bin center:
             // - 这样 compute(把角度映射到 bin)与 render(从 bin 还原方向)更一致.
-            // - 角域: [-pi, pi)
+            // - 角域: [AzimuthMinRad, AzimuthMaxRad]
             var inv = 1.0f / azimuthBins;
+            var azimuthSpanRad = layout.AzimuthSpanRad;
             for (var i = 0; i < azimuthBins; i++)
             {
                 var t = (i + 0.5f) * inv;
-                var az = t * (Mathf.PI * 2.0f) - Mathf.PI;
+                var az = layout.AzimuthMinRad + t * azimuthSpanRad;
                 m_azSinCosScratch[i] = new Vector2(Mathf.Sin(az), Mathf.Cos(az));
             }
 
             AzSinCosBuffer.SetData(m_azSinCosScratch, 0, 0, azimuthBins);
         }
 
-        void EnsureBeamSinCos(float upFovDeg, float downFovDeg, int beamCount)
+        void EnsureBeamSinCos(in GsplatLidarLayout layout)
         {
+            var beamCount = Mathf.Max(layout.ActiveBeamCount, 1);
             if (m_beamSinCosScratch == null || m_beamSinCosScratch.Length != beamCount)
                 m_beamSinCosScratch = new Vector2[beamCount];
 
             // 注意:
-            // - downFovDeg 通常为负数(例如 -30).
-            // - upFovDeg 通常为正数(例如 +10).
-            // - 这里用整体的 bin center 匀角度采样,覆盖 [downFov..upFov].
-            var upFovRad = Mathf.Deg2Rad * upFovDeg;
-            var downFovRad = Mathf.Deg2Rad * downFovDeg;
-
-            var denom = Mathf.Max(upFovRad - downFovRad, 1e-6f);
+            // - 这里用整体的 bin center 匀角度采样,覆盖 [BeamMinRad..BeamMaxRad].
+            var denom = layout.BeamSpanRad;
             var inv = 1.0f / beamCount;
             for (var i = 0; i < beamCount; i++)
             {
                 var t = (i + 0.5f) * inv;
-                var el = downFovRad + t * denom;
+                var el = layout.BeamMinRad + t * denom;
                 m_beamSinCosScratch[i] = new Vector2(Mathf.Sin(el), Mathf.Cos(el));
             }
 
@@ -740,8 +1151,14 @@ namespace Gsplat
         {
             MinRangeSqBitsBuffer?.Dispose();
             MinSplatIdBuffer?.Dispose();
+            ExternalRangeSqBitsBuffer?.Dispose();
+            ExternalBaseColorBuffer?.Dispose();
             MinRangeSqBitsBuffer = null;
             MinSplatIdBuffer = null;
+            ExternalRangeSqBitsBuffer = null;
+            ExternalBaseColorBuffer = null;
+            m_externalRangeSqBitsScratch = null;
+            m_externalBaseColorScratch = null;
 
             // 注意:
             // - range image 的缓存维度只在 buffer 存在时才有意义.
@@ -763,8 +1180,10 @@ namespace Gsplat
 
             m_cachedLutAzimuthBins = 0;
             m_cachedLutBeamCount = 0;
-            m_cachedUpFovDeg = 0.0f;
-            m_cachedDownFovDeg = 0.0f;
+            m_cachedLutAzimuthMinRad = float.NaN;
+            m_cachedLutAzimuthMaxRad = float.NaN;
+            m_cachedLutBeamMinRad = float.NaN;
+            m_cachedLutBeamMaxRad = float.NaN;
         }
 
         static int DivRoundUp(int x, int d)
@@ -873,6 +1292,8 @@ namespace Gsplat
             // MPB:
             m_propertyBlock.SetBuffer(k_lidarMinRangeSqBits, MinRangeSqBitsBuffer);
             m_propertyBlock.SetBuffer(k_lidarMinSplatId, MinSplatIdBuffer);
+            m_propertyBlock.SetBuffer(k_lidarExternalRangeSqBits, ExternalRangeSqBitsBuffer);
+            m_propertyBlock.SetBuffer(k_lidarExternalBaseColor, ExternalBaseColorBuffer);
             m_propertyBlock.SetBuffer(k_lidarAzSinCos, AzSinCosBuffer);
             m_propertyBlock.SetBuffer(k_lidarBeamSinCos, BeamSinCosBuffer);
             m_propertyBlock.SetBuffer(k_colorBuffer, splatColorBuffer);
@@ -880,6 +1301,8 @@ namespace Gsplat
             // Material instance(稳态兜底):
             m_materialInstance.SetBuffer(k_lidarMinRangeSqBits, MinRangeSqBitsBuffer);
             m_materialInstance.SetBuffer(k_lidarMinSplatId, MinSplatIdBuffer);
+            m_materialInstance.SetBuffer(k_lidarExternalRangeSqBits, ExternalRangeSqBitsBuffer);
+            m_materialInstance.SetBuffer(k_lidarExternalBaseColor, ExternalBaseColorBuffer);
             m_materialInstance.SetBuffer(k_lidarAzSinCos, AzSinCosBuffer);
             m_materialInstance.SetBuffer(k_lidarBeamSinCos, BeamSinCosBuffer);
             m_materialInstance.SetBuffer(k_colorBuffer, splatColorBuffer);

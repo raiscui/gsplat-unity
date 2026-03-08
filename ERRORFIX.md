@@ -56,3 +56,35 @@
 
 - Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`): total=54, passed=52, failed=0, skipped=2
 - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_unscanned_intensity_2026-03-03_154114_noquit.xml`
+
+## 2026-03-08
+
+### 现象
+
+- `radarscan-particle-antialiasing-modes` 首轮 Unity EditMode 回归里,两个 A2C fallback 测试失败.
+- 失败不是断言错,而是 Unity 记录了 error log:
+  - `Releasing render texture that is set as Camera.targetTexture!`
+
+### 根因
+
+- `Tests/Editor/GsplatLidarScanTests.cs` 里的两个测试在 `finally` 中直接销毁了 `targetTexture`.
+- 但此时 `Camera.targetTexture` 仍然指向该 RT.
+- Unity 会把这种销毁顺序记成错误日志,从而导致整组测试失败.
+
+### 修复
+
+- 把测试清理顺序改为:
+  - 先 `camera.targetTexture = null`
+  - 再 `DestroyImmediate(targetTexture)`
+  - 最后 `DestroyImmediate(cameraGo)`
+- 同时把 `camera` 提升到 `try/finally` 外层变量,确保 `finally` 能安全解绑.
+
+### 验证(证据)
+
+- 目标测试:
+  - `Gsplat.Tests.GsplatLidarScanTests.ResolveEffectiveLidarParticleAntialiasingMode_FallsBackToAnalyticCoverageWithoutMsaa`
+  - `Gsplat.Tests.GsplatLidarScanTests.ResolveEffectiveLidarParticleAntialiasingMode_KeepsA2CWhenMsaaIsAvailable`
+  - 在 XML 中均为 `Passed`
+- Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests`
+  - total=`82`, passed=`80`, failed=`0`, skipped=`2`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_particle_aa_2026-03-08_noquit.xml`

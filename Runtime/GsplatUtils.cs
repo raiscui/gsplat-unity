@@ -39,6 +39,45 @@ namespace Gsplat
         Exponential = 1
     }
 
+    /// <summary>
+    /// LiDAR 扫描口径模式.
+    /// - Surround360: 继续使用传统 360 度水平口径,传感器位姿来自 `LidarOrigin`.
+    /// - CameraFrustum: 口径与传感器外参都直接来自 `LidarFrustumCamera`.
+    /// </summary>
+    public enum GsplatLidarApertureMode
+    {
+        Surround360 = 0,
+        CameraFrustum = 1
+    }
+
+    /// <summary>
+    /// external target 的普通 mesh 可见性模式.
+    /// - KeepVisible: 继续显示原始 mesh,同时参与 LiDAR 扫描.
+    /// - ForceRenderingOff: 不显示原始 mesh,仅保留 LiDAR 扫描语义.
+    /// - ForceRenderingOffInPlayMode: 仅在 Play 模式隐藏原始 mesh,编辑器平时仍显示.
+    /// </summary>
+    public enum GsplatLidarExternalTargetVisibilityMode
+    {
+        KeepVisible = 0,
+        ForceRenderingOff = 1,
+        ForceRenderingOffInPlayMode = 2
+    }
+
+    /// <summary>
+    /// LiDAR 粒子抗锯齿模式.
+    /// - LegacySoftEdge: 继续使用固定 feather 的旧边缘语义.
+    /// - AnalyticCoverage: 使用屏幕导数驱动的本地 coverage AA.
+    /// - AlphaToCoverage: 依赖 MSAA 的 alpha-to-coverage.
+    /// - AnalyticCoveragePlusAlphaToCoverage: analytic coverage 与 A2C 叠加.
+    /// </summary>
+    public enum GsplatLidarParticleAntialiasingMode
+    {
+        LegacySoftEdge = 0,
+        AnalyticCoverage = 1,
+        AlphaToCoverage = 2,
+        AnalyticCoveragePlusAlphaToCoverage = 3
+    }
+
     public static class GsplatUtils
     {
         public const string k_PackagePath = "Packages/wu.yize.gsplat/";
@@ -49,6 +88,65 @@ namespace Gsplat
         public static float Sigmoid(float x)
         {
             return 1.0f / (1.0f + Mathf.Exp(-x));
+        }
+
+        public static bool IsValidLidarParticleAntialiasingMode(GsplatLidarParticleAntialiasingMode mode)
+        {
+            return mode == GsplatLidarParticleAntialiasingMode.LegacySoftEdge ||
+                   mode == GsplatLidarParticleAntialiasingMode.AnalyticCoverage ||
+                   mode == GsplatLidarParticleAntialiasingMode.AlphaToCoverage ||
+                   mode == GsplatLidarParticleAntialiasingMode.AnalyticCoveragePlusAlphaToCoverage;
+        }
+
+        public static GsplatLidarParticleAntialiasingMode SanitizeLidarParticleAntialiasingMode(
+            GsplatLidarParticleAntialiasingMode mode)
+        {
+            return IsValidLidarParticleAntialiasingMode(mode)
+                ? mode
+                : GsplatLidarParticleAntialiasingMode.LegacySoftEdge;
+        }
+
+        public static bool UsesLidarParticleAnalyticCoverage(GsplatLidarParticleAntialiasingMode mode)
+        {
+            return mode == GsplatLidarParticleAntialiasingMode.AnalyticCoverage ||
+                   mode == GsplatLidarParticleAntialiasingMode.AnalyticCoveragePlusAlphaToCoverage;
+        }
+
+        public static bool UsesLidarParticleAlphaToCoverage(GsplatLidarParticleAntialiasingMode mode)
+        {
+            return mode == GsplatLidarParticleAntialiasingMode.AlphaToCoverage ||
+                   mode == GsplatLidarParticleAntialiasingMode.AnalyticCoveragePlusAlphaToCoverage;
+        }
+
+        public static bool IsLidarParticleMsaaAvailable(Camera camera)
+        {
+            // 说明:
+            // - A2C 的结果依赖“当前实际 render target 具备多重采样”.
+            // - 这里故意做保守判断:
+            //   - camera.allowMSAA=false 时,直接视为不可用.
+            //   - targetTexture 存在时,以其 antiAliasing 为准.
+            //   - 否则回退检查 QualitySettings.antiAliasing.
+            if (!camera || !camera.allowMSAA)
+                return false;
+
+            var targetTexture = camera.targetTexture;
+            if (targetTexture)
+                return targetTexture.antiAliasing > 1;
+
+            return QualitySettings.antiAliasing > 1;
+        }
+
+        public static GsplatLidarParticleAntialiasingMode ResolveEffectiveLidarParticleAntialiasingMode(
+            GsplatLidarParticleAntialiasingMode requestedMode,
+            Camera camera)
+        {
+            requestedMode = SanitizeLidarParticleAntialiasingMode(requestedMode);
+            if (!UsesLidarParticleAlphaToCoverage(requestedMode))
+                return requestedMode;
+
+            return IsLidarParticleMsaaAvailable(camera)
+                ? requestedMode
+                : GsplatLidarParticleAntialiasingMode.AnalyticCoverage;
         }
 
         // --------------------------------------------------------------------
@@ -162,6 +260,30 @@ namespace Gsplat
                 worldBounds.Encapsulate(transform.TransformPoint(localCorners[i]));
 
             return worldBounds;
+        }
+
+        public static Bounds TransformBounds(Bounds sourceBounds, Matrix4x4 matrix)
+        {
+            var sourceCenter = sourceBounds.center;
+            var sourceExtents = sourceBounds.extents;
+
+            var sourceCorners = new[]
+            {
+                sourceCenter + new Vector3(sourceExtents.x, sourceExtents.y, sourceExtents.z),
+                sourceCenter + new Vector3(sourceExtents.x, sourceExtents.y, -sourceExtents.z),
+                sourceCenter + new Vector3(sourceExtents.x, -sourceExtents.y, sourceExtents.z),
+                sourceCenter + new Vector3(sourceExtents.x, -sourceExtents.y, -sourceExtents.z),
+                sourceCenter + new Vector3(-sourceExtents.x, sourceExtents.y, sourceExtents.z),
+                sourceCenter + new Vector3(-sourceExtents.x, sourceExtents.y, -sourceExtents.z),
+                sourceCenter + new Vector3(-sourceExtents.x, -sourceExtents.y, sourceExtents.z),
+                sourceCenter + new Vector3(-sourceExtents.x, -sourceExtents.y, -sourceExtents.z)
+            };
+
+            var transformedBounds = new Bounds(matrix.MultiplyPoint3x4(sourceCorners[0]), Vector3.zero);
+            for (var i = 1; i < sourceCorners.Length; i++)
+                transformedBounds.Encapsulate(matrix.MultiplyPoint3x4(sourceCorners[i]));
+
+            return transformedBounds;
         }
 
         // --------------------------------------------------------------------

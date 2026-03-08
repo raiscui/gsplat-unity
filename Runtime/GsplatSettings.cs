@@ -58,6 +58,12 @@ namespace Gsplat
                     settings.LidarShader =
                         AssetDatabase.LoadAssetAtPath<Shader>(GsplatUtils.k_PackagePath +
                                                               "Runtime/Shaders/GsplatLidar.shader");
+                    settings.LidarAlphaToCoverageShader =
+                        AssetDatabase.LoadAssetAtPath<Shader>(GsplatUtils.k_PackagePath +
+                                                              "Runtime/Shaders/GsplatLidarAlphaToCoverage.shader");
+                    settings.LidarExternalCaptureShader =
+                        AssetDatabase.LoadAssetAtPath<Shader>(GsplatUtils.k_PackagePath +
+                                                              "Runtime/Shaders/GsplatLidarExternalCapture.shader");
                     settings.ComputeShader =
                         AssetDatabase.LoadAssetAtPath<ComputeShader>(GsplatUtils.k_PackagePath +
                                                                      "Runtime/Shaders/Gsplat.compute");
@@ -77,6 +83,8 @@ namespace Gsplat
 
         public Shader Shader;
         public Shader LidarShader;
+        public Shader LidarAlphaToCoverageShader;
+        public Shader LidarExternalCaptureShader;
         public ComputeShader ComputeShader;
         public ComputeShader ShDeltaComputeShader;
 
@@ -147,12 +155,16 @@ namespace Gsplat
 
         public Material[] Materials { get; private set; }
         public Material LidarMaterial { get; private set; }
+        public Material LidarAlphaToCoverageMaterial { get; private set; }
+        public Material LidarExternalCaptureMaterial { get; private set; }
         public Mesh Mesh { get; private set; }
 
         public bool Valid => Materials?.Length != 0 && Mesh && SplatInstanceSize > 0;
 
         Shader m_prevShader;
         Shader m_prevLidarShader;
+        Shader m_prevLidarAlphaToCoverageShader;
+        Shader m_prevLidarExternalCaptureShader;
         ComputeShader m_prevComputeShader;
         uint m_prevSplatInstanceSize;
 
@@ -214,8 +226,16 @@ namespace Gsplat
             if (LidarMaterial)
                 DestroyImmediate(LidarMaterial);
 
+            if (LidarAlphaToCoverageMaterial)
+                DestroyImmediate(LidarAlphaToCoverageMaterial);
+
+            if (LidarExternalCaptureMaterial)
+                DestroyImmediate(LidarExternalCaptureMaterial);
+
             Materials = null;
             LidarMaterial = null;
+            LidarAlphaToCoverageMaterial = null;
+            LidarExternalCaptureMaterial = null;
 
             if (Shader)
             {
@@ -231,6 +251,20 @@ namespace Gsplat
             {
                 // LiDAR 点云不依赖 SH keyword,只需要一个材质即可.
                 LidarMaterial = new Material(LidarShader) { hideFlags = HideFlags.HideAndDontSave };
+            }
+
+            if (LidarAlphaToCoverageShader)
+            {
+                // A2C 需要独立 shader shell,不能在同一个 pass 里靠 uniform 动态切 AlphaToMask.
+                LidarAlphaToCoverageMaterial =
+                    new Material(LidarAlphaToCoverageShader) { hideFlags = HideFlags.HideAndDontSave };
+            }
+
+            if (LidarExternalCaptureShader)
+            {
+                // external capture 需要独立的 override material,避免影响普通 LiDAR 点云材质.
+                LidarExternalCaptureMaterial =
+                    new Material(LidarExternalCaptureShader) { hideFlags = HideFlags.HideAndDontSave };
             }
         }
 
@@ -251,12 +285,30 @@ namespace Gsplat
                     AssetDatabase.LoadAssetAtPath<Shader>(GsplatUtils.k_PackagePath +
                                                           "Runtime/Shaders/GsplatLidar.shader");
             }
+
+            if (!LidarAlphaToCoverageShader)
+            {
+                LidarAlphaToCoverageShader =
+                    AssetDatabase.LoadAssetAtPath<Shader>(GsplatUtils.k_PackagePath +
+                                                          "Runtime/Shaders/GsplatLidarAlphaToCoverage.shader");
+            }
+
+            if (!LidarExternalCaptureShader)
+            {
+                LidarExternalCaptureShader =
+                    AssetDatabase.LoadAssetAtPath<Shader>(GsplatUtils.k_PackagePath +
+                                                          "Runtime/Shaders/GsplatLidarExternalCapture.shader");
+            }
 #endif
-            if (Shader != m_prevShader || LidarShader != m_prevLidarShader)
+            if (Shader != m_prevShader || LidarShader != m_prevLidarShader ||
+                LidarAlphaToCoverageShader != m_prevLidarAlphaToCoverageShader ||
+                LidarExternalCaptureShader != m_prevLidarExternalCaptureShader)
             {
                 CreateMaterials();
                 m_prevShader = Shader;
                 m_prevLidarShader = LidarShader;
+                m_prevLidarAlphaToCoverageShader = LidarAlphaToCoverageShader;
+                m_prevLidarExternalCaptureShader = LidarExternalCaptureShader;
             }
 
             if (ComputeShader != m_prevComputeShader)
@@ -278,6 +330,8 @@ namespace Gsplat
             CreateMaterials();
             m_prevShader = Shader;
             m_prevLidarShader = LidarShader;
+            m_prevLidarAlphaToCoverageShader = LidarAlphaToCoverageShader;
+            m_prevLidarExternalCaptureShader = LidarExternalCaptureShader;
             InitSorterSafely(ComputeShader);
             m_prevComputeShader = ComputeShader;
 

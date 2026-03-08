@@ -124,8 +124,41 @@ Instead of rendering the hit splats directly, it renders a **regular point grid*
 Enable it in the Inspector:
 
 - `EnableLidarScan = true`
-- `LidarOrigin` = a `Transform` that represents the LiDAR pose (position + rotation)
+- `LidarApertureMode`
+  - `Surround360`: keeps the legacy 360-degree scan semantics, and still uses `LidarOrigin` as the sensor pose.
+  - `CameraFrustum`: uses `LidarFrustumCamera` as the authoritative sensor-frame.
+    - Camera position = LiDAR origin
+    - Camera rotation = LiDAR orientation
+    - Camera projection / aspect / pixelRect = LiDAR aperture and cell-to-screen mapping
+- `LidarOrigin` = only required for `Surround360`
+- `LidarFrustumCamera` = only required for `CameraFrustum`
+- Optional external mesh inputs:
+  - `LidarExternalStaticTargets` = static scan roots
+    - Recursively collects child `MeshRenderer + MeshFilter` and `SkinnedMeshRenderer`
+    - In `CameraFrustum` mode, static targets use the GPU capture path and are only recaptured when their signature changes:
+      - frustum camera pose / projection / aspect / pixelRect
+      - capture RT layout / LiDAR cell mapping
+      - renderer active/enabled state
+      - transform / mesh / material main color (`_BaseColor`, fallback `_Color`)
+  - `LidarExternalDynamicTargets` = dynamic scan roots
+    - Designed for moving props, animated meshes, and `SkinnedMeshRenderer`
+    - In `CameraFrustum` mode, dynamic targets use a separate capture cache and refresh at `LidarExternalDynamicUpdateHz`
+  - Legacy `LidarExternalTargets` is still accepted and maps to `LidarExternalStaticTargets` for backward compatibility
+  - `LidarExternalTargetVisibilityMode = ForceRenderingOff` by default, so those targets can stay scan-only (participate in LiDAR, but stop rendering as ordinary meshes)
+  - `ForceRenderingOffInPlayMode` keeps the original mesh visible while editing, but automatically hides it during Play mode
+  - Switch to `KeepVisible` if you want the original mesh rendering to remain visible alongside the LiDAR point cloud
 - Optional: `HideSplatsWhenLidarEnabled = true` to render only the LiDAR point cloud (no splats)
+
+External targets share the same **first return** semantics with gsplat:
+
+- Each `(beam, azimuthBin)` compares the gsplat hit and the external-mesh hit, and only the nearest result survives.
+- This means external targets can occlude gsplat, and gsplat can still win when it is closer.
+- `Depth` mode keeps using the same depth gradient for both hit sources.
+- `SplatColorSH0` keeps using SH0 base color for gsplat hits, while external hits use the hit material main color (`_BaseColor`, fallback `_Color`, otherwise white).
+- In `CameraFrustum` mode, external mesh capture uses an explicit render list + override material + command buffer draw path, so the scan no longer depends on whether the source renderer is visible in the scene.
+- The frustum GPU resolve converts captured view-depth back into LiDAR ray-distance / `depthSq` semantics before writing the external hit buffer. It does not compare raw hardware depth against the LiDAR range image.
+- `Surround360`, unsupported GPU-capture platforms, or missing capture resources still fall back to the legacy CPU `RaycastCommand` route.
+- The LiDAR show/hide coverage radius now uses the combined bounds of gsplat + external targets, so external meshes outside the original gsplat bounds still participate in the reveal/burn radius.
 
 Default scanning setup (as discussed in the spec):
 
@@ -138,7 +171,12 @@ Default scanning setup (as discussed in the spec):
 - Depth opacity:
   - `LidarDepthOpacity` (0..1, default `1`, only affects `Depth` mode)
 - Point size: `LidarPointRadiusPixels` (default `2px` radius)
-- Rendering: screen-space square points (soft edge), alpha blend (opaque when alpha=1)
+- Particle antialiasing:
+  - `LidarParticleAntialiasingMode`
+  - `LegacySoftEdge` = compatibility default, keeps the old fixed-feather edge look
+  - `AnalyticCoverage` = recommended general mode, uses derivative-driven local coverage AA and does not depend on MSAA
+  - `AlphaToCoverage` / `AnalyticCoveragePlusAlphaToCoverage` = require effective MSAA on the actual render camera; if MSAA is unavailable, runtime falls back to `AnalyticCoverage`
+- Rendering: screen-space square points, alpha blend (opaque when alpha=1)
   - Scan head + trail: `LidarTrailGamma`, `LidarIntensity`
   - Optional base intensity (prevents "black after sweep"): `LidarKeepUnscannedPoints`, `LidarUnscannedIntensity`
   - Optional distance attenuation (near stronger, far weaker):
@@ -151,11 +189,17 @@ API example:
 ```csharp
 var r = GetComponent<GsplatRenderer>();
 r.EnableLidarScan = true;
-r.LidarOrigin = lidarTransform;
+r.LidarApertureMode = GsplatLidarApertureMode.CameraFrustum;
+r.LidarFrustumCamera = lidarCamera;
+r.LidarExternalStaticTargets = new[] { roadSignsRoot, roadSurfaceRoot };
+r.LidarExternalDynamicTargets = new[] { carRoot, characterRoot };
+r.LidarExternalDynamicUpdateHz = 15.0f;
+r.LidarExternalTargetVisibilityMode = GsplatLidarExternalTargetVisibilityMode.ForceRenderingOffInPlayMode;
 r.HideSplatsWhenLidarEnabled = true;
 r.LidarColorMode = GsplatLidarColorMode.Depth;
 r.LidarDepthOpacity = 1.0f;
 r.LidarPointRadiusPixels = 2.0f;
+r.LidarParticleAntialiasingMode = GsplatLidarParticleAntialiasingMode.AnalyticCoverage;
 r.LidarKeepUnscannedPoints = true;
 r.LidarUnscannedIntensity = 0.2f;
 r.LidarIntensityDistanceDecayMode = GsplatLidarDistanceDecayMode.Exponential;
@@ -165,11 +209,21 @@ r.LidarUnscannedIntensityDistanceDecay = 0.02f;
 
 Manual verification checklist:
 
-- 360-degree scan head rotates at ~`LidarRotationHz` (default 5Hz)
+- In `Surround360` mode, the 360-degree scan head rotates at ~`LidarRotationHz` (default 5Hz)
 - Scan head rotates and leaves a 1-revolution trail (`LidarTrailGamma`, `LidarIntensity`)
+- In `CameraFrustum` mode, the scan aperture follows `LidarFrustumCamera` instead of `LidarOrigin`
 - When `LidarKeepUnscannedPoints=true`, points do not fade to black before the next sweep (uses `LidarUnscannedIntensity`)
 - When `Lidar*DistanceDecay > 0`, intensity attenuates with distance (near stronger, far weaker)
 - `Depth` / `SplatColorSH0` switching works
+- With `LidarExternalStaticTargets` / `LidarExternalDynamicTargets` configured, external meshes participate in the same first-return competition as gsplat
+- In `CameraFrustum` mode, static external meshes do not recapture every LiDAR tick when only gsplat data updates
+- In `CameraFrustum` mode, dynamic external meshes refresh at `LidarExternalDynamicUpdateHz` and can remain stale between refreshes by design
+- With `LidarExternalTargetVisibilityMode=ForceRenderingOff`, external targets disappear as ordinary meshes but still remain valid LiDAR scan targets
+- With `LidarExternalTargetVisibilityMode=ForceRenderingOffInPlayMode`, external targets remain visible while editing but switch to scan-only during Play mode
+- In `SplatColorSH0`, external hits use the hit material main color instead of SH0
+- `LidarParticleAntialiasingMode=AnalyticCoverage` gives a visibly smoother edge than `LegacySoftEdge` on small LiDAR points
+- `LidarParticleAntialiasingMode=AlphaToCoverage` or `AnalyticCoveragePlusAlphaToCoverage` only stays active when the actual render camera has MSAA; otherwise runtime falls back to `AnalyticCoverage`
+- `SkinnedMeshRenderer` targets update after pose changes on the next `LidarExternalDynamicUpdateHz` capture tick (or the next CPU fallback scan tick)
 - `HideSplatsWhenLidarEnabled=true` stops splat sort/draw while LiDAR still works
 
 ### 4DGS motion model and visibility

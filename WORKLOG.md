@@ -218,6 +218,93 @@
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_depth_opacity_2026-03-02_112159_noquit.xml`
 - Commit: `1362d14`
 
+## 2026-03-08 00:23:12 +0800
+- 继续实现 OpenSpec change: `lidar-camera-frustum-external-gpu-scan`
+  - 本轮完成:
+    - `2.1`
+    - `2.2`
+    - `2.3`
+    - `2.4`
+    - `2.5`
+    - `6.1`
+    - `6.2`
+
+### 变更内容
+- Runtime:
+  - `Runtime/Lidar/GsplatLidarScan.cs`
+    - 引入统一的 `GsplatLidarLayout`,把 active counts + azimuth/beam angle ranges 绑定成一份共享语义.
+    - `EnsureRangeImageBuffers` / `EnsureLutBuffers` / `TryRebuildRangeImage` / `RenderPointCloud` 改为直接吃 layout.
+    - compute 下发新增 `_LidarAzimuthMinRad` / `_LidarAzimuthMaxRad`.
+    - 新增 `RangeCellCount`,用于在 layout 失效或 external targets 为空时安全清空当前 external hit buffers.
+  - `Runtime/GsplatRenderer.cs`
+    - 新增 `TryGetEffectiveLidarLayout` 与 `TryGetEffectiveLidarRuntimeContext`.
+    - LiDAR resource/tick/draw/external sync 统一切到 `layout + sensor frame` 主链.
+    - frustum camera 无效时明确 warning 并禁用新路径,不再进入不确定状态.
+  - `Runtime/GsplatSequenceRenderer.cs`
+    - 与 `GsplatRenderer` 同步上述 layout/runtime context 改造.
+  - `Runtime/Lidar/GsplatLidarExternalTargetHelper.cs`
+    - CPU fallback ray directions 改为按 layout 角域生成,不再硬编码 360 + `[downFov,upFov]`.
+    - 方向缓存新增 azimuth min/max 维度,避免 frustum 水平角变化时误复用旧方向数组.
+- Shader / Compute:
+  - `Runtime/Shaders/Gsplat.compute`
+    - `TryComputeLidarCell` 改为按 layout azimuth range 落 bin,不再固定 `[-pi,pi]`.
+  - `Runtime/Shaders/GsplatLidar.shader`
+    - draw 的扫描头年龄改为按真实 360 方位角计算.
+    - 目的: 避免 frustum 模式因 active bins 变少而把 `RotationHz` 视觉语义偷偷加速.
+- Tests:
+  - `Tests/Editor/GsplatLidarScanTests.cs`
+    - 新增 frustum active-cell count 推导测试.
+    - 新增 orthographic frustum camera 失效测试.
+    - 更新 external helper 反射调用,改为传入新的 surround layout.
+
+### 回归(证据)
+- OpenSpec:
+  - `openspec instructions apply --change "lidar-camera-frustum-external-gpu-scan" --json`
+  - progress: `12 / 35`
+- Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests.GsplatLidarScanTests`
+  - total=31, passed=31, failed=0, skipped=0
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_frustum_layout_2026-03-08_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_frustum_layout_2026-03-08_noquit.log`
+- Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests`
+  - total=74, passed=72, failed=0, skipped=2
+  - skipped=2 为既有 ignore:
+    - `GsplatMetalBufferBindingTests.Render_DoesNotTrigger_MetalMissingComputeBufferWarning`
+    - `GsplatVfxBinderTests.AutoAssignsDefaultVfxComputeShader_WhenMissing`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_frustum_layout_full_2026-03-08_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_frustum_layout_full_2026-03-08_noquit.log`
+
+## 2026-03-07 01:09:26 +0800
+- 为“RadarScan 支持 `GameObject[]` 外部模型参与扫描”的方案创建了新的 OpenSpec change:
+  - name: `lidar-external-targets`
+  - location: `openspec/changes/lidar-external-targets/`
+  - schema: `spec-driven`
+- 当前 artifact 进度:
+  - `proposal`: ready
+  - `design`: blocked by `proposal`
+  - `specs`: blocked by `proposal`
+  - `tasks`: blocked by `design, specs`
+- 已读取首个 artifact `proposal` 的 instructions.
+  - 输出路径: `openspec/changes/lidar-external-targets/proposal.md`
+  - 下一步应围绕“为什么现在需要让外部模型与 gsplat 一起参与 LiDAR first return”起草 proposal.
+
+## 2026-03-07 01:13:40 +0800
+- 使用 `$openspec-ff-change` 完成 `lidar-external-targets` 的全部 OpenSpec artifacts,当前 change 已 apply-ready.
+
+### 已生成 artifacts
+- `openspec/changes/lidar-external-targets/proposal.md`
+  - 锁定了能力边界: `LidarExternalTargets : GameObject[]`、真实 mesh 命中、与 gsplat 的 first return 竞争、外部命中材质主色.
+- `openspec/changes/lidar-external-targets/design.md`
+  - 固定了技术路线: 保留现有 gsplat range image,新增“隔离 PhysicsScene + 真实 mesh 代理 + RaycastCommand”外部命中源,并在 draw 阶段合并.
+- `openspec/changes/lidar-external-targets/specs/gsplat-lidar-external-targets/spec.md`
+  - 落下了 capability requirement: 外部目标收集、真实 mesh、per-cell 最近距离竞争、材质主色、联合 bounds、HideSplatsWhenLidarEnabled 下的持续扫描.
+- `openspec/changes/lidar-external-targets/tasks.md`
+  - 将实现拆成 5 组 checklist,覆盖 API/Inspector、runtime helper、hit 合并、颜色与 bounds、测试文档.
+
+### 状态确认
+- `openspec status --change lidar-external-targets`
+  - progress: `4/4 artifacts complete`
+  - result: `All artifacts complete!`
+
 ## 2026-03-02 11:57:33 +0800
 - LiDAR: Depth 点云实现“真正不透明”(不再 additive 发光).
   - 之前的 `LidarDepthOpacity` 在 additive blend 下只能当作亮度/覆盖率缩放,无法做到 alpha=1 覆盖背景.
@@ -847,3 +934,554 @@
 - Unity 6000.3.8f1, EditMode tests(`Gsplat.Tests`): total=54, passed=52, failed=0, skipped=2
 - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_distance_decay_mode_2026-03-03_181542_noquit.xml`
 - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_distance_decay_mode_2026-03-03_181542_noquit.log`
+
+## 2026-03-07 02:19:33 +0800
+- 落地 OpenSpec change: `lidar-external-targets`(21/21 tasks complete, `openspec instructions apply` 已到 `all_done`).
+
+### 变更内容
+- Runtime:
+  - `Runtime/Lidar/GsplatLidarExternalTargetHelper.cs`
+    - 新增 external target helper.
+    - 递归收集 `LidarExternalTargets` 根对象下的 `MeshRenderer + MeshFilter` / `SkinnedMeshRenderer`.
+    - 静态 mesh 使用真实 `sharedMesh`,skinned mesh 使用 `BakeMesh()` 快照.
+    - 维护 proxy collider + batch `RaycastCommand` 查询.
+    - 支持 `_BaseColor` / `_Color` 主色提取与 `triangleIndex -> submesh -> material` 映射缓存.
+    - EditMode 改为使用 preview scene 分支创建/释放 proxy scene,避免 `SceneManager.CreateScene` 在非 Play 模式下报错.
+  - `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+    - 接入 external helper 生命周期与 `LidarUpdateHz` 同步 tick.
+    - 当 external targets 为空时主动清空 external hit buffer,并释放 helper.
+    - 新增 `ResolveVisibilityLocalBoundsForThisFrame()`,让 splat visibility 与 LiDAR show/hide 都使用 gsplat + external targets 的联合 bounds.
+  - `Runtime/Lidar/GsplatLidarScan.cs`
+    - 修正 external hit clear 常量.
+    - external hit buffers 继续作为 LiDAR draw 的必绑资源.
+  - `package.json`
+    - 新增依赖 `com.unity.modules.physics`.
+    - 目的: external targets 依赖 `PhysicsScene` / `MeshCollider` / `RaycastCommand`,不能再假设宿主工程已经手工启用 Physics 内建包.
+- Shader:
+  - `Runtime/Shaders/GsplatLidar.shader`
+    - external hit 与 gsplat hit 按每个 cell 竞争最近距离.
+    - `Depth` 模式走统一深度色.
+    - `SplatColorSH0` 模式下,external hit 使用 external base color,gsplat hit 继续使用 SH0.
+- Tests:
+  - `Tests/Editor/GsplatLidarScanTests.cs`
+    - 新增联合 bounds 回归.
+    - 新增 external helper 最小 physics 集成测试(无 source collider 的 mesh 也能命中,并返回材质主色).
+  - `Tests/Editor/GsplatUtilsTests.cs`
+    - 新增 `TransformBounds(...)` 几何回归.
+  - `Tests/Editor/GsplatLidarShaderPropertyTests.cs`
+    - 新增 shader 文本契约测试,锁定 external hit 最近距离竞争表达式.
+- Docs / Spec:
+  - `README.md`: 补充 `LidarExternalTargets` 用法、颜色语义、SkinnedMesh 行为与验证清单.
+  - `CHANGELOG.md`: 记录 external target RadarScan 能力与 Physics 依赖.
+  - `openspec/changes/lidar-external-targets/tasks.md`: 21/21 全部完成.
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests.GsplatLidarScanTests`
+  - total=18, passed=18, failed=0, skipped=0
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_external_targets_lidarscan_2026-03-07_0234_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_external_targets_lidarscan_2026-03-07_0234_noquit.log`
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests.GsplatUtilsTests`
+  - total=8, passed=8, failed=0, skipped=0
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_external_targets_utils_2026-03-07_0234_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_external_targets_utils_2026-03-07_0234_noquit.log`
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests`
+  - total=61, passed=59, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_external_targets_all_2026-03-07_0238_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_external_targets_all_2026-03-07_0238_noquit.log`
+
+## 2026-03-07 02:24:34 +0800
+- 对 `lidar-external-targets` 做了一次 fresh verification 收尾,确认这次变更已经可以进入 archive / commit 阶段.
+
+### fresh verification
+- OpenSpec:
+  - `openspec status --change "lidar-external-targets" --json`
+    - `schemaName=spec-driven`
+    - `isComplete=true`
+    - `proposal/design/specs/tasks` 全部 `done`
+  - `openspec instructions apply --change "lidar-external-targets" --json`
+    - `progress=21/21`
+    - `state=all_done`
+- Unity:
+  - Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests`
+  - total=61, passed=59, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_external_targets_all_2026-03-07_022404_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_external_targets_all_2026-03-07_022404_noquit.log`
+  - 日志确认: `Test run completed. Exiting with code 0 (Ok).`
+
+### 收尾结论
+- `LATER_PLANS.md` 已回看,本轮无需新增延期项.
+- 当前未跟踪文件均属于本轮新增成果,需要在后续提交时一并纳入版本控制:
+  - `Runtime/Lidar/GsplatLidarExternalTargetHelper.cs`
+  - `Runtime/Lidar/GsplatLidarExternalTargetHelper.cs.meta`
+  - `openspec/changes/lidar-external-targets.meta`
+  - `openspec/changes/lidar-external-targets/`
+
+## 2026-03-07 12:16:43 +0800
+- 补完 `lidar-external-targets` 的外部目标“scan-only 可见性”语义.
+  - 目标: 让参与 RadarScan 的 external mesh 默认不再显示普通 mesh shader,但继续参与 LiDAR 扫描.
+
+### 变更内容
+- Runtime:
+  - `Runtime/GsplatUtils.cs`
+    - 新增 enum: `GsplatLidarExternalTargetVisibilityMode`
+      - `KeepVisible`
+      - `ForceRenderingOff`
+  - `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+    - 新增字段 `LidarExternalTargetVisibilityMode`
+    - 默认值: `ForceRenderingOff`
+    - `ValidateLidarSerializedFields()` 增加非法 enum 回退
+    - external helper 调用链新增 visibility mode 参数传递
+  - `Runtime/Lidar/GsplatLidarExternalTargetHelper.cs`
+    - helper 现在会追踪每个 source renderer 的原始 `forceRenderingOff`
+    - `ForceRenderingOff` 时隐藏普通 mesh 显示,但保持 external scan 正常
+    - 在目标移除 / helper Dispose 时恢复原始状态,避免污染用户场景
+- Editor:
+  - `Editor/GsplatRendererEditor.cs`
+  - `Editor/GsplatSequenceRendererEditor.cs`
+    - LiDAR Inputs 区域新增 visibility mode 配置
+    - helpbox 明确 `KeepVisible / ForceRenderingOff` 语义
+- Tests:
+  - `Tests/Editor/GsplatLidarScanTests.cs`
+    - 增加新组件默认值测试(默认 `ForceRenderingOff`)
+    - 扩展 validate 回归,锁定非法 enum 会回退到 `ForceRenderingOff`
+    - 扩展 helper 集成测试,锁定“隐藏 source renderer + Dispose 后恢复原状态”
+- Docs / Spec:
+  - `README.md`
+  - `CHANGELOG.md`
+  - `openspec/changes/lidar-external-targets/{proposal.md,design.md,tasks.md}`
+  - `openspec/changes/lidar-external-targets/specs/gsplat-lidar-external-targets/spec.md`
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests.GsplatLidarScanTests`
+  - total=20, passed=20, failed=0, skipped=0
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_external_visibility_lidarscan_2026-03-07_121526_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_external_visibility_lidarscan_2026-03-07_121526_noquit.log`
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests`
+  - total=63, passed=61, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_external_visibility_all_2026-03-07_121556_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_external_visibility_all_2026-03-07_121556_noquit.log`
+- OpenSpec:
+  - `openspec instructions apply --change "lidar-external-targets" --json`
+  - 结果: `progress=26/26`, `state=all_done`
+
+## 2026-03-07 13:20:40 +0800
+- external target 可见性模式继续扩展为三态,新增 `ForceRenderingOffInPlayMode`.
+  - 语义:
+    - `KeepVisible`: 一直显示普通 mesh
+    - `ForceRenderingOff`: 一直只保留 scan-only
+    - `ForceRenderingOffInPlayMode`: 编辑器非 Play 显示普通 mesh,Play 模式自动切成 scan-only
+
+### 变更内容
+- Runtime:
+  - `Runtime/GsplatUtils.cs`
+    - `GsplatLidarExternalTargetVisibilityMode` 新增 `ForceRenderingOffInPlayMode`
+  - `Runtime/Lidar/GsplatLidarExternalTargetHelper.cs`
+    - 抽出 `ShouldForceSourceRendererOff(mode, isPlaying)` 决策
+    - `ForceRenderingOffInPlayMode` 时仅在 `Application.isPlaying=true` 才强制 `forceRenderingOff`
+  - `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+    - tooltip 与 `ValidateLidarSerializedFields()` 同步接受第三态
+- Editor:
+  - `Editor/GsplatRendererEditor.cs`
+  - `Editor/GsplatSequenceRendererEditor.cs`
+    - Inspector helpbox 改为三态说明
+- Tests:
+  - `Tests/Editor/GsplatLidarScanTests.cs`
+    - 新增 `ExternalTargetVisibilityMode_PlayModeOnly_OnlyForcesOffWhenPlaying`
+- Docs / Spec:
+  - `README.md`
+  - `CHANGELOG.md`
+  - `openspec/changes/lidar-external-targets/{proposal.md,design.md,tasks.md}`
+  - `openspec/changes/lidar-external-targets/specs/gsplat-lidar-external-targets/spec.md`
+
+### 回归(证据)
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests.GsplatLidarScanTests`
+  - total=21, passed=21, failed=0, skipped=0
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_external_visibility_playonly_lidarscan_2026-03-07_131944_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_external_visibility_playonly_lidarscan_2026-03-07_131944_noquit.log`
+- Unity 6000.3.8f1, EditMode `Gsplat.Tests`
+  - total=64, passed=62, failed=0, skipped=2
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_external_visibility_playonly_all_2026-03-07_132009_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_external_visibility_playonly_all_2026-03-07_132009_noquit.log`
+- OpenSpec:
+  - `openspec instructions apply --change "lidar-external-targets" --json`
+  - 结果: `progress=31/31`, `state=all_done`
+
+## 2026-03-07 14:16:40 +0800
+- 新建 OpenSpec change:
+  - name: `lidar-camera-frustum-external-gpu-scan`
+  - schema: `spec-driven`
+- 该 change 用于承接下一阶段的 RadarScan 性能优化路线:
+  - 扫描口径从 360 度转为 camera frustum
+  - external target 拆分 static / dynamic
+  - external mesh 扫描优先考虑 GPU depth/color 路线
+
+### 当前状态
+- change 路径:
+  - `openspec/changes/lidar-camera-frustum-external-gpu-scan/`
+- 当前 artifact 进度:
+  - `0/4`
+- 当前 ready artifact:
+  - `proposal`
+
+## 2026-03-07 14:44:00 +0800
+- 一次性补完 OpenSpec change `lidar-camera-frustum-external-gpu-scan` 的最后一个 artifact:`tasks.md`.
+
+### 产出文件
+- `openspec/changes/lidar-camera-frustum-external-gpu-scan/tasks.md`
+
+### 任务拆分结果
+- 共 6 组任务:
+  - `Aperture API 与 Inspector`
+  - `Frustum active cells 与 LiDAR 资源`
+  - `External GPU capture 基础设施`
+  - `Static / Dynamic 更新策略与 fallback`
+  - `external / gsplat 命中合并与最终显示语义`
+  - `测试、文档与验证`
+- 任务内容已经覆盖:
+  - camera frustum aperture mode
+  - static / dynamic external target arrays
+  - dynamic 独立更新频率
+  - external GPU depth/color capture
+  - external / gsplat nearest-hit 合并
+  - visibility / show-hide / fallback / docs / tests
+
+### OpenSpec 状态(证据)
+- `openspec status --change "lidar-camera-frustum-external-gpu-scan" --json`
+  - `schemaName=spec-driven`
+  - `isComplete=true`
+  - `proposal=done`
+  - `design=done`
+  - `specs=done`
+  - `tasks=done`
+
+### 收尾说明
+- 本轮只完成规格起草,没有开始代码实现.
+- 现在这个 change 已经从 `3/4 artifacts complete` 进入 `4/4 artifacts complete`,后续可以直接进入 apply / implementation.
+
+## 2026-03-07 14:50:56 +0800
+- 对 `lidar-camera-frustum-external-gpu-scan` 做了一次实现可行性审查,重点复核 external GPU depth/color 路线是否存在方向性问题.
+
+### 审查结论
+- 总体方向正确:
+  - `camera frustum + external GPU capture` 仍然是比继续堆 CPU `RaycastCommand` 更合理的性能路线.
+- 但在真正开始 apply 前,建议先补齐 4 个关键设计约束:
+  - 明确 `frustum camera` 与 `LidarOrigin` 的外参关系
+  - 明确 external depth 到 LiDAR range 的换算契约
+  - 明确 `color RT` 如何保持当前“材质主色”语义
+  - 扩充 static capture 的 invalidation 条件
+
+### 说明
+- 本轮仍未开始代码实现.
+- 这次产出属于“规格复核与风险前移”,目的是避免后续实现出一个“能跑但几何/颜色语义错位”的 GPU 版本.
+
+## 2026-03-07 15:40:54 +0800
+- 按审查结论继续补强 `lidar-camera-frustum-external-gpu-scan` 的 artifacts,把 4 个关键约束正式写进 design/spec/tasks.
+
+### 本轮补强内容
+- `design.md`
+  - 明确 frustum mode 的 sensor-frame 契约:
+    - `LidarOrigin` 仍是 beam origin
+    - frustum camera 提供 aperture 朝向与 projection
+    - external GPU capture 使用 synthetic frustum view
+  - 明确 external depth 不能直接拿 hardware depth 充当 LiDAR range
+  - 明确 `surfaceColor RT` 只保留 `_BaseColor` / `_Color` 主色语义
+  - 明确 static invalidation 需要覆盖 renderer/material/capture-layout 变化
+- `spec.md`
+  - 新增 requirement/scenario:
+    - frustum sensor-frame contract
+    - external depth -> LiDAR ray-distance 语义转换
+    - GPU main-color capture 语义
+    - static capture 的完整 invalidation 条件
+    - scan-only hidden mesh 仍参与 GPU capture
+- `tasks.md`
+  - 新增或改写任务,把上述契约拆成可执行项与回归测试项
+
+### OpenSpec 状态
+- `openspec status --change "lidar-camera-frustum-external-gpu-scan" --json`
+  - `isComplete=true`
+  - `proposal/design/specs/tasks = done`
+
+### 说明
+- 本轮仍未开始实现代码.
+- 重点是先把“应该怎么做才正确”收紧,避免仓促落地后在几何语义和颜色语义上返工.
+
+## 2026-03-07 16:40:12 +0800
+- 根据最新设计决定,再次修订 `lidar-camera-frustum-external-gpu-scan` 的 sensor-frame 契约:
+  - frustum 模式下,直接使用 frustum camera 的位置作为 LiDAR 原点
+  - `LidarOrigin` 不再参与 frustum 模式原点定义
+  - `LidarOrigin` 保留给旧 360 路线
+
+### 同步修改
+- `design.md`
+- `spec.md`
+- `tasks.md`
+
+### 结果
+- 当前 artifacts 已统一为:
+  - frustum mode = camera position + rotation + projection
+  - external GPU resolve 继续保持 LiDAR `depthSq` 语义
+  - GPU color capture 继续保持 `_BaseColor` / `_Color` 主色语义
+## 2026-03-07 17:23:00 +0800
+- 完成一次“只读不改码”的 LiDAR frustum 最小接线分析.
+
+### 分析范围
+- 目标问题:
+  - 若要最小代价新增 `frustum aperture mode + frustumCamera`
+  - 并让现有 gsplat LiDAR compute/draw 链路先改用 camera pose(而不是 `LidarOrigin`)
+  - 当前仓库里最关键要改哪些方法/字段/Inspector 点位
+
+### 结论摘要
+- `LidarOrigin` 当前同时参与:
+  - compute pose(`modelToLidar`)
+  - draw pose(`lidarLocalToWorld`)
+  - external helper raycast origin
+- 最小改动主战场:
+  - `Runtime/GsplatRenderer.cs`
+  - `Runtime/GsplatSequenceRenderer.cs`
+  - `Runtime/Lidar/GsplatLidarExternalTargetHelper.cs`
+  - `Editor/GsplatRendererEditor.cs`
+  - `Editor/GsplatSequenceRendererEditor.cs`
+- `Runtime/Lidar/GsplatLidarScan.cs` 与 `Runtime/Shaders/Gsplat.compute` 当前已经通过矩阵参数消费 sensor pose
+  - 如果这一步只切 pose source,它们大概率不用先改
+  - 但真正做“frustum active cells / workload reduction”时仍需要继续改 LUT 与 cell 生成逻辑
+
+### 额外识别的高风险漏点
+- 只改 compute 不改 draw -> range image 与点云世界位置错位
+- 忘记 external helper -> external hit 与 gsplat hit 不在同一 sensor frame
+- 忘记 Editor ticker / HelpBox / warning 文案 -> frustum 模式行为正常,但编辑器提示仍声称“缺少 LidarOrigin 无法渲染”
+
+## 2026-03-07 23:38:00 +0800
+- 起手落地 `lidar-camera-frustum-external-gpu-scan` 的第一批 apply 任务(1.1 ~ 1.5).
+
+### 本轮实现
+- Runtime:
+  - `Runtime/GsplatUtils.cs`
+    - 新增 `GsplatLidarApertureMode`(`Surround360` / `CameraFrustum`).
+  - `Runtime/GsplatRenderer.cs`
+    - 新增 `LidarApertureMode`、`LidarFrustumCamera`、`LidarExternalStaticTargets`、`LidarExternalDynamicTargets`、`LidarExternalDynamicUpdateHz`.
+    - 用 `FormerlySerializedAs("LidarExternalTargets")` 把旧场景 external 输入迁到 static 组.
+    - 保留旧 API 名 `LidarExternalTargets` 作为兼容 property,映射到 static 组.
+    - 新增统一 sensor pose helper,让 compute/draw/external helper/EditMode repaint gate 都不再直接硬编码吃 `LidarOrigin`.
+  - `Runtime/GsplatSequenceRenderer.cs`
+    - 同步新增上述字段与兼容路径.
+    - 同步切到统一 sensor pose helper,保持静态/序列两条 LiDAR 链路一致.
+  - `Runtime/Lidar/GsplatLidarExternalTargetHelper.cs`
+    - external CPU helper 的输入语义从 `lidarOrigin` 收敛为 `lidarSensorTransform`,避免和 gsplat 主链 frame 不一致.
+- Editor:
+  - `Editor/GsplatRendererEditor.cs`
+  - `Editor/GsplatSequenceRendererEditor.cs`
+    - LiDAR 面板新增 aperture mode、frustum camera、static/dynamic arrays、dynamic updateHz.
+    - warning/helpbox 改为按模式区分:
+      - `Surround360` 看 `LidarOrigin`
+      - `CameraFrustum` 看 `LidarFrustumCamera`
+- Tests:
+  - `Tests/Editor/GsplatLidarScanTests.cs`
+    - 新增 aperture mode 默认值测试.
+    - 新增旧 `LidarExternalTargets` 兼容 property 测试.
+    - 新增 frustum 模式下 sensor pose 直接取 camera.transform 的回归测试.
+    - 扩展 validate 测试,覆盖 aperture enum 回退、dynamic updateHz 默认值、static/dynamic 数组归一化.
+    - 扩展 visibility bounds 测试,锁定 static/dynamic 两组 external targets 的联合范围.
+
+### 验证
+- Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests.GsplatLidarScanTests`
+  - total=27, passed=27, failed=0, skipped=0
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_frustum_pose_start_2026-03-07.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_frustum_pose_start_2026-03-07.log`
+- Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests`
+  - total=70, passed=68, failed=0, skipped=2
+  - 说明: skipped=2 为既有 Ignore,本轮没有新增失败
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_frustum_pose_full_2026-03-07.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_frustum_pose_full_2026-03-07.log`
+
+### OpenSpec 同步
+- `openspec/changes/lidar-camera-frustum-external-gpu-scan/tasks.md`
+  - 已勾选完成:
+    - `1.1`
+    - `1.2`
+    - `1.3`
+    - `1.4`
+    - `1.5`
+
+## 2026-03-08 01:07:20 +0800
+- 落地 OpenSpec change: `lidar-camera-frustum-external-gpu-scan` 的 `3.1 ~ 3.7`.
+- 新增 frustum external GPU capture 主链:
+  - `Runtime/Lidar/GsplatLidarExternalGpuCapture.cs`
+    - 维护 static / dynamic external renderer 收集.
+    - 用 explicit render list + override material + `CommandBuffer.DrawMesh(...)` 做离屏 capture.
+    - 产出 depth RT / surfaceColor RT,再调用 compute resolve 写回 LiDAR external hit buffers.
+  - `Runtime/Shaders/GsplatLidarExternalCapture.shader`
+    - depth pass 输出正值 linear view depth.
+    - surfaceColor pass 只保留 `_BaseColor` / `_Color` 主色语义.
+  - `Runtime/Shaders/Gsplat.compute`
+    - 新增 `ResolveExternalFrustumHits`.
+    - 用“每 cell 一线程”的方式,把 capture RT 还原成 LiDAR `depthSq + baseColor`.
+  - `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+    - frustum 模式下优先走 GPU capture manager.
+    - GPU 路线不可用时回退旧 CPU helper.
+    - 补齐 manager 生命周期释放.
+  - `Runtime/GsplatSettings.cs`
+    - 增加 `LidarExternalCaptureShader` 与 `LidarExternalCaptureMaterial`.
+
+### 回归(证据)
+- Unity 6000.3.8f1,定向 EditMode tests:
+  - `Gsplat.Tests.GsplatLidarScanTests`
+  - total=`31`, passed=`31`, failed=`0`, skipped=`0`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_external_gpu_capture_targeted_2026-03-08.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_external_gpu_capture_targeted_2026-03-08.log`
+- Unity 6000.3.8f1,全包 EditMode tests:
+  - `Gsplat.Tests`
+  - total=`74`, passed=`72`, failed=`0`, skipped=`2`
+  - `skipped=2` 为既有 ignore,本轮无新增失败
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_external_gpu_capture_full_2026-03-08.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_external_gpu_capture_full_2026-03-08.log`
+
+## 2026-03-08 02:38:00 +0800
+- 继续完成 OpenSpec change: `lidar-camera-frustum-external-gpu-scan` 的剩余实现与收尾,最终把 apply 进度推进到 `35/35`.
+
+### 变更内容
+- Runtime:
+  - `Runtime/Lidar/GsplatLidarExternalGpuCapture.cs`
+    - 改成 static / dynamic 分组 capture state.
+    - static 组新增完整 invalidation signature:
+      - frustum camera pose / projection / aspect / pixelRect
+      - capture RT layout
+      - renderer state
+      - transform / mesh / material main color
+    - dynamic 组新增独立 cadence helper,按 `LidarExternalDynamicUpdateHz` 复用上一轮 capture.
+    - resolve 阶段同时读取 static / dynamic 两组 RT,并选最近 external hit 写回 LiDAR buffers.
+    - 新增 debug hooks,供 EditMode tests 反射锁定:
+      - `DebugGetStaticCaptureDirtyReasonForInputs(...)`
+      - `DebugCommitStaticCaptureSignatureForInputs(...)`
+      - `DebugComputeRayDepthSqFromLinearViewDepth(...)`
+  - `Runtime/GsplatRenderer.cs`
+  - `Runtime/GsplatSequenceRenderer.cs`
+    - external 更新链路改为每帧独立 tick.
+    - GPU frustum 路线自己判断是否需要 capture / resolve.
+    - CPU `RaycastCommand` fallback 仍只在 range rebuild 后刷新.
+- Compute:
+  - `Runtime/Shaders/Gsplat.compute`
+    - `ResolveExternalFrustumHits` 升级为 static / dynamic 双路 external capture 最近命中比较.
+    - 锁定写入语义是 LiDAR ray-distance 的 `depthSq`,而不是 raw camera hardware depth.
+- Tests:
+  - `Tests/Editor/GsplatLidarExternalGpuCaptureTests.cs`
+    - 新增 static signature / dynamic cadence / depthSq helper / frustum bounds 回归.
+- Docs:
+  - `README.md`
+    - 更新 LiDAR section:
+      - `LidarApertureMode`
+      - `LidarFrustumCamera`
+      - `LidarExternalStaticTargets`
+      - `LidarExternalDynamicTargets`
+      - `LidarExternalDynamicUpdateHz`
+      - GPU capture 语义与 CPU fallback 行为
+  - `CHANGELOG.md`
+    - 记录 frustum aperture、split external inputs、static reuse、dynamic cadence、独立 external tick.
+- OpenSpec:
+  - `openspec/changes/lidar-camera-frustum-external-gpu-scan/tasks.md`
+    - 已勾选 `4.1 ~ 4.4`
+    - 已勾选 `4.6`
+    - 已勾选 `6.3 ~ 6.7`
+
+### 回归(证据)
+- Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests.GsplatLidar`
+  - total=`38`, passed=`38`, failed=`0`, skipped=`0`
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_external_gpu_capture_lidar_2026-03-08.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_external_gpu_capture_lidar_2026-03-08.log`
+- Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests`
+  - total=`79`, passed=`77`, failed=`0`, skipped=`2`
+  - `skipped=2` 为既有 ignore,本轮无新增失败
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_external_gpu_capture_full_2026-03-08_r2.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_external_gpu_capture_full_2026-03-08_r2.log`
+- OpenSpec:
+  - `openspec status --change "lidar-camera-frustum-external-gpu-scan" --json`
+    - `isComplete = true`
+  - `openspec instructions apply --change "lidar-camera-frustum-external-gpu-scan" --json`
+    - `progress = 35 / 35`
+    - `state = all_done`
+
+## 2026-03-08 11:30:00 +0800
+- 新建并一次性起草完成 OpenSpec change: `radarscan-particle-antialiasing-modes`.
+- 已完成 artifacts:
+  - `openspec/changes/radarscan-particle-antialiasing-modes/proposal.md`
+  - `openspec/changes/radarscan-particle-antialiasing-modes/design.md`
+  - `openspec/changes/radarscan-particle-antialiasing-modes/specs/gsplat-lidar-particle-antialiasing/spec.md`
+  - `openspec/changes/radarscan-particle-antialiasing-modes/tasks.md`
+
+### 本轮规格结论
+- RadarScan 粒子 AA 作为组件内能力,本轮范围锁定为:
+  - `LegacySoftEdge`
+  - `AnalyticCoverage`
+  - `AlphaToCoverage`
+  - `AnalyticCoveragePlusAlphaToCoverage`
+- 关键决策:
+  - `AnalyticCoverage` 作为推荐路线,用 shader 本地 coverage AA 解决小半径点的边缘锯齿与闪烁.
+  - `AlphaToCoverage` 只作为依赖 MSAA 的可选高质量模式.
+  - 无 MSAA 时,A2C 相关模式统一回退到 `AnalyticCoverage`.
+  - 本轮明确不把 FXAA / SMAA / TAA 作为 RadarScan 组件内选项.
+  - 兼容优先: 默认保持 `LegacySoftEdge`,避免老场景升级后无提示变观感.
+
+### OpenSpec 状态
+- `openspec status --change "radarscan-particle-antialiasing-modes"`
+  - `Progress: 4/4 artifacts complete`
+  - `All artifacts complete`
+
+## 2026-03-08 12:46:01 +0800
+- 落地 OpenSpec change: `radarscan-particle-antialiasing-modes`.
+- RadarScan(LiDAR) 粒子新增可选抗锯齿模式,同时保持旧场景兼容.
+
+### 变更内容
+- Runtime:
+  - `Runtime/GsplatUtils.cs`
+    - 新增 `GsplatLidarParticleAntialiasingMode`.
+    - 新增 A2C 可用性判断、模式归一化与 effective mode fallback helper.
+  - `Runtime/GsplatRenderer.cs`
+  - `Runtime/GsplatSequenceRenderer.cs`
+    - 新增 `LidarParticleAntialiasingMode` 序列化字段.
+    - validate 非法值时回退到 `LegacySoftEdge`.
+    - draw 提交时同时传 requested / effective AA mode.
+  - `Runtime/GsplatSettings.cs`
+    - 新增 `LidarAlphaToCoverageShader`.
+    - 新增 `LidarAlphaToCoverageMaterial`.
+  - `Runtime/Lidar/GsplatLidarScan.cs`
+    - `RenderPointCloud(...)` 接入 LiDAR AA 模式选择.
+    - A2C 不可用时运行时回退到 `AnalyticCoverage`.
+    - MPB 新增 `_LidarParticleAAAnalyticCoverage`.
+- Shader:
+  - `Runtime/Shaders/GsplatLidarPassCore.hlsl`
+    - 抽出 LiDAR 粒子 shared core,避免普通 shell 与 A2C shell 双份漂移.
+  - `Runtime/Shaders/GsplatLidar.shader`
+    - 改为 include shared core.
+    - 保留 `LegacySoftEdge`,并加入 `AnalyticCoverage`.
+  - `Runtime/Shaders/GsplatLidarAlphaToCoverage.shader`
+    - 新增 LiDAR A2C shell.
+    - 明确声明 `AlphaToMask On`.
+- Editor:
+  - `Editor/GsplatRendererEditor.cs`
+  - `Editor/GsplatSequenceRendererEditor.cs`
+    - LiDAR Visual 区域暴露 AA 模式.
+    - helpbox 明确推荐 `AnalyticCoverage`,并说明 A2C 依赖 MSAA 与 fallback 语义.
+- Tests:
+  - `Tests/Editor/GsplatLidarScanTests.cs`
+    - 覆盖默认值、非法值归一化、A2C fallback.
+    - 修复 RT 清理顺序,避免 Unity 记录 `Camera.targetTexture` 生命周期错误.
+  - `Tests/Editor/GsplatLidarShaderPropertyTests.cs`
+    - 锁定 analytic coverage 路线与 `AlphaToMask On` 契约.
+- Docs:
+  - `README.md`
+    - 新增各 AA 模式差异、推荐值与 MSAA 前提说明.
+  - `CHANGELOG.md`
+    - 记录 RadarScan 粒子新增抗锯齿模式.
+- OpenSpec:
+  - `openspec/changes/radarscan-particle-antialiasing-modes/tasks.md`
+    - 已勾选 `19 / 19`
+
+### 回归(证据)
+- Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests`
+  - total=`82`, passed=`80`, failed=`0`, skipped=`2`
+  - `skipped=2` 为既有 ignore,本轮无新增失败
+  - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_particle_aa_2026-03-08_noquit.xml`
+  - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_particle_aa_2026-03-08_noquit.log`
+- OpenSpec:
+  - `openspec instructions apply --change "radarscan-particle-antialiasing-modes" --json`
+    - progress=`19 / 19`
+    - state=`all_done`

@@ -17,7 +17,13 @@ namespace Gsplat.Editor
                 nameof(GsplatRenderer.RenderBeforeUploadComplete),
                 // LiDAR: 这里做一个更清晰的调参区,避免字段散落在默认绘制里.
                 nameof(GsplatRenderer.EnableLidarScan),
+                nameof(GsplatRenderer.LidarApertureMode),
+                nameof(GsplatRenderer.LidarFrustumCamera),
                 nameof(GsplatRenderer.LidarOrigin),
+                nameof(GsplatRenderer.LidarExternalStaticTargets),
+                nameof(GsplatRenderer.LidarExternalDynamicTargets),
+                nameof(GsplatRenderer.LidarExternalDynamicUpdateHz),
+                nameof(GsplatRenderer.LidarExternalTargetVisibilityMode),
                 nameof(GsplatRenderer.LidarRotationHz),
                 nameof(GsplatRenderer.LidarUpdateHz),
                 nameof(GsplatRenderer.LidarAzimuthBins),
@@ -27,6 +33,7 @@ namespace Gsplat.Editor
                 nameof(GsplatRenderer.LidarDepthNear),
                 nameof(GsplatRenderer.LidarDepthFar),
                 nameof(GsplatRenderer.LidarPointRadiusPixels),
+                nameof(GsplatRenderer.LidarParticleAntialiasingMode),
                 nameof(GsplatRenderer.LidarShowDuration),
                 nameof(GsplatRenderer.LidarHideDuration),
                 nameof(GsplatRenderer.LidarShowHideWarpPixels),
@@ -88,18 +95,77 @@ namespace Gsplat.Editor
                 MessageType.Info);
             EditorGUI.indentLevel--;
 
+            EditorGUI.indentLevel++;
+            EditorGUILayout.Space();
+            EditorGUILayout.LabelField("Inputs", EditorStyles.boldLabel);
+            var apertureProp = serializedObject.FindProperty(nameof(GsplatRenderer.LidarApertureMode));
+            EditorGUILayout.PropertyField(apertureProp);
+            var useFrustumCamera = apertureProp.enumValueIndex == (int)GsplatLidarApertureMode.CameraFrustum;
+            if (useFrustumCamera)
+            {
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarFrustumCamera)));
+                EditorGUILayout.HelpBox(
+                    "sensor-frame 契约:\n" +
+                    "- frustum camera 直接提供 sensor origin + rotation + projection.\n" +
+                    "- 当前模式下 LidarOrigin 不再是必填原点.\n" +
+                    "- 这一步先把现有 LiDAR compute/draw/external pose 对齐到该 camera.",
+                    MessageType.Info);
+            }
+            else
+            {
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarOrigin)));
+                EditorGUILayout.HelpBox(
+                    "sensor-frame 契约:\n" +
+                    "- Surround360 模式继续使用 LidarOrigin 的位置+朝向作为 LiDAR 安装位姿.\n" +
+                    "- 如果这里为空,LiDAR 点云不会生成.",
+                    MessageType.Info);
+            }
+
+            EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarExternalStaticTargets)),
+                includeChildren: true);
+            EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarExternalDynamicTargets)),
+                includeChildren: true);
+            EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarExternalDynamicUpdateHz)));
+            EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarExternalTargetVisibilityMode)));
+            EditorGUILayout.HelpBox(
+                "说明:\n" +
+                "- static/dynamic 两组都会参与 RadarScan.\n" +
+                "- static 适合不动的 mesh,dynamic 适合会动的 mesh / skinned mesh.\n" +
+                "- 系统会递归收集其子层级中的 MeshRenderer / SkinnedMeshRenderer.\n" +
+                "- 旧字段 LidarExternalTargets 会自动迁到 static 组.\n" +
+                "- LidarExternalDynamicUpdateHz 是给后续独立 dynamic capture 门禁预留的配置入口.\n" +
+                "- ForceRenderingOff: 外部目标继续参与扫描,但不再显示普通 mesh.\n" +
+                "- ForceRenderingOffInPlayMode: Play 模式隐藏普通 mesh,编辑器平时仍显示.\n" +
+                "- KeepVisible: 外部目标继续显示普通 mesh.\n" +
+                "- 留空时保持当前纯 gsplat 扫描行为不变.",
+                MessageType.Info);
+            EditorGUI.indentLevel--;
+
             if (enableLidarProp.boolValue)
             {
                 EditorGUI.indentLevel++;
 
-                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarOrigin)));
-                var originProp = serializedObject.FindProperty(nameof(GsplatRenderer.LidarOrigin));
-                if (originProp.objectReferenceValue == null)
+                if (useFrustumCamera)
                 {
-                    EditorGUILayout.HelpBox(
-                        "EnableLidarScan=true 但 LidarOrigin 为空.\n" +
-                        "LiDAR 点云不会渲染. 请指定一个 Transform(位置+朝向作为 LiDAR 安装位姿).",
-                        MessageType.Warning);
+                    var frustumCameraProp = serializedObject.FindProperty(nameof(GsplatRenderer.LidarFrustumCamera));
+                    if (frustumCameraProp.objectReferenceValue == null)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "EnableLidarScan=true 且 LidarApertureMode=CameraFrustum, 但 LidarFrustumCamera 为空.\n" +
+                            "当前不会渲染 LiDAR 点云. 请指定一个 camera.",
+                            MessageType.Warning);
+                    }
+                }
+                else
+                {
+                    var originProp = serializedObject.FindProperty(nameof(GsplatRenderer.LidarOrigin));
+                    if (originProp.objectReferenceValue == null)
+                    {
+                        EditorGUILayout.HelpBox(
+                            "EnableLidarScan=true 且 LidarApertureMode=Surround360, 但 LidarOrigin 为空.\n" +
+                            "当前不会渲染 LiDAR 点云. 请指定一个 Transform(位置+朝向作为 LiDAR 安装位姿).",
+                            MessageType.Warning);
+                    }
                 }
 
                 EditorGUILayout.Space();
@@ -164,6 +230,15 @@ namespace Gsplat.Editor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthFar)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarMinSplatOpacity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarPointRadiusPixels)));
+                EditorGUILayout.PropertyField(
+                    serializedObject.FindProperty(nameof(GsplatRenderer.LidarParticleAntialiasingMode)));
+                EditorGUILayout.HelpBox(
+                    "RadarScan 粒子 AA 说明:\n" +
+                    "- 推荐: AnalyticCoverage. 不依赖 MSAA,一般最稳.\n" +
+                    "- AlphaToCoverage / AnalyticCoveragePlusAlphaToCoverage 需要当前实际渲染相机具备有效 MSAA.\n" +
+                    "- 如果当前 camera 没有 MSAA,运行时会自动回退到 AnalyticCoverage,并在 Console 输出一次说明.\n" +
+                    "- LegacySoftEdge 用于保持旧项目当前 fixed feather 的边缘语义.",
+                    MessageType.Info);
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarShowHideWarpPixels)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarShowHideNoiseScale)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarShowHideNoiseSpeed)));

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Yize Wu
 // SPDX-License-Identifier: MIT
 
+using System.IO;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -23,6 +24,7 @@ namespace Gsplat.Tests
             Assert.AreEqual("Gsplat/LiDAR", shader.name, "Unexpected shader name. Possibly loaded a different asset.");
 
             // Shader 反射: propertyIndex 必须存在.
+            Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarParticleAAAnalyticCoverage"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideNoiseMode"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideNoiseStrength"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideNoiseScale"), 0);
@@ -40,6 +42,7 @@ namespace Gsplat.Tests
             var mat = new Material(shader);
             try
             {
+                Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarParticleAAAnalyticCoverage")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideNoiseMode")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideNoiseStrength")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideNoiseScale")));
@@ -57,6 +60,59 @@ namespace Gsplat.Tests
             {
                 Object.DestroyImmediate(mat);
             }
+        }
+
+        [Test]
+        public void LidarShader_UsesAnalyticCoverageAndExternalHitCompetition()
+        {
+            // 说明:
+            // - external target 与 gsplat 的核心语义不是“叠加显示”,而是逐 cell 竞争 first return 最近距离.
+            // - 本轮又新增了 analytic coverage,因此这里顺手锁定:
+            //   1) shader shell 正在包含共享 pass core.
+            //   2) pass core 里确实存在 `fwidth` 驱动的 analytic coverage 路线.
+            const string kShaderAssetPath = "Packages/wu.yize.gsplat/Runtime/Shaders/GsplatLidar.shader";
+            const string kPassCoreAssetPath = "Packages/wu.yize.gsplat/Runtime/Shaders/GsplatLidarPassCore.hlsl";
+
+            var projectRoot = Directory.GetParent(Application.dataPath);
+            Assert.IsNotNull(projectRoot, "Failed to resolve Unity project root from Application.dataPath.");
+
+            var shaderFullPath = Path.Combine(projectRoot.FullName, kShaderAssetPath);
+            var passCoreFullPath = Path.Combine(projectRoot.FullName, kPassCoreAssetPath);
+            Assert.IsTrue(File.Exists(shaderFullPath), $"Expected shader source file to exist: {shaderFullPath}");
+            Assert.IsTrue(File.Exists(passCoreFullPath), $"Expected shared pass core file to exist: {passCoreFullPath}");
+
+            var shaderText = File.ReadAllText(shaderFullPath);
+            var passCoreText = File.ReadAllText(passCoreFullPath);
+
+            StringAssert.Contains("#include \"GsplatLidarPassCore.hlsl\"", shaderText);
+            StringAssert.Contains("float _LidarParticleAAAnalyticCoverage;", passCoreText);
+            StringAssert.Contains("float analyticWidth = max(fwidth(signedEdge), 1.0e-4);", passCoreText);
+            StringAssert.Contains("saturate(_LidarParticleAAAnalyticCoverage)", passCoreText);
+            StringAssert.Contains("uint externalRangeSqBits = _LidarExternalRangeSqBits[cellId];", passCoreText);
+            StringAssert.Contains("bool useExternalHit = hasExternalHit && (!hasSplatHit || externalRangeSqBits < splatRangeSqBits);",
+                passCoreText);
+            StringAssert.Contains("uint rangeSqBits = useExternalHit ? externalRangeSqBits : splatRangeSqBits;", passCoreText);
+        }
+
+        [Test]
+        public void LidarAlphaToCoverageShader_DeclaresAlphaToMaskOn()
+        {
+            const string kA2CShaderAssetPath = "Packages/wu.yize.gsplat/Runtime/Shaders/GsplatLidarAlphaToCoverage.shader";
+
+            var shader = AssetDatabase.LoadAssetAtPath<Shader>(kA2CShaderAssetPath);
+            Assert.IsNotNull(shader, $"Failed to load LiDAR A2C shader at path: {kA2CShaderAssetPath}");
+            Assert.AreEqual("Gsplat/LiDARAlphaToCoverage", shader.name,
+                "Unexpected LiDAR A2C shader name. Possibly loaded a different asset.");
+
+            var projectRoot = Directory.GetParent(Application.dataPath);
+            Assert.IsNotNull(projectRoot, "Failed to resolve Unity project root from Application.dataPath.");
+
+            var shaderFullPath = Path.Combine(projectRoot.FullName, kA2CShaderAssetPath);
+            Assert.IsTrue(File.Exists(shaderFullPath), $"Expected A2C shader source file to exist: {shaderFullPath}");
+
+            var shaderText = File.ReadAllText(shaderFullPath);
+            StringAssert.Contains("AlphaToMask On", shaderText);
+            StringAssert.Contains("#include \"GsplatLidarPassCore.hlsl\"", shaderText);
         }
     }
 }
