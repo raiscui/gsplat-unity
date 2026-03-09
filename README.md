@@ -178,6 +178,7 @@ Default scanning setup (as discussed in the spec):
   - `LegacySoftEdge` = compatibility default, keeps the old fixed-feather edge look
   - `AnalyticCoverage` = recommended general mode, uses derivative-driven local coverage AA in pixel-space, and non-legacy AA modes now reserve a configurable outer fringe around each point so small LiDAR points show a clearer edge difference without requiring MSAA
   - `AlphaToCoverage` / `AnalyticCoveragePlusAlphaToCoverage` = require effective MSAA on the actual render camera; these modes now use a coverage-first pass instead of the regular alpha-blended LiDAR shell, and reuse the same outer fringe space so the edge looks more like sample coverage / cutout than soft transparent blending
+  - In HDRP, A2C availability follows the camera's resolved HD Frame Settings / MSAA mode instead of `Camera.allowMSAA`, because HDRP treats that Camera flag as a legacy path
   - If MSAA is unavailable, runtime falls back to `AnalyticCoverage`
   - `LidarParticleAAFringePixels` controls how much outer fringe space non-legacy AA modes get. `0` means no extra outward fringe. `1` is the current default baseline.
 - Rendering: screen-space square points

@@ -1355,3 +1355,105 @@
 - `openspec instructions apply --change "lidar-camera-frustum-external-gpu-scan" --json`
   - `progress = 35 / 35`
   - `state = all_done`
+
+## 2026-03-09 17:37:45 +0800
+
+### 现象
+
+- 用户在 HDRP 场景中已经打开 MSAA,但 LiDAR 粒子 A2C 日志仍显示:
+  - `requested=AlphaToCoverage`
+  - `effective=AnalyticCoverage`
+  - `allowMSAA=0 msaaSamples=1`
+
+### 根因
+
+- 当前 `Runtime/GsplatUtils.cs` 把 `Camera.allowMSAA` 当成 A2C 可用性的硬门槛.
+- 但 HDRP 自己会在 `HDAdditionalCameraData.OnEnable()` 中把:
+  - `m_Camera.allowMSAA = false`
+- 也就是说,这个字段在 HDRP 下表达的是“不要走 legacy Camera MSAA 入口”,不是“这台 camera 没有 MSAA”.
+- HDRP 真正的 MSAA 语义来自:
+  - 当前 HDRP Asset
+  - camera 的聚合后 Frame Settings
+  - 若输出到 `RenderTexture`,还要再受 RT sample count 约束
+
+### 方案
+
+- 在 `GsplatUtils` 中新增统一的 LiDAR MSAA helper:
+  - 普通管线继续沿用 `camera.allowMSAA + targetTexture/QualitySettings`
+  - HDRP 通过反射调用 `FrameSettings.AggregateFrameSettings(...)`
+  - 再读取 `FrameSettingsField.MSAA` 与 `GetResolvedMSAAMode(...)`
+- 诊断日志不再只打印误导性的 `allowMSAA`,而是输出:
+  - `cameraAllowMSAA`
+  - `msaaSamples`
+  - `msaaSource`
+
+### 验证
+
+- 定向 EditMode:
+  - `Gsplat.Tests.GsplatLidarScanTests`
+  - total=`33`, passed=`33`, failed=`0`, skipped=`0`
+  - XML:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_hdrp_a2c_fix_2026-03-09.xml`
+- 全包 EditMode:
+  - `Gsplat.Tests`
+  - total=`86`, passed=`83`, failed=`0`, skipped=`3`
+  - `skipped=3` 为既有 ignore / 环境性 skip,本轮无新增失败
+  - XML:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_full_lidar_hdrp_a2c_fix_2026-03-09_r2.xml`
+
+### 经验
+
+- HDRP 下凡是与 MSAA / A2C 相关的 runtime 判断:
+  - 不能直接读 `Camera.allowMSAA`
+  - 应优先读 resolved HD Frame Settings
+  - 再结合实际 targetTexture sample count 判断最终 render target 是否真的是 multisampled
+
+## 2026-03-09 22:18:00 +0800
+
+### 现象
+
+- 用户在真实项目中报告:
+  - `Packages/wu.yize.gsplat/Tests/Editor/GsplatLidarScanTests.cs(11,29): error CS0234`
+- 错误点不是 runtime,而是测试程序集新增了:
+  - `using UnityEngine.Rendering.HighDefinition;`
+
+### 根因
+
+- `Tests/Editor/Gsplat.Tests.Editor.asmdef` 新增 `versionDefines` 只能控制源码条件编译.
+- 但 asmdef 不能为测试程序集提供“条件 HDRP 程序集引用”.
+- 结果就是:
+  - 代码以为自己“只在有 HDRP 时才编进来”
+  - 实际测试程序集仍没有 `Unity.RenderPipelines.HighDefinition.Runtime` 引用
+  - 于是直接在编译阶段炸 `CS0234`
+
+### 修复策略
+
+- 不回滚已经正确的 runtime HDRP A2C helper.
+- 只修测试层的依赖方式:
+  - 删除测试文件对 `UnityEngine.Rendering.HighDefinition` 的直接 `using`
+  - 移除测试 asmdef 里本轮新增的 HDRP `versionDefines`
+  - 把 HDRP 专项测试改成纯反射探测:
+    - 运行时扫描 `HDRenderPipelineAsset`
+    - 运行时扫描 `HDAdditionalCameraData` / `FrameSettings` / `FrameSettingsField`
+    - 通过反射配置 custom frame settings 与 override mask
+    - 在非 HDRP 工程里用 `Assert.Ignore(...)` 安全跳过
+
+### 验证
+
+- 当前真实项目:
+  - `dotnet build Gsplat.Tests.Editor.csproj -nologo`
+  - 结果: `0 errors`, `4 warnings`
+  - 说明用户报的 `CS0234` 已消失
+- `_tmp_gsplat_pkgtests`:
+  - 定向运行反射版 HDRP 测试
+  - TestRunner 能正常加载该用例
+  - 因为测试工程本身没装 HDRP,结果为:
+    - `Skipped`
+    - reason=`HDRP package is not loaded, skipping HDRP-specific LiDAR A2C test.`
+
+### 经验
+
+- 对 Unity 可选包(HDRP/VFX 等)做测试时:
+  - “可选依赖”尽量放到运行时反射层
+  - 不要让测试程序集形成编译时硬依赖
+  - `versionDefines` 不能替代程序集引用本身

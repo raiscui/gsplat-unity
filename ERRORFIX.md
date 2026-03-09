@@ -344,3 +344,100 @@
 - 当某个字段只是辅助性补偿,而不是根因修复时:
   - 更稳妥的默认值通常应该是关闭
   - 让它按需启用,而不是默认偷偷参与行为
+
+## 2026-03-09 17:37:45 +0800
+
+### 问题
+
+- HDRP 场景里即使已经配置好 MSAA,RadarScan 粒子 `LidarParticleAntialiasingMode=AlphaToCoverage` 仍被回退到 `AnalyticCoverage`.
+- 诊断日志表现为:
+  - `camera=Main Camera requested=AlphaToCoverage effective=AnalyticCoverage`
+  - `allowMSAA=0 msaaSamples=1`
+
+### 原因
+
+- 我们把 `Camera.allowMSAA` 当成 LiDAR A2C 是否可用的硬门槛.
+- 但 HDRP 自己会在 `HDAdditionalCameraData.OnEnable()` 中把 `Camera.allowMSAA` 强制设成 `false`.
+- 因此旧逻辑在 HDRP 下会把“使用 HD Frame Settings 的合法 MSAA”误判成“没有 MSAA”.
+
+### 修复
+
+- `Runtime/GsplatUtils.cs`
+  - 新增统一 LiDAR MSAA helper.
+  - HDRP 分支通过反射调用内部 `FrameSettings.AggregateFrameSettings(...)`,读取聚合后的:
+    - `FrameSettingsField.MSAA`
+    - `GetResolvedMSAAMode(...)`
+  - 若 camera 输出到 `RenderTexture`,再与 `targetTexture.antiAliasing` 取最小值.
+- `Runtime/Lidar/GsplatLidarScan.cs`
+  - 诊断日志改为输出:
+    - `cameraAllowMSAA`
+    - `msaaSamples`
+    - `msaaSource`
+  - 不再继续输出会误导排障的“只看 Camera.allowMSAA”口径.
+- `Tests/Editor/Gsplat.Tests.Editor.asmdef`
+  - 增加 HDRP version define.
+- `Tests/Editor/GsplatLidarScanTests.cs`
+  - 新增 HDRP 条件测试,锁定这条兼容语义.
+
+### 验证
+
+- 定向 EditMode `Gsplat.Tests.GsplatLidarScanTests`
+  - total=`33`, passed=`33`, failed=`0`, skipped=`0`
+  - XML:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_hdrp_a2c_fix_2026-03-09.xml`
+- 全包 EditMode `Gsplat.Tests`
+  - total=`86`, passed=`83`, failed=`0`, skipped=`3`
+  - XML:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_full_lidar_hdrp_a2c_fix_2026-03-09_r2.xml`
+
+### 以后避免再犯
+
+- HDRP 下凡是和 A2C / MSAA 有关的功能:
+  - 不能把 `Camera.allowMSAA` 当成真实运行时状态
+  - 必须优先看 resolved HD Frame Settings
+
+## 2026-03-09 22:18:00 +0800
+
+### 问题
+
+- 真实项目编译报错:
+  - `Packages/wu.yize.gsplat/Tests/Editor/GsplatLidarScanTests.cs(11,29): error CS0234`
+- 报错内容:
+  - `UnityEngine.Rendering.HighDefinition` 在测试程序集里不可见
+
+### 原因
+
+- 我之前给 `Tests/Editor/GsplatLidarScanTests.cs` 直接加了:
+  - `using UnityEngine.Rendering.HighDefinition;`
+- 同时给 `Tests/Editor/Gsplat.Tests.Editor.asmdef` 加了 HDRP `versionDefines`
+- 但这只解决了“源码片段开关”,没有解决“测试程序集没有 HDRP 引用”这个更本质的问题
+- 因此测试程序集在真实项目里仍会直接编译失败
+
+### 修复
+
+- 删除测试文件里的 HDRP 直接 `using`
+- 删除测试 asmdef 里新增的 HDRP `versionDefines`
+- 把 HDRP 专项测试改成运行时反射:
+  - `FindLoadedType(...)`
+  - 反射设置 `customRenderingSettings`
+  - 反射写入 `m_RenderingPathCustomFrameSettings`
+  - 反射配置 `renderingPathCustomFrameSettingsOverrideMask.mask`
+  - 没装 HDRP 时直接 `Assert.Ignore(...)`
+
+### 验证
+
+- `dotnet build Gsplat.Tests.Editor.csproj -nologo`
+  - `0 errors`
+  - `4 warnings`
+- Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`
+  - 反射版 HDRP 测试被 TestRunner 正常执行
+  - 因测试工程未安装 HDRP,按预期 `Skipped`
+  - XML:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_hdrp_reflection_fix_2026-03-09.xml`
+
+### 以后避免再犯
+
+- Unity 可选包相关测试:
+  - 优先用反射做运行时探测
+  - 不要让测试程序集直接 `using` 可选包命名空间
+  - `versionDefines` 不是程序集引用替代品

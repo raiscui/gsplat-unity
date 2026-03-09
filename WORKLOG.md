@@ -1856,3 +1856,89 @@
   - `skipped=1` 为既有 ignored,本轮无新增失败
   - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_full_external_bias_default_zero_2026-03-08.xml`
   - log: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_full_external_bias_default_zero_2026-03-08.log`
+
+## 2026-03-09 17:37:45 +0800
+- 修复 HDRP 场景下 RadarScan 粒子 `AlphaToCoverage` 被错误回退到 `AnalyticCoverage` 的问题.
+
+### 根因结论
+- 问题不在用户 HDRP 配置.
+- 真正根因是我们之前把 `Camera.allowMSAA` 当成 LiDAR A2C 的硬门槛.
+- 但 HDRP 会主动把这个字段设成 `false`,因为它把它视为 legacy MSAA 入口.
+- 因此在 HDRP 下:
+  - 就算 HDRP Asset + Frame Settings 已经打开 MSAA
+  - 旧逻辑仍会错误打印 `allowMSAA=0 msaaSamples=1`
+  - 然后把 `AlphaToCoverage` 回退成 `AnalyticCoverage`
+
+### 本轮变更
+- `Runtime/GsplatUtils.cs`
+  - 新增统一 LiDAR MSAA helper:
+    - `GetLidarParticleMsaaSampleCount(Camera)`
+    - `GetLidarParticleMsaaDiagnosticSummary(Camera)`
+  - HDRP 分支下:
+    - 通过缓存反射调用 HDRP 内部 `FrameSettings.AggregateFrameSettings(...)`
+    - 读取聚合后的 `FrameSettingsField.MSAA`
+    - 读取 `GetResolvedMSAAMode(...)`
+    - 若输出到 `RenderTexture`,再与 `targetTexture.antiAliasing` 取最小值,逼近真实 render target
+- `Runtime/Lidar/GsplatLidarScan.cs`
+  - LiDAR 粒子 AA 诊断日志改为复用统一 helper,不再把 `Camera.allowMSAA` 当成唯一事实来源.
+- `Tests/Editor/Gsplat.Tests.Editor.asmdef`
+  - 新增 HDRP version define,让测试程序集也能做 HDRP 条件编译.
+- `Tests/Editor/GsplatLidarScanTests.cs`
+  - 新增 HDRP 条件测试:
+    - 锁定“即便 `Camera.allowMSAA=false`,HDRP 仍可通过 resolved Frame Settings 保持 A2C 生效”
+- `Editor/GsplatRendererEditor.cs`
+- `Editor/GsplatSequenceRendererEditor.cs`
+- `README.md`
+  - 补充 HDRP 下的口径说明: 要看 HD Frame Settings / resolved MSAA,不能只看 `Camera.allowMSAA`
+
+### 验证(证据)
+- Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests.GsplatLidarScanTests`
+  - total=`33`, passed=`33`, failed=`0`, skipped=`0`
+  - XML:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_hdrp_a2c_fix_2026-03-09.xml`
+  - log:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_lidar_hdrp_a2c_fix_2026-03-09.log`
+- Unity 6000.3.8f1, `_tmp_gsplat_pkgtests`, EditMode `Gsplat.Tests`
+  - total=`86`, passed=`83`, failed=`0`, skipped=`3`
+  - `skipped=3` 为既有 ignore / 环境性 skip,本轮无新增失败
+  - XML:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_full_lidar_hdrp_a2c_fix_2026-03-09_r2.xml`
+  - log:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/unity_tests_full_lidar_hdrp_a2c_fix_2026-03-09_r2.log`
+
+## 2026-03-09 22:18:00 +0800
+- 修复真实项目里 `Gsplat.Tests.Editor` 因 HDRP 测试源码直接引用 `UnityEngine.Rendering.HighDefinition` 导致的 `CS0234` 编译失败.
+
+### 根因结论
+- 本轮新增的 HDRP 专项测试把“可选 HDRP 依赖”误写成了“测试程序集的编译时硬依赖”.
+- `versionDefines` 只能控制源码片段是否参与编译,不能自动补齐 HDRP 程序集引用.
+- 所以在真实项目里,测试程序集会先在 `using UnityEngine.Rendering.HighDefinition;` 处直接编译失败.
+
+### 本轮变更
+- `Tests/Editor/GsplatLidarScanTests.cs`
+  - 删除对 `UnityEngine.Rendering.HighDefinition` 的直接编译期依赖.
+  - 新增一组通用反射 helper:
+    - 运行时扫描 HDRP 类型
+    - 读取/写入反射字段与属性
+    - 配置 `FrameSettingsOverrideMask.mask`
+  - HDRP A2C 专项测试改成运行时反射版:
+    - 有 HDRP 且当前激活 HDRP pipeline 时,继续验证 resolved frame settings 语义
+    - 没有 HDRP 时,按预期 `Ignore`
+- `Tests/Editor/Gsplat.Tests.Editor.asmdef`
+  - 移除本轮新增的 HDRP `versionDefines`,避免继续制造“伪条件依赖”
+
+### 验证证据
+- 当前真实项目:
+  - `dotnet build Gsplat.Tests.Editor.csproj -nologo`
+  - 结果:
+    - `0 errors`
+    - `4 warnings`
+  - 说明用户看到的 `CS0234` 已消失
+- `_tmp_gsplat_pkgtests`:
+  - Unity 6000.3.8f1 定向 EditMode:
+    - `Gsplat.Tests.GsplatLidarScanTests.GetLidarParticleMsaaSampleCount_HdrpUsesResolvedFrameSettingsEvenWhenCameraAllowMsaaIsFalse`
+  - XML:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_lidar_hdrp_reflection_fix_2026-03-09.xml`
+  - 结果=`skipped`
+  - reason=`HDRP package is not loaded, skipping HDRP-specific LiDAR A2C test.`
+  - 这证明反射版测试可以被 Unity TestRunner 正常发现和执行,在非 HDRP 工程里只会跳过,不会再拖垮编译。

@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 using System;
+using System.Reflection;
 using UnityEngine;
+using UnityEngine.Rendering;
+#if GSPLAT_ENABLE_HDRP
+using UnityEngine.Rendering.HighDefinition;
+#endif
 
 namespace Gsplat
 {
@@ -85,6 +90,27 @@ namespace Gsplat
         public const int k_LidarDefaultUpBeams = 16;
         public const int k_LidarDefaultDownBeams = 112;
 
+#if GSPLAT_ENABLE_HDRP
+        // --------------------------------------------------------------------
+        // HDRP: A2C / MSAA 兼容
+        // - HDRP 会主动把 `Camera.allowMSAA` 设成 false,因为它把这个字段当 legacy 入口.
+        // - 真正的 MSAA 状态要从 HDRP 的 Frame Settings 聚合结果里取.
+        // - 这里用缓存反射拿内部 `AggregateFrameSettings(...)`,避免把 LiDAR A2C 误判成不可用.
+        // --------------------------------------------------------------------
+        static readonly Type s_hdrpRenderingPathFrameSettingsType =
+            typeof(HDAdditionalCameraData).Assembly.GetType(
+                "UnityEngine.Rendering.HighDefinition.RenderingPathFrameSettings");
+
+        static readonly MethodInfo s_tryGetRenderPipelineSettingsMethod =
+            FindTryGetRenderPipelineSettingsMethod();
+
+        static readonly MethodInfo s_tryGetHdrpRenderingPathFrameSettingsMethod =
+            CreateTryGetHdrpRenderingPathFrameSettingsMethod();
+
+        static readonly MethodInfo s_hdrpAggregateFrameSettingsMethod =
+            FindHdrpAggregateFrameSettingsMethod();
+#endif
+
         public static float Sigmoid(float x)
         {
             return 1.0f / (1.0f + Mathf.Exp(-x));
@@ -118,22 +144,53 @@ namespace Gsplat
                    mode == GsplatLidarParticleAntialiasingMode.AnalyticCoveragePlusAlphaToCoverage;
         }
 
-        public static bool IsLidarParticleMsaaAvailable(Camera camera)
+        public static int GetLidarParticleMsaaSampleCount(Camera camera)
         {
-            // 说明:
-            // - A2C 的结果依赖“当前实际 render target 具备多重采样”.
-            // - 这里故意做保守判断:
-            //   - camera.allowMSAA=false 时,直接视为不可用.
-            //   - targetTexture 存在时,以其 antiAliasing 为准.
-            //   - 否则回退检查 QualitySettings.antiAliasing.
+#if GSPLAT_ENABLE_HDRP
+            if (TryGetHdrpResolvedMsaaSampleCount(camera, out var hdrpSamples))
+                return hdrpSamples;
+#endif
+
             if (!camera || !camera.allowMSAA)
-                return false;
+                return 1;
 
             var targetTexture = camera.targetTexture;
             if (targetTexture)
-                return targetTexture.antiAliasing > 1;
+                return Mathf.Max(targetTexture.antiAliasing, 1);
 
-            return QualitySettings.antiAliasing > 1;
+            return Mathf.Max(QualitySettings.antiAliasing, 1);
+        }
+
+        public static bool IsLidarParticleMsaaAvailable(Camera camera)
+        {
+            return GetLidarParticleMsaaSampleCount(camera) > 1;
+        }
+
+        public static string GetLidarParticleMsaaDiagnosticSummary(Camera camera)
+        {
+#if GSPLAT_ENABLE_HDRP
+            if (TryGetHdrpResolvedMsaaSampleCount(camera, out var hdrpSamples))
+            {
+                var hdrpSource = camera && camera.targetTexture
+                    ? "hdrp-frame-settings+target-texture"
+                    : "hdrp-frame-settings";
+                return
+                    $"cameraAllowMSAA={(camera && camera.allowMSAA ? 1 : 0)} msaaSamples={hdrpSamples} msaaSource={hdrpSource}";
+            }
+#endif
+
+            if (!camera)
+                return "cameraAllowMSAA=0 msaaSamples=1 msaaSource=no-camera";
+
+            if (!camera.allowMSAA)
+                return "cameraAllowMSAA=0 msaaSamples=1 msaaSource=camera-allowmsaa-disabled";
+
+            if (camera.targetTexture)
+                return
+                    $"cameraAllowMSAA=1 msaaSamples={Mathf.Max(camera.targetTexture.antiAliasing, 1)} msaaSource=target-texture";
+
+            return
+                $"cameraAllowMSAA=1 msaaSamples={Mathf.Max(QualitySettings.antiAliasing, 1)} msaaSource=quality-settings";
         }
 
         public static GsplatLidarParticleAntialiasingMode ResolveEffectiveLidarParticleAntialiasingMode(
@@ -148,6 +205,104 @@ namespace Gsplat
                 ? requestedMode
                 : GsplatLidarParticleAntialiasingMode.AnalyticCoverage;
         }
+
+#if GSPLAT_ENABLE_HDRP
+        static MethodInfo FindTryGetRenderPipelineSettingsMethod()
+        {
+            foreach (var method in typeof(GraphicsSettings).GetMethods(BindingFlags.Public | BindingFlags.Static))
+            {
+                if (method.Name != nameof(GraphicsSettings.TryGetRenderPipelineSettings) ||
+                    !method.IsGenericMethodDefinition)
+                {
+                    continue;
+                }
+
+                var parameters = method.GetParameters();
+                if (parameters.Length == 1 && parameters[0].IsOut)
+                    return method;
+            }
+
+            return null;
+        }
+
+        static MethodInfo CreateTryGetHdrpRenderingPathFrameSettingsMethod()
+        {
+            if (s_tryGetRenderPipelineSettingsMethod == null || s_hdrpRenderingPathFrameSettingsType == null)
+                return null;
+
+            return s_tryGetRenderPipelineSettingsMethod.MakeGenericMethod(s_hdrpRenderingPathFrameSettingsType);
+        }
+
+        static MethodInfo FindHdrpAggregateFrameSettingsMethod()
+        {
+            if (s_hdrpRenderingPathFrameSettingsType == null)
+                return null;
+
+            return typeof(FrameSettings).GetMethod(
+                "AggregateFrameSettings",
+                BindingFlags.NonPublic | BindingFlags.Static,
+                null,
+                new[]
+                {
+                    s_hdrpRenderingPathFrameSettingsType,
+                    typeof(FrameSettings).MakeByRefType(),
+                    typeof(Camera),
+                    typeof(HDAdditionalCameraData),
+                    typeof(HDRenderPipelineAsset)
+                },
+                null);
+        }
+
+        static bool TryGetHdrpResolvedMsaaSampleCount(Camera camera, out int sampleCount)
+        {
+            sampleCount = 1;
+            if (!camera)
+                return false;
+
+            var hdrpAsset = GraphicsSettings.currentRenderPipeline as HDRenderPipelineAsset;
+            if (!hdrpAsset)
+                return false;
+
+            if (!TryGetHdrpAggregatedFrameSettings(camera, hdrpAsset, out var frameSettings))
+                return false;
+
+            if (!frameSettings.IsEnabled(FrameSettingsField.MSAA))
+                return true;
+
+            sampleCount = Mathf.Max((int)frameSettings.GetResolvedMSAAMode(hdrpAsset), 1);
+
+            // 说明:
+            // - HDRP 的 Frame Settings 说明“理论上这台 camera 允许 MSAA”.
+            // - 但如果实际输出到的 RenderTexture 不是多重采样,那 A2C 仍然不会成立.
+            // - 因此这里再与 targetTexture 的 sample count 取 min,逼近真实 render target.
+            if (camera.targetTexture)
+                sampleCount = Mathf.Min(sampleCount, Mathf.Max(camera.targetTexture.antiAliasing, 1));
+
+            return true;
+        }
+
+        static bool TryGetHdrpAggregatedFrameSettings(Camera camera, HDRenderPipelineAsset hdrpAsset,
+            out FrameSettings frameSettings)
+        {
+            frameSettings = default;
+            if (s_tryGetHdrpRenderingPathFrameSettingsMethod == null || s_hdrpAggregateFrameSettingsMethod == null)
+                return false;
+
+            object additionalData = null;
+            camera.TryGetComponent(out HDAdditionalCameraData hdAdditionalCameraData);
+            additionalData = hdAdditionalCameraData;
+
+            var getSettingsArgs = new object[] { null };
+            var gotSettings = (bool)s_tryGetHdrpRenderingPathFrameSettingsMethod.Invoke(null, getSettingsArgs);
+            if (!gotSettings || getSettingsArgs[0] == null)
+                return false;
+
+            var aggregateArgs = new object[] { getSettingsArgs[0], frameSettings, camera, additionalData, hdrpAsset };
+            s_hdrpAggregateFrameSettingsMethod.Invoke(null, aggregateArgs);
+            frameSettings = (FrameSettings)aggregateArgs[1];
+            return true;
+        }
+#endif
 
         // --------------------------------------------------------------------
         // LiDAR: Up/Down beams 规范化(固定总线束数)

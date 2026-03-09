@@ -234,6 +234,7 @@ namespace Gsplat.Editor
                     "- 推荐: AnalyticCoverage. 不依赖 MSAA,现在按像素尺度计算 coverage,小点也更容易看出差异.\n" +
                     "- `LidarParticleAAFringePixels` 用来控制边缘外扩宽度. 值越大,AA fringe 越明显.\n" +
                     "- AlphaToCoverage / AnalyticCoveragePlusAlphaToCoverage 需要当前实际渲染相机具备有效 MSAA.\n" +
+                    "- HDRP 下会读取 camera 的 HD Frame Settings / resolved MSAA,不要把 `Camera.allowMSAA` 当成判断依据.\n" +
                     "- A2C 现在走 coverage-first 路线,不是普通透明混合,边缘会更像 sample coverage / cutout.\n" +
                     "- 如果当前 camera 没有 MSAA,运行时会自动回退到 AnalyticCoverage,并在 Console 输出一次说明.\n" +
                     "- LegacySoftEdge 用于保持旧项目当前 fixed feather 的边缘语义.",

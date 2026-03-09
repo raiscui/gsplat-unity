@@ -731,6 +731,7 @@ namespace Gsplat
 
             var cameraId = camera ? camera.GetInstanceID() : 0;
             var msaaSamples = GetEffectiveMsaaSampleCount(camera);
+            var msaaDiagnostics = GsplatUtils.GetLidarParticleMsaaDiagnosticSummary(camera);
             if (m_debugLastLoggedParticleAaRequestedMode == (int)requestedMode &&
                 m_debugLastLoggedParticleAaEffectiveMode == (int)effectiveMode &&
                 m_debugLastLoggedParticleAaMsaaSamples == msaaSamples &&
@@ -756,7 +757,7 @@ namespace Gsplat
                     "[Gsplat][LiDAR][AA] " +
                     $"camera={cameraName} requested={requestedMode} effective={effectiveMode}. " +
                     $"A2C 当前未生效,已回退到 {effectiveMode}. " +
-                    $"allowMSAA={(camera && camera.allowMSAA ? 1 : 0)} msaaSamples={msaaSamples} " +
+                    $"{msaaDiagnostics} " +
                     $"shader={shaderName} analytic={analyticCoverageEnabled} fringePx={Mathf.Max(fringePixels, 0.0f):0.###} passMode={coverageMode}.");
                 return;
             }
@@ -764,19 +765,13 @@ namespace Gsplat
             Debug.Log(
                 "[Gsplat][LiDAR][AA] " +
                 $"camera={cameraName} requested={requestedMode} effective={effectiveMode}. " +
-                $"allowMSAA={(camera && camera.allowMSAA ? 1 : 0)} msaaSamples={msaaSamples} " +
+                $"{msaaDiagnostics} " +
                 $"shader={shaderName} analytic={analyticCoverageEnabled} fringePx={Mathf.Max(fringePixels, 0.0f):0.###} passMode={coverageMode}.");
         }
 
         static int GetEffectiveMsaaSampleCount(Camera camera)
         {
-            if (!camera || !camera.allowMSAA)
-                return 1;
-
-            if (camera.targetTexture)
-                return Mathf.Max(camera.targetTexture.antiAliasing, 1);
-
-            return Mathf.Max(QualitySettings.antiAliasing, 1);
+            return GsplatUtils.GetLidarParticleMsaaSampleCount(camera);
         }
 #endif
 

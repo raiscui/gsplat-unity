@@ -6,11 +6,107 @@ using System.Reflection;
 using System.Runtime.Serialization;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 namespace Gsplat.Tests
 {
     public sealed class GsplatLidarScanTests
     {
+        static Type FindLoadedType(string fullName)
+        {
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                var type = assembly.GetType(fullName, false);
+                if (type != null)
+                {
+                    return type;
+                }
+            }
+
+            return null;
+        }
+
+        static object GetEnumValue(Type enumType, string name, string ownerName)
+        {
+            Assert.IsNotNull(enumType, $"Expected reflected enum {ownerName} to exist.");
+            return Enum.Parse(enumType, name);
+        }
+
+        static object GetReflectedMemberValue(object obj, string ownerName, string memberName)
+        {
+            Assert.IsNotNull(obj, $"Expected reflected owner {ownerName} to be non-null.");
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var field = obj.GetType().GetField(memberName, flags);
+            if (field != null)
+            {
+                return field.GetValue(obj);
+            }
+
+            var property = obj.GetType().GetProperty(memberName, flags);
+            Assert.IsNotNull(property, $"Expected reflected member {ownerName}.{memberName} to exist.");
+            return property.GetValue(obj);
+        }
+
+        static T GetReflectedMemberValue<T>(object obj, string ownerName, string memberName)
+        {
+            return (T)GetReflectedMemberValue(obj, ownerName, memberName);
+        }
+
+        static void SetReflectedMemberValue(object obj, string ownerName, string memberName, object value)
+        {
+            Assert.IsNotNull(obj, $"Expected reflected owner {ownerName} to be non-null.");
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var field = obj.GetType().GetField(memberName, flags);
+            if (field != null)
+            {
+                field.SetValue(obj, value);
+                return;
+            }
+
+            var property = obj.GetType().GetProperty(memberName, flags);
+            Assert.IsNotNull(property, $"Expected reflected member {ownerName}.{memberName} to exist.");
+            property.SetValue(obj, value);
+        }
+
+        static object InvokeReflectedMethod(object obj, string ownerName, string methodName, params object[] args)
+        {
+            Assert.IsNotNull(obj, $"Expected reflected owner {ownerName} to be non-null.");
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            var method = obj.GetType().GetMethod(methodName, flags);
+            Assert.IsNotNull(method, $"Expected reflected method {ownerName}.{methodName} to exist.");
+            return method.Invoke(obj, args);
+        }
+
+        static Component AddComponentByType(GameObject gameObject, Type componentType, string ownerName)
+        {
+            Assert.IsNotNull(componentType, $"Expected reflected component type {ownerName} to exist.");
+
+            var component = gameObject.AddComponent(componentType);
+            Assert.IsNotNull(component, $"Expected GameObject.AddComponent({ownerName}) to succeed.");
+            return component;
+        }
+
+        static void SetReflectedBitArrayValue(object bitArray, string ownerName, uint index, bool value)
+        {
+            Assert.IsNotNull(bitArray, $"Expected reflected bit array {ownerName} to be non-null.");
+
+            const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public;
+            var bitArrayType = bitArray.GetType();
+            var indexer =
+                bitArrayType.GetProperty("Item", flags, null, typeof(bool), new[] { typeof(uint) }, null) ??
+                bitArrayType.GetProperty("Item", flags, null, typeof(bool), new[] { typeof(int) }, null);
+            Assert.IsNotNull(indexer, $"Expected reflected bit array indexer {ownerName}.Item to exist.");
+
+            var parameterType = indexer.GetIndexParameters()[0].ParameterType;
+            var boxedIndex = parameterType == typeof(uint)
+                ? (object)index
+                : Convert.ChangeType(index, parameterType);
+            indexer.SetValue(bitArray, value, new[] { boxedIndex });
+        }
+
         static void InvokeValidateLidarSerializedFields(object obj, string ownerName)
         {
             // 说明:
@@ -858,6 +954,147 @@ namespace Gsplat.Tests
                 }
 
                 UnityEngine.Object.DestroyImmediate(targetTexture);
+                UnityEngine.Object.DestroyImmediate(cameraGo);
+            }
+        }
+
+        [Test]
+        public void GetLidarParticleMsaaSampleCount_HdrpUsesResolvedFrameSettingsEvenWhenCameraAllowMsaaIsFalse()
+        {
+            var hdrpAssetType = FindLoadedType("UnityEngine.Rendering.HighDefinition.HDRenderPipelineAsset");
+            if (hdrpAssetType == null)
+            {
+                Assert.Ignore("HDRP package is not loaded, skipping HDRP-specific LiDAR A2C test.");
+            }
+
+            var hdrpAsset = GraphicsSettings.currentRenderPipeline;
+            if (hdrpAsset == null || !hdrpAssetType.IsInstanceOfType(hdrpAsset))
+            {
+                Assert.Ignore("HDRP-specific LiDAR A2C test requires an active HDRP pipeline.");
+            }
+
+            var renderPipelineSettings = GetReflectedMemberValue(
+                hdrpAsset,
+                hdrpAssetType.FullName,
+                "currentPlatformRenderPipelineSettings");
+            var supportedLitShaderMode = GetReflectedMemberValue(
+                renderPipelineSettings,
+                "HDRP RenderPipelineSettings",
+                "supportedLitShaderMode");
+            if (string.Equals(supportedLitShaderMode.ToString(), "DeferredOnly", StringComparison.Ordinal))
+            {
+                Assert.Ignore("Current HDRP asset is DeferredOnly, MSAA is intentionally unavailable.");
+            }
+
+            if (GetReflectedMemberValue<bool>(renderPipelineSettings, "HDRP RenderPipelineSettings", "supportWater"))
+            {
+                Assert.Ignore("Current HDRP asset enables Water, HDRP 会在 sanitize 阶段禁用 MSAA.");
+            }
+
+            var hdAdditionalCameraDataType = FindLoadedType("UnityEngine.Rendering.HighDefinition.HDAdditionalCameraData");
+            var frameSettingsType = FindLoadedType("UnityEngine.Rendering.HighDefinition.FrameSettings");
+            var frameSettingsFieldType = FindLoadedType("UnityEngine.Rendering.HighDefinition.FrameSettingsField");
+            var litShaderModeType = FindLoadedType("UnityEngine.Rendering.HighDefinition.LitShaderMode");
+            var msaaModeType = FindLoadedType("UnityEngine.Rendering.HighDefinition.MSAAMode");
+            var frameSettingsOverrideMaskType =
+                FindLoadedType("UnityEngine.Rendering.HighDefinition.FrameSettingsOverrideMask");
+
+            Assert.IsNotNull(hdAdditionalCameraDataType, "Expected HDRP HDAdditionalCameraData type to be available.");
+            Assert.IsNotNull(frameSettingsType, "Expected HDRP FrameSettings type to be available.");
+            Assert.IsNotNull(frameSettingsFieldType, "Expected HDRP FrameSettingsField type to be available.");
+            Assert.IsNotNull(litShaderModeType, "Expected HDRP LitShaderMode enum to be available.");
+            Assert.IsNotNull(msaaModeType, "Expected HDRP MSAAMode enum to be available.");
+            Assert.IsNotNull(frameSettingsOverrideMaskType,
+                "Expected HDRP FrameSettingsOverrideMask type to be available.");
+
+            var cameraGo = new GameObject("hdrp-lidar-aa-camera");
+            Camera camera = null;
+
+            try
+            {
+                camera = cameraGo.AddComponent<Camera>();
+                var hdCamera = AddComponentByType(cameraGo, hdAdditionalCameraDataType,
+                    "UnityEngine.Rendering.HighDefinition.HDAdditionalCameraData");
+
+                SetReflectedMemberValue(hdCamera, hdAdditionalCameraDataType.FullName, "customRenderingSettings", true);
+
+                var createFrameSettingsMethod = frameSettingsType.GetMethod(
+                    "Create",
+                    BindingFlags.Public | BindingFlags.Static);
+                Assert.IsNotNull(createFrameSettingsMethod, "Expected HDRP FrameSettings.Create() to exist.");
+                var customFrameSettings = createFrameSettingsMethod.Invoke(null, null);
+
+                SetReflectedMemberValue(
+                    customFrameSettings,
+                    frameSettingsType.FullName,
+                    "litShaderMode",
+                    GetEnumValue(litShaderModeType, "Forward", "UnityEngine.Rendering.HighDefinition.LitShaderMode"));
+                InvokeReflectedMethod(
+                    customFrameSettings,
+                    frameSettingsType.FullName,
+                    "SetEnabled",
+                    GetEnumValue(frameSettingsFieldType, "MSAA",
+                        "UnityEngine.Rendering.HighDefinition.FrameSettingsField"),
+                    true);
+                SetReflectedMemberValue(
+                    customFrameSettings,
+                    frameSettingsType.FullName,
+                    "msaaMode",
+                    GetEnumValue(msaaModeType, "MSAA4X", "UnityEngine.Rendering.HighDefinition.MSAAMode"));
+                SetReflectedMemberValue(
+                    hdCamera,
+                    hdAdditionalCameraDataType.FullName,
+                    "m_RenderingPathCustomFrameSettings",
+                    customFrameSettings);
+
+                var overrideMask = Activator.CreateInstance(frameSettingsOverrideMaskType);
+                var bitArray = GetReflectedMemberValue(overrideMask, frameSettingsOverrideMaskType.FullName, "mask");
+                SetReflectedBitArrayValue(
+                    bitArray,
+                    "HDRP FrameSettingsOverrideMask.mask",
+                    Convert.ToUInt32(GetEnumValue(frameSettingsFieldType, "LitShaderMode",
+                        "UnityEngine.Rendering.HighDefinition.FrameSettingsField")),
+                    true);
+                SetReflectedBitArrayValue(
+                    bitArray,
+                    "HDRP FrameSettingsOverrideMask.mask",
+                    Convert.ToUInt32(GetEnumValue(frameSettingsFieldType, "MSAA",
+                        "UnityEngine.Rendering.HighDefinition.FrameSettingsField")),
+                    true);
+                SetReflectedBitArrayValue(
+                    bitArray,
+                    "HDRP FrameSettingsOverrideMask.mask",
+                    Convert.ToUInt32(GetEnumValue(frameSettingsFieldType, "MSAAMode",
+                        "UnityEngine.Rendering.HighDefinition.FrameSettingsField")),
+                    true);
+                SetReflectedMemberValue(overrideMask, frameSettingsOverrideMaskType.FullName, "mask", bitArray);
+                SetReflectedMemberValue(
+                    hdCamera,
+                    hdAdditionalCameraDataType.FullName,
+                    "renderingPathCustomFrameSettingsOverrideMask",
+                    overrideMask);
+
+                // 说明:
+                // - 这里显式把 allowMSAA 设成 false,目的是稳定复现用户遇到的条件.
+                // - 测试锁定的是“即使这个 legacy 字段为 false,HDRP resolved MSAA 仍应被识别”.
+                camera.allowMSAA = false;
+
+                Assert.IsFalse(camera.allowMSAA,
+                    "这个测试要求 camera.allowMSAA=false,用于锁定 HDRP 路径不再把它当成 A2C 硬门槛.");
+                Assert.AreEqual(4, GsplatUtils.GetLidarParticleMsaaSampleCount(camera));
+                Assert.IsTrue(GsplatUtils.IsLidarParticleMsaaAvailable(camera));
+                Assert.AreEqual(
+                    GsplatLidarParticleAntialiasingMode.AlphaToCoverage,
+                    GsplatUtils.ResolveEffectiveLidarParticleAntialiasingMode(
+                        GsplatLidarParticleAntialiasingMode.AlphaToCoverage,
+                        camera));
+
+                var diagnostics = GsplatUtils.GetLidarParticleMsaaDiagnosticSummary(camera);
+                StringAssert.Contains("msaaSamples=4", diagnostics);
+                StringAssert.Contains("msaaSource=hdrp-frame-settings", diagnostics);
+            }
+            finally
+            {
                 UnityEngine.Object.DestroyImmediate(cameraGo);
             }
         }
