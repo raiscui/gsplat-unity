@@ -1942,3 +1942,164 @@
   - 结果=`skipped`
   - reason=`HDRP package is not loaded, skipping HDRP-specific LiDAR A2C test.`
   - 这证明反射版测试可以被 Unity TestRunner 正常发现和执行,在非 HDRP 工程里只会跳过,不会再拖垮编译。
+
+## 2026-03-11 16:55:40 +0800 任务名称: 新建 OpenSpec 变更 `sog4d-single-frame-ply-support`
+
+### 任务内容
+- 为“单帧 `.ply` 转 `.sog4d`,并在 Unity 正常显示与使用”创建新的 OpenSpec change.
+- 明确本次工作与既有 `sog4d` 主链路的关系,避免把补边界误写成重做格式.
+
+### 完成过程
+- 回读了当前上下文文件与 `sog4d` 相关 spec:
+  - `task_plan.md`
+  - `WORKLOG.md`
+  - `notes.md`
+  - `LATER_PLANS.md`
+  - `ERRORFIX.md`
+  - `openspec/specs/sog4d-container/spec.md`
+  - `openspec/specs/sog4d-unity-importer/spec.md`
+- 检查了仓库现状:
+  - 已存在 `Tools~/Sog4D/ply_sequence_to_sog4d.py`
+  - 已存在 `Editor/GsplatSog4DImporter.cs` 与 `Runtime/GsplatSog4DRuntimeBundle.cs`
+  - 归档 change `2026-02-18-sog4d-sequence-format` 已完成序列主链路
+- 记录了两条候选方向:
+  - 方向A: 扩展既有 `.sog4d` 主链路,正式支持单帧
+  - 方向B: 先做单帧包装入口
+- 执行了 OpenSpec 新建流程:
+  - `openspec new change "sog4d-single-frame-ply-support"`
+  - `openspec status --change "sog4d-single-frame-ply-support"`
+  - `openspec instructions proposal --change "sog4d-single-frame-ply-support"`
+
+### 结果
+- 成功创建:
+  - `openspec/changes/sog4d-single-frame-ply-support/`
+- 使用 schema:
+  - `spec-driven`
+- 当前 artifact 状态:
+  - `proposal` ready
+  - `design` blocked by `proposal`
+  - `specs` blocked by `proposal`
+  - `tasks` blocked by `design, specs`
+- 已拿到 `proposal.md` 模板与撰写要求,本轮按 skill 要求停在这里
+
+### 总结感悟
+- 这次需求最关键的 framing,是“补齐单帧入口的产品承诺”,而不是新增一个平行格式.
+- 下一轮只要继续起草 proposal,就应该优先把 Why 和 Capabilities 写准,实现细节留到 design 再展开。
+
+## 2026-03-11 17:07:10 +0800 任务名称: 为 `sog4d-single-frame-ply-support` 创建 proposal artifact
+
+### 任务内容
+- 为 OpenSpec change `sog4d-single-frame-ply-support` 创建第一个 artifact:
+  - `proposal.md`
+- 把单帧 `.ply -> .sog4d -> Unity` 需求落成 capability 级别的提案边界.
+
+### 完成过程
+- 读取了:
+  - `openspec/specs/sog4d-sequence-encoding/spec.md`
+  - `openspec/specs/4dgs-keyframe-motion/spec.md`
+  - `openspec/specs/4dgs-playback-api/spec.md`
+  - 归档的 `openspec/changes/archive/2026-02-18-sog4d-sequence-format/proposal.md`
+  - `Tools~/Sog4D/README.md`
+- 额外确认了两个关键事实:
+  - 现有 `sog4d-sequence-encoding` 已经明确 `frameCount == 1` 时 `t_0 = 0.0`
+  - 现有 `ply_sequence_to_sog4d.py` 没有看到显式拒绝单帧输入的判断
+- 基于这些证据,把 proposal 的 capability 边界定为:
+  - 新增 `sog4d-ply-conversion`
+  - 修改 `sog4d-unity-importer`
+  - 修改 `4dgs-keyframe-motion`
+- 创建了:
+  - `openspec/changes/sog4d-single-frame-ply-support/proposal.md`
+- 刷新状态:
+  - `openspec status --change "sog4d-single-frame-ply-support"`
+
+### 结果
+- OpenSpec 当前状态:
+  - `Progress: 1/4 artifacts complete`
+  - `proposal` 完成
+  - `design` ready
+  - `specs` ready
+  - `tasks` 仍 blocked by `design, specs`
+- proposal 核心口径已经稳定:
+  - 这次不是新格式
+  - 而是把单帧 `.ply` 正式纳入既有 `.sog4d` 工作流
+
+### 总结感悟
+- 如果 proposal 先把 capability 选错,后面的 `specs` 和 `design` 会一起漂.
+- 这轮先把“容器层不用改,时间映射基础语义也已有”这件事钉住,后续实现范围就会更聚焦。
+
+## 2026-03-11 17:18:40 +0800 任务名称: 为 `sog4d-single-frame-ply-support` 创建 design artifact
+
+### 任务内容
+- 为 OpenSpec change `sog4d-single-frame-ply-support` 创建 `design.md`
+- 把“单帧支持到底是补入口,还是要动核心架构”这件事做出技术取舍
+
+### 完成过程
+- 读取了:
+  - `openspec instructions design --change "sog4d-single-frame-ply-support" --json`
+  - `openspec/changes/sog4d-single-frame-ply-support/proposal.md`
+  - 归档的 `openspec/changes/archive/2026-02-18-sog4d-sequence-format/design.md`
+  - `Runtime/GsplatSequenceAsset.cs`
+  - `Editor/GsplatSog4DImporter.cs`
+  - `Runtime/GsplatSequenceRenderer.cs`
+  - `Tools~/Sog4D/ply_sequence_to_sog4d.py`
+  - `README.md`
+- 结构化确认了关键事实:
+  - `EvaluateFromTimeNormalized(...)` 已经有 `frameCount == 1` 的安全分支
+  - importer / runtime 静态校验都只要求 `frameCount > 0`
+  - 真正模糊的是 CLI 入口与文档口径
+- 创建了:
+  - `openspec/changes/sog4d-single-frame-ply-support/design.md`
+
+### 结果
+- OpenSpec 状态刷新后:
+  - `Progress: 2/4 artifacts complete`
+  - `proposal` 完成
+  - `design` 完成
+  - `specs` ready
+  - `tasks` blocked by `specs`
+- design 核心结论:
+  - 单帧继续复用现有 `.sog4d` 主链路
+  - 工具层扩展现有脚本,优先考虑 `--input-ply`
+  - Unity 侧继续使用 `GsplatSequenceAsset` / `GsplatSequenceRenderer`
+  - 本次以“硬化实现 + 补测试 + 补文档”为主,不重写 decode 架构
+
+### 总结感悟
+- 当代码里已经有单帧兼容基础时,最有价值的 design 往往不是“发明新结构”,而是把边界、承诺和验证路径说清楚。
+- 这轮 design 把 change 半径压在真正缺失的地方,后面的 specs 和实现就不容易跑偏。
+
+## 2026-03-11 17:29:30 +0800 任务名称: 使用 `openspec-ff-change` 补齐 `sog4d-single-frame-ply-support` 全部 artifact
+
+### 任务内容
+- 用 fast-forward 方式把 `sog4d-single-frame-ply-support` 从已完成 `proposal/design` 推进到 apply-ready
+- 一次性创建剩余的 `specs` 与 `tasks`
+
+### 完成过程
+- 读取了:
+  - `openspec instructions specs --change "sog4d-single-frame-ply-support" --json`
+  - `openspec instructions tasks --change "sog4d-single-frame-ply-support" --json`
+  - `openspec/changes/sog4d-single-frame-ply-support/proposal.md`
+  - `openspec/changes/sog4d-single-frame-ply-support/design.md`
+  - `openspec/specs/sog4d-unity-importer/spec.md`
+  - `openspec/specs/4dgs-keyframe-motion/spec.md`
+  - 归档 `openspec/changes/archive/2026-02-18-sog4d-sequence-format/tasks.md`
+- 创建了 3 份 spec:
+  - `specs/sog4d-ply-conversion/spec.md`
+  - `specs/sog4d-unity-importer/spec.md`
+  - `specs/4dgs-keyframe-motion/spec.md`
+- 创建了实现清单:
+  - `openspec/changes/sog4d-single-frame-ply-support/tasks.md`
+- specs 的核心落点:
+  - 工具侧正式支持“单帧文件 / 序列目录”两类输入
+  - importer 明确 `frameCount = 1` 仍是正常 `.sog4d` sequence path
+  - keyframe motion 明确单帧时 `i0=i1=0, a=0`
+- 最后执行 `openspec status --change "sog4d-single-frame-ply-support"` 刷新状态
+
+### 结果
+- OpenSpec 状态已变为:
+  - `Progress: 4/4 artifacts complete`
+  - `All artifacts complete!`
+- 当前 change 已经 ready for implementation
+
+### 总结感悟
+- fast-forward 的关键不是“快写完”,而是把 proposal / design / specs / tasks 之间的契约连续性保持住。
+- 这轮已经把“单帧支持不是新格式,而是现有 `.sog4d` 路线的正式补完”这件事从提案一路贯穿到了任务层。

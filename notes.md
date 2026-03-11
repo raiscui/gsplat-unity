@@ -1457,3 +1457,135 @@
   - “可选依赖”尽量放到运行时反射层
   - 不要让测试程序集形成编译时硬依赖
   - `versionDefines` 不能替代程序集引用本身
+
+## 2026-03-11 16:55:40 +0800 主题: sog4d 单帧 ply 支持的 OpenSpec 起点调研
+
+### 现象
+
+- 用户希望补齐一条新能力:
+  - 单帧 `.ply` 可以转换为 `.sog4d`
+  - 有对应转换脚本或明确入口
+  - Unity 导入后可以正常显示与使用
+- 当前仓库已经有 `sog4d` 主链路,但主叙事更偏向序列:
+  - `Tools~/Sog4D/ply_sequence_to_sog4d.py`
+  - `Editor/GsplatSog4DImporter.cs`
+  - `Runtime/GsplatSog4DRuntimeBundle.cs`
+  - `openspec/specs/sog4d-container/spec.md`
+  - `openspec/specs/sog4d-unity-importer/spec.md`
+
+### 静态证据
+
+- `Tools~/Sog4D/ply_sequence_to_sog4d.py`
+  - CLI 子命令说明是"从 `time_*.ply` 序列打包生成 `.sog4d`"
+  - `_list_ply_files(input_dir)` 会收集目录里全部 `.ply`
+  - 从实现命名和 README 口径看,单帧像是"可能能跑",但还不是被正式强调的受支持入口
+- `openspec/specs/sog4d-container/spec.md`
+  - 只要求 `frameCount` 为正整数
+  - 容器层并没有排斥 `frameCount=1`
+- `openspec/specs/sog4d-unity-importer/spec.md`
+  - 重点描述“可播放序列资产”和“相邻两帧插值”
+  - 这说明当前规格对 `frameCount=1` 的运行时语义还不够显式
+- 归档 change `2026-02-18-sog4d-sequence-format`
+  - 主要解决的是序列格式、导入器、运行时主链路
+  - 本次更像是在既有体系上补齐单帧边界,不是另起一个格式
+
+### 当前假设
+
+- 主假设:
+  - 本次 change 应定义为“让单帧 `.ply` 成为正式受支持的 `.sog4d` 输入形态”
+  - 需要覆盖:
+    - 工具入口
+    - importer 语义
+    - Unity 显示/使用口径
+    - 文档与回归验证
+- 最强备选解释:
+  - 也可能脚本内部已经天然支持单帧,缺的主要是文档、规格和测试
+  - 后续如果动态验证证明确实如此,change 范围应收缩,避免重复造轮子
+
+### 命名判断
+
+- 推荐 change 名称:
+  - `sog4d-single-frame-ply-support`
+- 原因:
+  - 和归档的 `sog4d-sequence-format` 连续
+  - 能覆盖“单帧 + ply + support”三层含义
+  - 不会把实现方式过早绑定到某一个具体脚本文件名
+
+## 2026-03-11 17:07:10 +0800 主题: proposal capability 取舍记录
+
+### 已验证结论
+
+- `proposal.md` 已创建,且 `openspec status` 显示 `Progress: 1/4`.
+- 这次 proposal 最终选择:
+  - 新增 capability:
+    - `sog4d-ply-conversion`
+  - 修改 capability:
+    - `sog4d-unity-importer`
+    - `4dgs-keyframe-motion`
+
+### 为什么不是别的 capability
+
+- 没有修改 `sog4d-container`
+  - 静态证据:
+    - 现有 `sog4d-container` 只要求 `frameCount` 为正整数
+    - 没有发现 bundle 结构必须至少两帧的约束
+  - 结论:
+    - 单帧支持目前不像容器层问题
+- 没有修改 `sog4d-sequence-encoding`
+  - 静态证据:
+    - 已存在 `frameCount == 1` 时 `t_0 = 0.0` 的 requirement
+  - 结论:
+    - 单帧时间映射基础语义已经有了
+    - 缺的是“输入转换契约”和“Unity 端正式支持语义”
+- 没有修改 `4dgs-playback-api`
+  - 判断理由:
+    - `TimeNormalized` 作为一等控制已经成立
+    - 单帧 `.sog4d` 的关键缺口更靠近 keyframe 采样/双帧退化语义
+    - 因此由 `4dgs-keyframe-motion` 承担更自然
+
+### 对后续 artifact 的影响
+
+- 后续 `specs` 阶段至少会新增/修改 3 份 spec:
+  - `specs/sog4d-ply-conversion/spec.md`
+  - `specs/sog4d-unity-importer/spec.md` 的 delta
+  - `specs/4dgs-keyframe-motion/spec.md` 的 delta
+- `design` 阶段要重点回答:
+  - 是否扩展现有 `ply_sequence_to_sog4d.py` 即可
+  - 是否需要单独 CLI 包装入口来降低用户理解成本
+  - importer/runtime 当前是否存在任何默认读取双帧窗口的实现断点
+
+## 2026-03-11 17:18:40 +0800 主题: design 关键决策沉淀
+
+### 已验证事实
+
+- `Runtime/GsplatSequenceAsset.cs`
+  - `EvaluateFromTimeNormalized(...)` 已显式处理 `frameCount == 1`
+  - 当前返回:
+    - `i0 = 0`
+    - `i1 = 0`
+    - `a = 0`
+- `Tools~/Sog4D/ply_sequence_to_sog4d.py`
+  - 当前 CLI 仍只有 `--input-dir`
+  - 文案仍然写“包含 `time_*.ply` 的目录”
+- `README.md`
+  - `.sog4d` 示例仍只展示多帧序列打包
+
+### design 的最终取舍
+
+- 单帧支持不是新格式问题,而是“正式入口 + 正式承诺 + 正式证据”问题
+- 继续复用现有 `.sog4d` / `GsplatSequenceAsset` / `GsplatSequenceRenderer`
+- 工具层优先扩展现有脚本,推荐新增 `--input-ply`,而不是额外创建 `ply_to_sog4d.py`
+- 这次 change 重点不是重写 decode 架构,而是:
+  - 入口清晰化
+  - 单帧退化语义显式化
+  - 自动化测试补齐
+
+### 对 specs 的直接影响
+
+- `sog4d-ply-conversion`
+  - 要写清单帧与序列两类输入的发现与互斥规则
+  - 要写清默认时间映射与输出 bundle 的基本约束
+- `sog4d-unity-importer`
+  - 要补 `frameCount = 1` 的导入成功与可引用语义
+- `4dgs-keyframe-motion`
+  - 要补单帧时固定索引/固定插值因子的退化 requirement

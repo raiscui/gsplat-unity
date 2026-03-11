@@ -159,6 +159,249 @@
   - [x] 修正 discard: 让 discard 判断包含 glowAdd(避免 trail 很小导致 show glow 被提前丢弃).
 - [x] Tests: 更新/新增 EditMode tests,锁定 LiDAR 专用 glow 字段 clamp 行为(避免未来改动又被无意回退).
 
+## 2026-03-11 16:55:40 +0800 新任务: sog4d 支持单帧 ply 转换与 Unity 正常使用(OpenSpec 新变更)
+
+## 目标
+
+把当前仅明确面向 `time_*.ply` 序列的 `.sog4d` 工作流,补齐到也支持"单帧 `.ply` -> `.sog4d` -> Unity 导入显示/正常使用"。
+这次先完成 OpenSpec 新 change 的创建与首个 artifact 指引,不直接写实现代码。
+
+## 阶段
+
+- [x] 阶段1: 读取上下文与现有 sog4d/spec/tool 状态
+- [ ] 阶段2: 记录候选方案与 change 命名
+- [ ] 阶段3: 创建 OpenSpec change 骨架并查看状态
+- [ ] 阶段4: 读取首个 artifact 指引并停在可继续起草的位置
+
+## 关键问题
+
+1. 这次需求是新增格式还是补齐既有 `.sog4d` 单帧入口?
+2. 单帧 `.ply` 最终在 Unity 里应复用 `GsplatSog4D` 序列运行时,还是回退到单帧 `GsplatAsset` 语义?
+3. 转换脚本是扩展现有 `Tools~/Sog4D/ply_sequence_to_sog4d.py`,还是新增更聚焦的单帧入口包装?
+
+## 候选方向
+
+- 方向A(最佳方案): 直接扩展既有 `ply_sequence_to_sog4d.py`,让它原生接受 `1` 帧输入,并让 importer/runtime 明确支持 `frameCount=1` 的 `.sog4d` 资产。
+  - 优点: 统一格式,统一导入器,长期维护成本最低。
+  - 风险: 需要把现有 spec / importer / runtime 对 `frameCount > 1` 的隐含假设都梳理清楚。
+- 方向B(先能用): 新增一个单帧包装脚本,内部仍复用既有打包逻辑,先保证能转、能导、能显示。
+  - 优点: 落地快,对现有序列主路径侵入小。
+  - 风险: 容易形成两套入口文档与长期重复维护。
+
+## 做出的决定
+
+- 当前先按方向A来命名和起草 OpenSpec change。
+  - 理由: 仓库里已经存在完整 `sog4d` 容器/spec/importer/tooling,这次更像补齐单帧边界,不是另起炉灶。
+- 预计 change 名称候选: `sog4d-single-frame-ply-support`
+  - 理由: 能同时覆盖单帧转换、导入、显示支持这三个点,且不与归档的 `sog4d-sequence-format` 重名。
+
+## 遇到的错误
+
+- (待补)
+
+## 状态
+
+**目前在阶段2**
+- 我已经确认现有仓库里有:
+  - `Tools~/Sog4D/ply_sequence_to_sog4d.py`
+  - `openspec/specs/sog4d-container/spec.md`
+  - `openspec/specs/sog4d-unity-importer/spec.md`
+- 下一步:
+  - 把这次调研结论追加到 `notes.md`
+  - 创建 `openspec/changes/sog4d-single-frame-ply-support/`
+  - 查看 status 与首个 artifact 指引
+
+## 2026-03-11 16:55:40 +0800 进展: OpenSpec change 已创建,等待 proposal 起草
+
+## 阶段完成情况更新
+
+- [x] 阶段1: 读取上下文与现有 sog4d/spec/tool 状态
+- [x] 阶段2: 记录候选方案与 change 命名
+- [x] 阶段3: 创建 OpenSpec change 骨架并查看状态
+- [x] 阶段4: 读取首个 artifact 指引并停在可继续起草的位置
+
+## 已完成事实
+
+- 已创建 change:
+  - `openspec/changes/sog4d-single-frame-ply-support/`
+- 已确认 schema:
+  - `spec-driven`
+- `openspec status --change "sog4d-single-frame-ply-support"` 结果:
+  - `proposal` 为当前唯一 ready artifact
+  - `design` 与 `specs` 被 `proposal` 阻塞
+  - `tasks` 被 `design` 与 `specs` 阻塞
+- 已读取首个 artifact 指引:
+  - `openspec instructions proposal --change "sog4d-single-frame-ply-support"`
+
+## 状态
+
+**目前已完成本轮目标**
+- 当前停在 `proposal.md` 起草前。
+- 如果继续下一轮,应直接围绕以下内容起草 proposal:
+  - Why: 为什么现在要补齐单帧 `.ply -> .sog4d -> Unity` 主路径
+  - What Changes: 工具入口、importer 语义、Unity 可显示可使用、测试/文档
+  - Capabilities: 新增或修改哪些 spec 能力
+
+## 2026-03-11 17:03:20 +0800 继续执行: 起草 proposal.md
+
+### 起草前判断
+
+- [x] 已重新确认 `sog4d-sequence-encoding` 其实已经写了 `frameCount == 1` 的 `uniform timeMapping` 语义.
+- [x] 已确认现有 `Tools~/Sog4D/ply_sequence_to_sog4d.py` 没有明显写死“至少 2 帧”.
+- [x] 已确认当前缺口更像:
+  - 离线转换入口没有把“单帧 `.ply`”当成正式能力说清楚
+  - `sog4d-unity-importer` 与 `4dgs-keyframe-motion` 对单帧 bundle 的“正常显示/不读取不存在第二帧”语义还不够显式
+
+### 本步要做什么
+
+- [ ] 创建 `openspec/changes/sog4d-single-frame-ply-support/proposal.md`
+- [ ] proposal 中优先定义 capability 边界:
+  - 新增: `sog4d-ply-conversion`
+  - 修改: `sog4d-unity-importer`
+  - 修改: `4dgs-keyframe-motion`
+
+### 当前状态
+
+**目前在 proposal 起草阶段**
+- 我将按 “问题为什么存在 -> 要改哪些能力 -> 影响哪些系统” 的顺序落文。
+
+## 2026-03-11 17:07:10 +0800 进展: proposal 已创建并通过 OpenSpec 识别
+
+### 已完成
+
+- [x] 创建 `openspec/changes/sog4d-single-frame-ply-support/proposal.md`
+- [x] proposal capability 边界已定为:
+  - 新增: `sog4d-ply-conversion`
+  - 修改: `sog4d-unity-importer`
+  - 修改: `4dgs-keyframe-motion`
+- [x] `openspec status --change "sog4d-single-frame-ply-support"` 已确认:
+  - `Progress: 1/4 artifacts complete`
+  - `design` ready
+  - `specs` ready
+  - `tasks` 仍被 `design` 与 `specs` 阻塞
+
+### 关键判断沉淀
+
+- 这次 proposal 没有把 `sog4d-container` 列为修改项.
+  - 原因: 当前容器 spec 已允许 `frameCount` 为正整数,没有证据表明单帧支持需要改 bundle 基础契约.
+- 这次 proposal 也没有把 `sog4d-sequence-encoding` 列为修改项.
+  - 原因: 现有 spec 已写明 `frameCount == 1` 的 `uniform timeMapping` 语义.
+  - 当前更像是:
+    - 需要一条正式的离线转换能力
+    - 需要 Unity importer/runtime 对单帧退化语义的显式承诺
+
+### 当前状态
+
+**目前进入下一阶段候选**
+- 下一次继续时,可以二选一:
+  - 先写 `specs`(把 capability 合同钉死)
+  - 先写 `design`(把实现路径和权衡写清楚)
+- 按 spec-driven 常规节奏,我更倾向先写 `specs`。
+
+## 2026-03-11 17:12:05 +0800 继续执行: 按 OpenSpec ready 顺序创建 design
+
+### 新证据
+
+- `openspec status --change "sog4d-single-frame-ply-support" --json` 返回:
+  - `proposal=done`
+  - `design=ready`
+  - `specs=ready`
+  - `tasks=blocked`
+- 这说明当前 schema 的“可继续创建顺序”里,`design` 排在 `specs` 前面。
+
+### 决定调整
+
+- [x] 放弃“先写 specs”的主观偏好
+- [ ] 改为严格按当前 ready 顺序先创建 `design.md`
+
+### 当前状态
+
+**目前在 design 起草前**
+- 下一步:
+  - 读取 `openspec instructions design --change "sog4d-single-frame-ply-support" --json`
+  - 读取依赖 `proposal.md`
+  - 参考现有归档 `sog4d` design 风格,创建新的 `design.md`
+
+## 2026-03-11 17:18:40 +0800 进展: design 已创建并解锁 specs
+
+### 已完成
+
+- [x] 创建 `openspec/changes/sog4d-single-frame-ply-support/design.md`
+- [x] 设计结论已明确:
+  - 单帧继续复用现有 `.sog4d` 主链路
+  - 工具侧优先扩展现有 `ply_sequence_to_sog4d.py`,而不是新增包装脚本
+  - Unity 侧仍保持 `GsplatSequenceAsset` / `GsplatSequenceRenderer`
+  - 这次以“硬化现有实现 + 补测试 + 补文档”为主,不重写 decode 架构
+- [x] `openspec status --change "sog4d-single-frame-ply-support"` 已确认:
+  - `Progress: 2/4 artifacts complete`
+  - `specs` ready
+  - `tasks` blocked by `specs`
+
+### 当前状态
+
+**目前进入 specs 阶段**
+- 下一步应创建 `specs` artifact。
+- 按 proposal 当前 capability 列表,至少需要:
+  - 新增 `sog4d-ply-conversion`
+  - 修改 `sog4d-unity-importer`
+  - 修改 `4dgs-keyframe-motion`
+
+## 2026-03-11 17:24:20 +0800 继续执行: 一次性补齐 specs artifact
+
+### 本步计划
+
+- [ ] 新增 `specs/sog4d-ply-conversion/spec.md`
+- [ ] 修改 `specs/sog4d-unity-importer/spec.md`
+- [ ] 修改 `specs/4dgs-keyframe-motion/spec.md`
+- [ ] 刷新 `openspec status`,确认 `tasks` 被解锁
+
+### 写作约束
+
+- 对修改现有 capability 的 requirement,使用 `## MODIFIED Requirements` 并完整拷贝原 requirement 块后改写
+- 对新增 concern,使用 `## ADDED Requirements`
+- 所有 scenario 必须使用 `#### Scenario:`
+
+### 当前状态
+
+**目前在 specs 起草阶段**
+- 目标是在这一步结束后,直接把 change 推进到只剩 `tasks`。
+
+## 2026-03-11 17:29:30 +0800 收尾: `sog4d-single-frame-ply-support` 已达到 apply-ready
+
+### 已完成
+
+- [x] 新增 `specs/sog4d-ply-conversion/spec.md`
+- [x] 新增 `specs/sog4d-unity-importer/spec.md`
+- [x] 新增 `specs/4dgs-keyframe-motion/spec.md`
+- [x] 新增 `tasks.md`
+- [x] 刷新 `openspec status`,确认:
+  - `proposal=done`
+  - `design=done`
+  - `specs=done`
+  - `tasks=done`
+  - `All artifacts complete!`
+
+### 当前状态
+
+**本次 OpenSpec artifact fast-forward 已完成**
+- 当前 change 已经可以直接进入实现阶段。
+- 下一步可选:
+  - 直接 `/opsx:apply`
+  - 或直接让我开始实现 `tasks.md`
+
+## 2026-03-11 17:34:20 +0800 新任务: 提交本轮 OpenSpec artifact 变更
+
+### 本步计划
+
+- [ ] 检查 `git status --short` 与 `git submodule status`,确认是否存在不属于本轮的改动
+- [ ] 仅暂存本轮 `sog4d-single-frame-ply-support` 与上下文记录相关文件
+- [ ] 使用非交互 git commit 提交
+
+### 当前状态
+
+**目前在提交前检查阶段**
+- 目标是只提交这轮 OpenSpec 产物与记录文件,不误带其它用户改动。
+
 ## 2026-03-08 14:30:39 +0800 新问题: 雷达扫描粒子的 show/hide 运动 noise 是否等于 Unity VFX Graph 的 Value Curl Noise
 
 ### 当前目标
