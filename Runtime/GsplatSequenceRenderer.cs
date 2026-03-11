@@ -3509,7 +3509,7 @@ namespace Gsplat
             SequenceAsset.TimeMapping.EvaluateFromTimeNormalized(SequenceAsset.FrameCount, m_timeNormalizedThisFrame,
                 out var i0, out var i1, out var a);
 
-            var useLinear = m_effectiveInterpolationMode == GsplatInterpolationMode.Linear && i0 != i1;
+            var useLinear = ShouldUseLinearInterpolation(m_effectiveInterpolationMode, i0, i1);
             if (!useLinear)
             {
                 i1 = i0;
@@ -3748,6 +3748,13 @@ namespace Gsplat
             SequenceAsset = runtimeAsset;
             m_ownsRuntimeSequenceAsset = true;
             return true;
+        }
+
+        static bool ShouldUseLinearInterpolation(GsplatInterpolationMode interpolationMode, int frame0, int frame1)
+        {
+            // 单帧 bundle 或其它退化情形下,只要最终命中的还是同一帧,
+            // 就必须退化为固定帧读取,不能再假设“存在独立第二帧可插值”.
+            return interpolationMode == GsplatInterpolationMode.Linear && frame0 != frame1;
         }
 
         void DestroyOwnedRuntimeSequenceAssetIfAny()

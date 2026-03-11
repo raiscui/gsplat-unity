@@ -18,6 +18,23 @@
 - `Runtime/GsplatSequenceAsset.cs` 的 `EvaluateFromTimeNormalized(...)` 已在 `frameCount == 1` 时返回 `i0 = 0, i1 = 0, a = 0`
 - `Editor/GsplatSog4DImporter.cs` 与 `Runtime/GsplatSog4DRuntimeBundle.cs` 目前只要求 `frameCount > 0`,没有静态证据表明它们硬性要求至少两帧
 
+这次用户还额外给了一个必须闭环的真实样例:
+
+- `Assets/Gsplat/ply/s1-point_cloud.ply`
+
+因此这次 change 不只需要“最小伪造样例可通过”.
+还需要把这份真实单帧资产写成正式验收样例,并要求它完成:
+
+- 通过离线脚本工具完成正式 `.ply -> .sog4d` 转换
+- Unity 导入脚本工具产出的 `.sog4d`
+- 场景显示验证
+
+这里的职责边界必须明确:
+
+- `.ply -> .sog4d` 转换由 `Tools~/Sog4D/ply_sequence_to_sog4d.py` 这类离线脚本工具负责
+- Unity 不承担 `.ply` 到 `.sog4d` 的转换职责
+- Unity 侧验收只覆盖导入、实例化与显示验证
+
 因此,这次 change 的本质不是“新增另一种格式”,而是把“单帧 `.ply` 作为 `.sog4d` 的正式输入形态”补成一条清晰、可验证、可文档化的主路径。
 
 ## Goals / Non-Goals
@@ -31,6 +48,7 @@
   - 可被现有 `GsplatSequenceRenderer` 正常引用
   - 不依赖不存在的第二帧
 - 为单帧路径补齐 README / Tools 文档 / EditMode 回归测试,让能力从“可能能跑”升级为“正式支持”。
+- 把 `Assets/Gsplat/ply/s1-point_cloud.ply` 纳入最终验收证据,避免能力只在极小测试夹具上成立.
 
 **Non-Goals:**
 
@@ -153,12 +171,18 @@
   - 工具侧: 单帧输入可以成功打包,并生成 `frameCount = 1` 的合法 bundle
   - importer 侧: 单帧 `.sog4d` 可成功导入,生成可引用的 `GsplatSequenceAsset`
   - runtime 侧: `frameCount = 1` 时 `EvaluateFromTimeNormalized(...)` 与相关渲染准备路径不会访问不存在的第二帧
+- 在自动化最小验证之外,增加一条真实样例验收:
+  - 使用 `Assets/Gsplat/ply/s1-point_cloud.ply`
+  - 必须通过正式脚本工具入口生成 `.sog4d`
+  - 必须导入当前 Unity 工程
+  - 必须完成实际显示验证,证明不是“只在合成最小样例上成立”
 
 **理由**
 
 - 只有文档没有测试,很容易再次回退成“理论支持”。
 - 只有 importer 测试没有工具测试,不能证明用户真的拿得到正确的单帧 bundle。
 - 只有 runtime 测试没有 importer 测试,也不能证明 Unity 主链路真的闭环。
+- 只有最小测试夹具没有真实资产验收,也不能证明真实工作流真的闭环。
 
 **备选方案**
 
@@ -197,3 +221,15 @@
 - 是否需要在 Tools README 中把“目录里只有 1 个 `.ply`”也列为等价支持路径,还是只主推 `--input-ply`?
 - 是否需要补一个最小单帧 `.sog4d` 示例资产到测试资源,便于 importer 回归而不依赖运行打包脚本?
 - 现有 `GsplatSequenceRenderer` 的 decode 提交流程里,是否还有值得显式加断言的“i0 != i1”隐含假设?
+
+## Acceptance Fixture
+
+本 change 的真实验收样例固定为:
+
+- `Assets/Gsplat/ply/s1-point_cloud.ply`
+
+验收完成的最低标准:
+
+- 该文件能通过正式脚本工具入口打包为合法 `.sog4d`
+- 产物能在当前 Unity 工程中通过正常 `.sog4d` importer 导入
+- 导入后的 prefab/sequence asset 能被实例化并完成显示验证

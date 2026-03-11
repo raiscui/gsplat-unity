@@ -2103,3 +2103,89 @@
 ### 总结感悟
 - fast-forward 的关键不是“快写完”,而是把 proposal / design / specs / tasks 之间的契约连续性保持住。
 - 这轮已经把“单帧支持不是新格式,而是现有 `.sog4d` 路线的正式补完”这件事从提案一路贯穿到了任务层。
+
+## 2026-03-11 18:58:00 +0800 任务名称: 补强 `sog4d-single-frame-ply-support` 的真实样例验收规格
+
+### 任务内容
+- 更新 `sog4d-single-frame-ply-support` change 的 proposal / design / specs / tasks。
+- 把真实样例 `Assets/Gsplat/ply/s1-point_cloud.ply` 从“会话约定”升级为 OpenSpec 正式验收夹具。
+
+### 完成过程
+- 在 proposal 中补充:
+  - 这份真实样例必须完成正式 `.ply -> .sog4d`
+  - 必须导入当前 Unity 工程
+  - 必须完成实际显示验证
+- 在 design 中补充:
+  - 真实样例验收属于 change 的强制验证策略
+  - 不能只靠最小伪造样例证明“能力存在”
+- 在 `sog4d-ply-conversion` spec 中新增真实样例转换 requirement 与 scenario。
+- 在 `sog4d-unity-importer` spec 中新增真实样例 Unity 导入与显示验证 requirement 与 scenario。
+- 在 tasks 中新增显式 checklist:
+  - 真实样例转换证据
+  - 真实样例 Unity 显示验证
+
+### 总结感悟
+- 这次补强后,change 的验收边界更清楚了。
+- 后续继续实现时,不会再出现“通用能力看起来支持,但真实样例是否必须过”这种口径模糊的问题。
+
+## 2026-03-11 19:03:00 +0800 任务名称: 澄清 `.ply -> .sog4d` 与 Unity 验收的职责边界
+
+### 任务内容
+- 根据用户澄清,修正 `sog4d-single-frame-ply-support` 的规格措辞。
+- 明确 `.ply -> .sog4d` 属于脚本工具职责,不是 Unity 内部转换职责。
+
+### 完成过程
+- 在 proposal / design 中补充职责边界:
+  - `.ply -> .sog4d` 由离线脚本工具完成
+  - Unity 只负责导入脚本工具产出的 `.sog4d` 并做显示验证
+- 在 `sog4d-ply-conversion` spec 中把真实样例转换场景改写为“通过脚本工具执行”.
+- 在 `sog4d-unity-importer` spec 中补充前置条件:
+  - 转换已由脚本工具完成
+  - Unity 只负责导入与显示验证
+- 在 tasks 中同步调整 wording,避免再让人误解为“Unity 内也要承担 `.ply -> .sog4d` 转换”.
+
+### 总结感悟
+- 这类链路型需求最容易把“转换职责”和“导入职责”写混。
+- 这次纠偏后,OpenSpec 对工具链与 Unity 的分工已经足够明确,后续实现和验收不会再跑偏。
+
+## 2026-03-11 21:45:00 +0800 任务名称: `sog4d-single-frame-ply-support` 真实样例实现与显示验收闭环
+
+### 任务内容
+- 扩展 `.sog4d` 工具链,正式支持“单个 `.ply` 文件 -> 单帧 `.sog4d`”.
+- 使用真实样例 `Assets/Gsplat/ply/s1-point_cloud.ply` 做最终转换与 Unity 显示验收.
+- 补齐 importer/runtime/test/docs/OpenSpec 记录,并确认这条链路不是“只导入不显示”.
+
+### 完成过程
+- 工具链:
+  - `Tools~/Sog4D/ply_sequence_to_sog4d.py` 新增 `--input-ply`.
+  - 与 `--input-dir` 做互斥校验.
+  - 单帧入口继续复用既有 `ply_files` 主流程,不新造旁路格式.
+- Unity 运行链路:
+  - `Editor/GsplatSog4DImporter.cs` 明确单帧导入仍生成 `GsplatSequenceAsset`.
+  - `Runtime/GsplatSog4DRuntimeBundle.cs` 与 `Runtime/GsplatSequenceRenderer.cs` 明确单帧 bundle / 固定帧退化语义.
+- 自动化验证:
+  - `python3 -m unittest Tools~/Sog4D/tests/test_single_frame_cli.py`
+  - Unity 定向 EditMode tests:
+    - `Gsplat.Tests.GsplatSog4DImporterTests`
+    - `Gsplat.Tests.GsplatSequenceAssetTests`
+- 真实样例转换:
+  - 输入:
+    - `/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Assets/Gsplat/ply/s1-point_cloud.ply`
+  - 输出:
+    - `/tmp/s1_from_file.sog4d`
+  - 已执行 `pack --input-ply ... --self-check` 与 `validate`,结果通过.
+- Unity 显示验收:
+  - 真实导入资产:
+    - `Assets/Gsplat/sog4d/s1-point_cloud_single.sog4d`
+  - 已确认:
+    - `GsplatSequenceRenderer.Valid = true`
+    - `SplatCount = 169133`
+  - `manage_camera screenshot` 会给出空图假阴性.
+  - 最终通过 Unity 主窗口 on-screen GameView 截图确认 `Sog4DSingleFrameVerify` 白色点云已经实际显示.
+
+### 总结感悟
+- 这次单帧支持本质上是补齐现有 `.sog4d` 正式入口与正式语义,不是发明新格式.
+- Unity 验收里,工具截图接口不一定等价于当前屏幕上的 GameView.
+- 以后遇到“明明 Valid 了但截图是空的”,要先区分:
+  - 这是显示真的失败
+  - 还是取证手段本身给了假阴性

@@ -95,6 +95,40 @@ def _list_ply_files(input_dir: Path) -> list[Path]:
     return files
 
 
+def _resolve_pack_input_ply_files(args: argparse.Namespace) -> list[Path]:
+    # 统一把 pack 的两种正式入口归一为同一份 ply_files:
+    # - `--input-ply`: 单个 `.ply`
+    # - `--input-dir`: 包含一个或多个 `.ply` 的目录
+    # 这样后续编码/validate/self-check 路径无需分叉.
+    input_ply_arg = getattr(args, "input_ply", None)
+    if input_ply_arg:
+        input_ply = Path(input_ply_arg)
+        if not input_ply.exists():
+            _die(f"input-ply 不存在: {input_ply}")
+        if not input_ply.is_file():
+            _die(f"input-ply 不是文件: {input_ply}")
+        if input_ply.suffix.lower() != ".ply":
+            _die(f"input-ply 必须是 .ply 文件: {input_ply}")
+        return [input_ply]
+
+    input_dir_arg = getattr(args, "input_dir", None)
+    if input_dir_arg:
+        input_dir = Path(input_dir_arg)
+        if not input_dir.exists():
+            _die(f"input-dir 不存在: {input_dir}")
+        if not input_dir.is_dir():
+            _die(f"input-dir 不是目录: {input_dir}")
+
+        ply_files = _list_ply_files(input_dir)
+        if not ply_files:
+            _die(f"input-dir 下未找到 .ply: {input_dir}")
+        return ply_files
+
+    # 理论上 argparse 的 required mutually exclusive group 已保证不会走到这里.
+    # 这里保留兜底,避免未来有人绕过 parser 直接调用 `_pack_cmd`.
+    _die("pack 需要二选一提供 --input-ply 或 --input-dir")
+
+
 # -----------------------------------------------------------------------------
 # PLY 读取(最小子集实现,保持与 Tools~/Splat4D/ply_sequence_to_splat4d.py 一致的假设)
 # -----------------------------------------------------------------------------
@@ -746,14 +780,8 @@ def _write_delta_v1_header(
 def _pack_cmd(args: argparse.Namespace) -> None:
     _ensure_webp_available()
 
-    input_dir = Path(args.input_dir)
     output_path = Path(args.output)
-    if not input_dir.exists():
-        _die(f"input-dir 不存在: {input_dir}")
-
-    ply_files = _list_ply_files(input_dir)
-    if not ply_files:
-        _die(f"input-dir 下未找到 .ply: {input_dir}")
+    ply_files = _resolve_pack_input_ply_files(args)
 
     frame_count = len(ply_files)
     _info(f"frames: {frame_count}")
@@ -1906,8 +1934,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     # pack
-    pack = sub.add_parser("pack", help="从 time_*.ply 序列打包生成 .sog4d")
-    pack.add_argument("--input-dir", required=True, help="包含 time_*.ply 的目录")
+    pack = sub.add_parser("pack", help="从单帧 .ply 或 `.ply` 序列打包生成 .sog4d")
+    input_group = pack.add_mutually_exclusive_group(required=True)
+    input_group.add_argument("--input-ply", help="单个 `.ply` 文件(单帧正式入口)")
+    input_group.add_argument("--input-dir", help="包含一个或多个 `.ply` 的目录(序列入口,目录里只有 1 帧也支持)")
     pack.add_argument("--output", required=True, help="输出 .sog4d 路径")
     pack.add_argument("--time-mapping", default="uniform", choices=["uniform", "explicit"], help="uniform 或 explicit")
     pack.add_argument("--frame-times", default=None, help="explicit 模式下的 frameTimesNormalized(逗号或文件路径)")

@@ -391,7 +391,8 @@ namespace Gsplat
                     }
                 }
 
-                // 初始 chunk: 以 (0,1) 为目标,确保播放起始可用.
+                // 初始 chunk: 以起始帧为目标,确保播放起始可用.
+                // 注意: 单帧 bundle 也继续走同一条 sequence/runtime 路径,这里只会自然退化为加载 1 帧.
                 var desiredStart = 0;
                 var desiredCount = m_enableChunking ? Mathf.Min(m_chunkFrameCountRequested, a.FrameCount) : a.FrameCount;
                 if (!TryLoadChunkTexturesIntoAsset(a, desiredStart, desiredCount, out var loadErr))

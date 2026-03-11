@@ -97,6 +97,9 @@ namespace Gsplat.Tests
             public string shNCentroidsPath;
             public string shNLabelsEncoding; // "full" | "delta-v1"
 
+            // full 模式
+            public string shNLabelsPath;
+
             // delta-v1
             public ShNDeltaSegmentJson[] shNDeltaSegments;
         }
@@ -411,6 +414,69 @@ namespace Gsplat.Tests
             Assert.IsNotNull(renderer, "prefab 上应自动挂载 GsplatSequenceRenderer");
             Assert.IsNotNull(renderer.SequenceAsset, "renderer.SequenceAsset 应自动绑定");
             Assert.AreEqual(3, renderer.SequenceAsset.FrameCount);
+            Assert.AreEqual((uint)4, renderer.SequenceAsset.SplatCount);
+            Assert.AreEqual(1, renderer.SequenceAsset.SHBands);
+        }
+
+        [Test]
+        public void Import_SingleFrameBundle_RemainsPlayableSequenceAsset()
+        {
+            // 目标:
+            // - `frameCount = 1` 的合法 `.sog4d` 仍然走正常 importer 路径.
+            // - 导入结果继续是 `GsplatSequenceAsset` + `GsplatSequenceRenderer`,而不是特殊分叉.
+            var baseZipBytes = ReadPackageFileBytes(k_BaseBundleZipPath);
+            if (!SupportsWebpDecoding(baseZipBytes))
+                Assert.Ignore("当前 Unity 版本不支持 WebP 解码,跳过 .sog4d importer 回归测试.");
+
+            var meta = new Sog4DMetaJson
+            {
+                splatCount = 4,
+                frameCount = 1,
+                timeMapping = new TimeMappingJson { type = "uniform" },
+                layout = new LayoutJson { width = 2, height = 2 },
+                streams = new StreamsJson
+                {
+                    position = new PositionStreamJson
+                    {
+                        rangeMin = new[] { Vector3.zero },
+                        rangeMax = new[] { Vector3.one },
+                        hiPath = "frames/{frame}/position_hi.webp",
+                        loPath = "frames/{frame}/position_lo.webp"
+                    },
+                    scale = new ScaleStreamJson
+                    {
+                        codebook = new[] { Vector3.one, Vector3.one * 2, Vector3.one * 3, Vector3.one * 4 },
+                        indicesPath = "frames/{frame}/scale_indices.webp"
+                    },
+                    rotation = new RotationStreamJson { path = "frames/{frame}/rotation.webp" },
+                    sh = new ShStreamJson
+                    {
+                        bands = 1,
+                        sh0Path = "frames/{frame}/sh0.webp",
+                        sh0Codebook = new float[256],
+                        shNCount = 4,
+                        shNCentroidsType = "f16",
+                        shNCentroidsPath = "shN_centroids.bin",
+                        shNLabelsEncoding = "full",
+                        shNLabelsPath = "frames/{frame}/shN_labels.webp"
+                    }
+                }
+            };
+
+            var assetPath = k_TestRootAssetPath + "/single_frame_valid.sog4d";
+            CreateBundleFromBase(baseZipBytes, assetPath, BuildMetaJsonBytes(meta));
+
+            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+            Assert.IsNotNull(prefab, "单帧 `.sog4d` 导入后 main prefab 应该存在");
+
+            var renderer = prefab.GetComponent<GsplatSequenceRenderer>();
+            Assert.IsNotNull(renderer, "单帧 `.sog4d` 导入后 prefab 应自动挂载 GsplatSequenceRenderer");
+            Assert.IsNotNull(renderer.SequenceAsset, "renderer.SequenceAsset 应自动绑定");
+            Assert.AreEqual(1, renderer.SequenceAsset.FrameCount, "单帧 bundle 不应伪造第二帧");
+            Assert.AreEqual(GsplatSequenceTimeMapping.MappingType.Uniform, renderer.SequenceAsset.TimeMapping.Type);
+            Assert.AreEqual(1, renderer.SequenceAsset.PositionRangeMin.Length);
+            Assert.AreEqual(1, renderer.SequenceAsset.PositionRangeMax.Length);
             Assert.AreEqual((uint)4, renderer.SequenceAsset.SplatCount);
             Assert.AreEqual(1, renderer.SequenceAsset.SHBands);
         }

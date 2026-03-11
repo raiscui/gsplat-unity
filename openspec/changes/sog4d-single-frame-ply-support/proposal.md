@@ -2,6 +2,11 @@
 
 当前仓库已经支持 `.sog4d` 序列 bundle,但产品入口、离线工具文案和 Unity 侧使用语义仍然明显偏向 `time_*.ply` 多帧序列。对于只有一帧的高斯资产,用户现在无法得到一条被正式承诺的 "`single .ply -> .sog4d -> Unity 正常显示与使用`" 工作流,这会让分发格式选择、导入预期和运行时行为都处于模糊状态。
 
+这里的职责边界必须明确:
+- `.ply -> .sog4d` 由离线脚本工具完成
+- Unity 不负责把 `.ply` 直接转换成 `.sog4d`
+- Unity 只负责导入脚本工具产出的 `.sog4d` 并完成显示与使用验证
+
 ## What Changes
 
 - 新增一个正式的 `.ply -> .sog4d` 转换能力,覆盖单帧 `.ply` 与多帧 `.ply` 序列两类输入。
@@ -18,6 +23,10 @@
   - 但显示结果应稳定等价于固定帧
   - 不应读取不存在的第二帧数据
 - 补充 README / Tools 文档 / 测试,把单帧转换和 Unity 使用链路写成正式支持路径。
+- 把仓库内的真实样例 `Assets/Gsplat/ply/s1-point_cloud.ply` 写成 change 的明确验收样例:
+  - 必须通过正式脚本工具入口成功转换为 `.sog4d`
+  - 必须导入当前 Unity 工程
+  - 必须完成实际显示验证,不能只停留在理论支持或最小伪造样例
 
 ## Capabilities
 
@@ -48,3 +57,4 @@
   - `Documentation~/`
   - `Tests/Editor/`
   - 需要补齐单帧 `.ply -> .sog4d -> Unity` 的回归验证
+  - 需要把 `Assets/Gsplat/ply/s1-point_cloud.ply` 纳入最终验收证据

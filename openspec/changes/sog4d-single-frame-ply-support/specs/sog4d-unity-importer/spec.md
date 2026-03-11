@@ -61,3 +61,25 @@
 - **WHEN** 用户把一个合法的单帧 `.sog4d` 拖入 Unity `Assets/`
 - **THEN** 当前 `.sog4d` importer MUST 直接完成导入
 - **AND** 系统 MUST NOT 提示用户改用 `.ply` importer 才能正常显示
+
+### Requirement: The real repository single-frame fixture MUST be importable and display-verifiable in the current Unity project
+系统 MUST 把由 `Assets/Gsplat/ply/s1-point_cloud.ply` 转出的单帧 `.sog4d` 视为本 change 的真实 Unity 验收样例.
+
+这里的前置条件是:
+
+- `.ply -> .sog4d` 转换已经由离线脚本工具完成
+- Unity 只负责导入这个 `.sog4d` 产物并验证显示
+
+对于这份样例对应的 `.sog4d` bundle:
+
+- 导入器 MUST 在当前 Unity 工程中完成正常导入
+- 系统 MUST 生成正常的序列资产与可实例化主对象
+- 该主对象 MUST 可被放入场景并完成显示验证
+
+系统 MUST NOT 只在最小测试夹具上满足“可导入”,却让这份真实样例停留在“导入成功但无法实际显示”的状态.
+
+#### Scenario: The real repository one-frame fixture imports and can be display-verified
+- **WHEN** 用户把脚本工具由 `Assets/Gsplat/ply/s1-point_cloud.ply` 转出的合法单帧 `.sog4d` 放入当前 Unity 工程的 `Assets/`
+- **THEN** 当前 `.sog4d` importer MUST 成功导入该 bundle
+- **AND** 系统 MUST 生成可被 `GsplatSequenceRenderer` 引用与实例化的主对象/序列资产
+- **AND** 该对象 MUST 能在场景中完成实际显示验证

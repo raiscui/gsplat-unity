@@ -298,6 +298,9 @@ When importing a `.sog4d` into Unity, the package:
 - Creates a playable prefab (main object) with a `GsplatSequenceRenderer` component.
 - Evaluates `(i0, i1, a)` from `TimeNormalized`, then runs a compute decode+interpolate pass to write float buffers.
   - Sorting and rendering reuse the existing Gsplat pipeline.
+- A one-frame bundle (`frameCount = 1`) still stays on this exact sequence path.
+  - Unity still imports it as a `GsplatSequenceAsset`.
+  - `TimeNormalized` / `AutoPlay` / `Loop` remain available, but playback naturally degenerates to a fixed frame (`i0 = i1 = 0`, `a = 0`).
 
 Player build runtime loading (keep the bundle compressed):
 - You can load a `.sog4d` ZIP bundle at runtime via `GsplatSequenceRenderer`:
@@ -305,7 +308,20 @@ Player build runtime loading (keep the bundle compressed):
   - `RuntimeSog4dBundle`: reads bytes from a `TextAsset`.
 - Enable `RuntimeEnableChunkStreaming` to load only a frame chunk (with 1-frame overlap) on demand, reducing VRAM peak for long sequences.
 
-Offline exporter (PLY sequence -> `.sog4d`):
+Offline exporter (single `.ply` or PLY sequence -> `.sog4d`):
+
+Single-frame `.ply` (formal path):
+
+```bash
+python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
+  --input-ply /path/to/frame.ply \
+  --output out_single_frame.sog4d \
+  --time-mapping uniform \
+  --sh-bands 0 \
+  --self-check
+```
+
+Sequence directory:
 
 ```bash
 python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
@@ -317,6 +333,11 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
   --delta-segment-length 50 \
   --self-check
 ```
+
+Input rules:
+- `--input-ply` and `--input-dir` are mutually exclusive.
+- If you only have one `.ply`, prefer `--input-ply` instead of creating a temporary directory.
+- A one-frame `.sog4d` still imports as a `GsplatSequenceAsset` and can be used directly with `GsplatSequenceRenderer`.
 
 Common import errors and fixes:
 - `Unity ImageConversion.LoadImage returned false`: your Unity version may not support WebP decoding. On macOS Editor, the package falls back to an embedded `libwebp` decoder; if it still fails, make sure `Editor/Plugins/macOS/libGsplatWebpDecoder.dylib` is present and imported.

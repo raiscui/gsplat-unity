@@ -236,6 +236,8 @@ namespace Gsplat.Editor
                 if (meta.splatCount <= 0)
                     return Fail(ctx, $"meta.json invalid splatCount: {meta.splatCount}");
 
+                // 单帧 `.sog4d` 也是合法输入,因此这里只要求 `frameCount > 0`.
+                // 真正的单帧固定帧语义由 runtime 的时间评估与 decode 退化路径负责.
                 if (meta.frameCount <= 0)
                     return Fail(ctx, $"meta.json invalid frameCount: {meta.frameCount}");
 

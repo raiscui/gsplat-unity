@@ -2914,3 +2914,276 @@
     - 结果=`skipped`
     - 原因=`HDRP package is not loaded, skipping HDRP-specific LiDAR A2C test.`
     - 这说明反射版测试可被 TestRunner 正常加载与执行,且在非 HDRP 工程中按预期跳过,不会再造成编译失败。
+
+## 2026-03-11 16:41:00 +0800 新任务: sog4d 单帧 ply 正式支持与真实样例闭环验证
+
+### 目标
+
+- 以真实样例 `/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Assets/Gsplat/ply/s1-point_cloud.ply` 为准,打通:
+  - 单帧 `.ply -> .sog4d` 正式转换入口
+  - Unity 导入 `.sog4d`
+  - 场景里可正常显示与使用
+- 按 `openspec/changes/sog4d-single-frame-ply-support/tasks.md` 完成实现、验证和提交。
+
+### 现象
+
+- 当前 `Tools~/Sog4D/ply_sequence_to_sog4d.py pack` 正式 CLI 只有 `--input-dir`.
+- 对真实样例直接使用 `--input-ply` 时,`argparse` 会报缺少 `--input-dir`.
+- 已有静态阅读显示 importer/runtime 很可能天然支持 `frameCount = 1`,但还缺真实自动化证据与 Unity 闭环验证。
+
+### 当前主假设与备选解释
+
+- 主假设:
+  - 首要缺口在 exporter CLI 入口,补完 `--input-ply` 并归一到现有 `ply_files` 主流程后,单帧 bundle 将可沿现有 `.sog4d` importer/runtime 正常工作。
+- 备选解释:
+  - 即使 exporter 能产出 `frameCount = 1`,Unity importer 或 runtime 某处仍可能隐含依赖第二帧。
+- 证伪方式:
+  - 先做最小工具侧验证,再做 importer/runtime 单测与 Unity 实际导入显示验证。
+
+### 下一步行动
+
+- [ ] 读取并更新 `Tools~/Sog4D/ply_sequence_to_sog4d.py` 的 CLI 与单帧归一路径。
+- [ ] 审计 importer/runtime 的单帧 guard,只在确有失败证据时做最小修复。
+- [ ] 补测试与文档,然后用真实样例生成 `.sog4d` 并在 Unity 验证显示。
+- [ ] 最后回写 `notes.md` / `WORKLOG.md` / `ERRORFIX.md`,并执行 git commit。
+
+### 当前状态
+
+**目前在阶段1(重新对齐上下文并准备开始实现)**
+- OpenSpec change: `sog4d-single-frame-ply-support`
+- schema: `spec-driven`
+- progress: `0 / 13`
+- 当前优先顺序:
+  - 先核对上次真实样例转换进程状态
+  - 再实现 exporter CLI 单帧入口
+  - 再做 importer/runtime 审计与验证
+
+## 2026-03-11 18:55:00 +0800 规格补充: 把真实样例验收写成 OpenSpec 硬要求
+
+### 目标
+
+- 不只保留“通用单帧支持”的抽象规格.
+- 还要把这次用户明确指定的真实验收样例:
+  - `/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Assets/Gsplat/ply/s1-point_cloud.ply`
+  写进 `sog4d-single-frame-ply-support` change.
+- 最终让 spec/tasks 明确要求:
+  - 必须用这份真实样例完成 `.ply -> .sog4d`
+  - 必须在当前 Unity 工程导入并完成显示验证
+
+### 下一步行动
+
+- [x] 更新 proposal,把真实样例验收加入 change 目标与 impact.
+- [x] 更新 design,把“真实样例强制验收”加入测试与验证策略.
+- [x] 更新 specs,新增基于 `s1-point_cloud.ply` 的 acceptance scenario.
+- [x] 更新 tasks,把真实样例转换与 Unity 显示验证写成显式 checklist.
+
+### 当前状态
+
+**目前在阶段1(规格同步已完成)**
+- 当前不是停留在会话口头约定.
+- `sog4d-single-frame-ply-support` 已正式把 `Assets/Gsplat/ply/s1-point_cloud.ply` 写成真实验收夹具.
+- tasks 已新增显式步骤,要求完成真实 `.ply -> .sog4d` 转换证据与 Unity 显示验证。
+
+## 2026-03-11 19:02:00 +0800 规格澄清: `.ply -> .sog4d` 属于脚本工具职责,不属于 Unity 内部转换
+
+### 用户澄清
+
+- `.ply -> .sog4d` 必须通过脚本工具完成.
+- 不要求也不应该在 Unity 内部完成 `.ply -> .sog4d` 转换.
+- Unity 侧只负责:
+  - 导入脚本工具产出的 `.sog4d`
+  - 做显示验证
+
+### 下一步行动
+
+- [ ] 调整 proposal / design / specs / tasks 的措辞,避免把“转换链路”和“Unity 导入链路”混在一起.
+
+### 当前状态
+
+**目前在阶段1(规格措辞纠偏)**
+- 当前要做的是把职责边界写清楚.
+- 不是改实现,而是防止 spec 让人误以为 Unity 里也要承担 `.ply -> .sog4d` 转换。
+
+## 2026-03-11 20:05:00 +0800 继续实施: `sog4d-single-frame-ply-support` 进入真实显示验收排查
+
+### 已完成的实现与验证证据
+
+- [x] 工具侧已扩展单帧正式入口:
+  - `Tools~/Sog4D/ply_sequence_to_sog4d.py`
+  - 新增 `--input-ply`
+  - 与 `--input-dir` 做互斥校验
+  - 单帧入口已归一到既有 `ply_files` 主流程
+- [x] importer / runtime 已补单帧显式语义:
+  - `Editor/GsplatSog4DImporter.cs`
+  - `Runtime/GsplatSog4DRuntimeBundle.cs`
+  - `Runtime/GsplatSequenceRenderer.cs`
+- [x] 自动化验证已拿到:
+  - Python `Tools~/Sog4D/tests/test_single_frame_cli.py` 通过
+  - Unity `Gsplat.Tests.GsplatSog4DImporterTests` 通过
+  - Unity `Gsplat.Tests.GsplatSequenceAssetTests` 通过
+- [x] 真实样例已转换成功:
+  - 输入: `/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Assets/Gsplat/ply/s1-point_cloud.ply`
+  - 输出: `/tmp/s1_from_file.sog4d`
+  - `self-check` / `validate` 已通过
+
+### 当前现象
+
+- [ ] `4.4` 仍未完成:
+  - 真实 `.sog4d` 在 Unity 中已经导入成功
+  - `GsplatSequenceRenderer.Valid = true`
+  - `SplatCount = 169133`
+  - `SequenceAsset` 指向真实 `.sog4d`
+  - GPU 资源估算日志也已出现
+  - 但当前截图证据里仍看不到明确点云显示
+
+### 当前主假设与备选解释
+
+- 主假设:
+  - 问题不在 importer 失败,而在“真实 draw 是否提交到正确相机 / 是否被 bounds 或相机 framing 吃掉 / 是否材质解码后几乎不可见”的显示链路.
+- 备选解释:
+  - 真实 `.sog4d` 的 decode / opacity / color 数据虽然结构合法,但在当前 sequence 路线下表现与原始 `.ply` 不一致,导致“有效但肉眼近乎不可见”.
+- 当前最小证伪实验:
+  - 先停在稳定编辑态.
+  - 对照验证原始 `.ply` 经 `GsplatRenderer` 是否可见.
+  - 再对照 `GsplatSequenceRenderer` 的相机 framing / bounds / draw 提交证据.
+
+### 下一步行动
+
+- [ ] 查询当前 Unity PlayMode / 场景对象状态,避免继续在不稳定现场上取证.
+- [ ] 用真实 `.ply` 建一个对照对象,确认源资产本身在当前场景与相机下能否被看见.
+- [ ] 如果 `.ply` 可见而 `.sog4d` 不可见:
+  - 优先检查 sequence renderer 的 bounds, draw 提交路径,以及材质/解码可见性.
+- [ ] 一旦拿到可见截图或根因证据:
+  - 回填 `openspec/changes/sog4d-single-frame-ply-support/tasks.md`
+  - 更新 `notes.md` / `WORKLOG.md`
+  - 再决定是否执行 git commit
+
+### 当前状态
+
+**目前在阶段3(真实显示验收与根因排查)**
+- 我接下来不会先改代码.
+- 我会先把“原始 `.ply` 能不能显示”和“sequence draw 是否真的落到相机”这两件事拆开验证,避免误修。
+
+## 2026-03-11 21:35:00 +0800 收尾: 真实 `.sog4d` Unity 显示验收已拿到 on-screen 证据
+
+### 现象
+
+- `manage_camera screenshot` 多次给出“空画面”.
+- 但直接抓 Unity 主窗口的 on-screen GameView 后,已经能看到 `Sog4DSingleFrameVerify` 的白色点云实际显示.
+
+### 已验证结论
+
+- [x] 真实样例 `.sog4d` 不是“只导入不显示”.
+- [x] 当前 Unity 工程中,`Assets/Gsplat/sog4d/s1-point_cloud_single.sog4d` 对应的 `GsplatSequenceRenderer` 可以在实际 GameView 中显示.
+- [x] `manage_camera screenshot` 对这类验证会出现假阴性:
+  - EditMode 下还会叠加 `ActiveCameraOnly` 的 active camera 门禁.
+  - 即便切到 `AllCameras`,它也不等价于“抓当前屏幕上的 GameView”.
+  - 因此这次显示验收最终以 Unity 主窗口 on-screen 取证为准.
+
+### 新发现(支线)
+
+- [ ] 原始 `.ply` 对照对象在 `GsplatRenderer` 路线触发了独立异常:
+  - `ArgumentOutOfRangeException`
+  - `Runtime/GsplatRenderer.cs:2232`
+  - 这影响了“拿 `.ply` 做对照”的实验质量,但不影响本次 `.sog4d` 单帧支持验收结论.
+
+### 当前状态
+
+**目前在阶段4(回写记录、勾任务、准备提交)**
+- 下一步:
+  - 回写 `notes.md` / `WORKLOG.md` / `LATER_PLANS.md`
+  - 刷新 OpenSpec 任务状态
+  - 再整理 package 仓库内需要提交的改动
+
+## 2026-03-11 22:02:00 +0800 继续收尾: 补六文件上下文并准备 git 提交
+
+### 当前行动目的
+
+- 当前实现与真实样例验证已经完成.
+- 还差三类闭环:
+  - 六文件上下文补写
+  - `openspec` 状态刷新与 `4.6` 勾选
+  - package 仓库内本次改动的 git 提交
+
+### 下一步行动
+
+- [ ] 追加 `notes.md`,记录这次 Unity 显示验收为什么不能以 `manage_camera screenshot` 作为最终证据.
+- [ ] 追加 `WORKLOG.md`,记录真实样例 `s1-point_cloud.ply -> .sog4d -> Unity 显示` 的最终闭环.
+- [ ] 追加 `LATER_PLANS.md`,记录 `.ply` 对照对象触发 `Runtime/GsplatRenderer.cs:2232` 的独立问题,避免混入本次 change 结论.
+- [ ] 运行 `openspec status` 与 `openspec instructions apply`,确认当前 change 的 artifact 与 apply-ready 状态.
+- [ ] 将 `openspec/changes/sog4d-single-frame-ply-support/tasks.md` 的 `4.6` 勾为完成.
+- [ ] 复查 `git status --short`,只提交本次 change 相关文件,避开用户原有脏改动.
+
+### 当前状态
+
+**目前在阶段4(收尾闭环与提交前核对)**
+- 我现在先补记录,再做 OpenSpec 勾选和最终验证.
+
+## 2026-03-11 22:08:00 +0800 进展: OpenSpec 已确认 apply-ready
+
+### 已完成
+
+- [x] `notes.md` 已补写真实样例显示验收证据.
+- [x] `WORKLOG.md` 已补写单帧 `.ply -> .sog4d -> Unity` 闭环.
+- [x] `LATER_PLANS.md` 已记录 `.ply` 原生对照对象的独立异常.
+- [x] 已执行:
+  - `openspec status --change "sog4d-single-frame-ply-support" --json`
+  - `openspec instructions apply --change "sog4d-single-frame-ply-support" --json`
+- [x] CLI 结果确认:
+  - `schemaName = spec-driven`
+  - artifact 全部 `done`
+  - `state = ready`
+  - 原 `4.6` 是唯一剩余项
+- [x] `openspec/changes/sog4d-single-frame-ply-support/tasks.md` 的 `4.6` 已勾完成.
+
+### 下一步行动
+
+- [ ] 重新做一轮提交前验证,避免只复用旧结果.
+- [ ] 复查 `git status --short`,确认哪些文件属于本次 change,哪些是用户原有脏改动.
+- [ ] 只暂存本次相关文件并创建 git commit.
+
+### 当前状态
+
+**目前在阶段4(提交前验证与整理暂存区)**
+- OpenSpec 闭环已经完成,现在进入最后的验证与提交.
+
+## 2026-03-11 22:18:00 +0800 进展: 提交前验证已完成
+
+### 新鲜验证证据
+
+- [x] Python 工具侧:
+  - `python3 -m unittest Tools~/Sog4D/tests/test_single_frame_cli.py`
+  - 结果: `Ran 2 tests`, `OK`
+- [x] 真实样例转换:
+  - `python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack --input-ply .../Assets/Gsplat/ply/s1-point_cloud.ply --output /tmp/s1_from_file_verify_20260311.sog4d --time-mapping uniform --sh-bands 0 --self-check`
+  - `python3 Tools~/Sog4D/ply_sequence_to_sog4d.py validate --input /tmp/s1_from_file_verify_20260311.sog4d`
+  - 结果:
+    - `frames: 1`
+    - `splats: 169133`
+    - `pack done`
+    - `validate ok (bands=0)`
+- [x] Unity 定向 EditMode:
+  - `Gsplat.Tests.GsplatSog4DImporterTests`
+    - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_sog4d_importer_singleframe_2026-03-11.xml`
+    - 结果: `total=11`, `passed=11`, `failed=0`
+  - `Gsplat.Tests.GsplatSequenceAssetTests`
+    - XML: `/Users/cuiluming/local_doc/l_dev/my/unity/_tmp_gsplat_pkgtests/Logs/TestResults_sequence_asset_singleframe_2026-03-11.xml`
+    - 结果: `total=3`, `passed=3`, `failed=0`
+
+### 验证中的额外注意
+
+- Unity 6000.3.8f1 命令行在本机仍存在“带 `-quit` 但不生成 XML”的假成功现象.
+- 本轮已按经验去掉 `-quit` 重跑,并拿到了真实 `testResults` XML,因此这次测试结果可信.
+
+### 下一步行动
+
+- [ ] 只暂存本次 `sog4d-single-frame-ply-support` 相关文件.
+- [ ] 明确排除用户原有脏改动:
+  - `Runtime/GsplatUtils.cs`
+  - `Tests/Editor/GsplatLidarScanTests.cs`
+- [ ] 创建 git commit.
+
+### 当前状态
+
+**目前在阶段4(整理暂存区并提交)**
+- Fresh verification 已完成,接下来只剩精确提交边界.

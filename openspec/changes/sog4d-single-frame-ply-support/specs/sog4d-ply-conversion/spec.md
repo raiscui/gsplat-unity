@@ -76,3 +76,20 @@
 - **WHEN** 用户对一个合法的单帧 `.sog4d` bundle 执行 validate 或 self-check
 - **THEN** 系统 MUST 报告校验通过
 - **AND** 不得输出“至少需要两帧”之类的错误
+
+### Requirement: The repository reference single-frame PLY fixture MUST remain convertible through the formal one-frame path
+系统 MUST 把仓库内的真实样例 `Assets/Gsplat/ply/s1-point_cloud.ply` 视为本 capability 的显式验收夹具.
+
+对于这份样例,系统 MUST:
+
+- 允许用户通过正式脚本工具入口执行 `.ply -> .sog4d` 打包
+- 生成一个合法的 `frameCount = 1` bundle
+- 让该 bundle 通过 validate / self-check
+
+系统 MUST NOT 仅在“最小伪造样例”上支持单帧路径,却让这份仓库真实样例无法完成正式转换.
+
+#### Scenario: The real repository PLY fixture packs as a one-frame `.sog4d`
+- **WHEN** 用户使用脚本工具把 `Assets/Gsplat/ply/s1-point_cloud.ply` 作为输入执行正式单帧 `.sog4d` 打包
+- **THEN** 系统 MUST 成功输出一个合法的 `.sog4d` bundle
+- **AND** 该 bundle 的 `meta.json.frameCount` MUST 等于 `1`
+- **AND** 对该 bundle 执行 validate 或 self-check 时 MUST 通过

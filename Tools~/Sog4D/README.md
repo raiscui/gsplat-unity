@@ -1,7 +1,11 @@
 # SOG4D Tools
 
 这是一组离线工具.
-它用于把逐帧 keyframe 的 3DGS/4DGS PLY 序列打包为单文件 `.sog4d`(ZIP bundle).
+它用于把逐帧 keyframe 的 3DGS/4DGS PLY 数据打包为单文件 `.sog4d`(ZIP bundle).
+
+正式支持两类输入:
+- 单帧输入: 一个明确指定的 `.ply` 文件(`--input-ply`)
+- 序列输入: 一个包含一个或多个 `.ply` 的目录(`--input-dir`)
 
 核心目标:
 - 单文件分发友好.
@@ -52,13 +56,29 @@ python3 -m pip install numpy pillow scipy scikit-learn
 
 ## 1. 输入数据前提(避免打包到一半才炸)
 
-### 1.1 PLY 文件命名与排序
+### 1.1 正式输入形态与排序规则
 
-脚本会扫描 `--input-dir` 下的所有 `.ply`,并按文件名里的数字排序.
-推荐命名:
+`pack` 命令要求你二选一提供:
+- `--input-ply /path/to/frame.ply`
+- `--input-dir /path/to/ply_dir`
+
+其中:
+- `--input-ply` 是单帧正式入口,推荐用于静态快照或只有 1 帧的资产.
+- `--input-dir` 会扫描目录下的所有 `.ply`,并按文件名里的数字排序.
+- 目录模式即使只有 1 个 `.ply` 也依然支持,但如果你本来就只有一个文件,更推荐直接用 `--input-ply`.
+
+序列目录推荐命名:
 - `time_00000.ply`
 - `time_00001.ply`
 - ...
+
+常见输入错误:
+- 同时给了 `--input-ply` 和 `--input-dir`
+  - 会被 `argparse` 直接拒绝,因为这两个入口是互斥的.
+- `--input-ply` 指到目录或非 `.ply` 文件
+  - 会在打包开始前直接失败,并打印明确错误.
+- `--input-dir` 目录里没有 `.ply`
+  - 会在扫描输入阶段直接失败.
 
 建议:
 - `--output` 尽量放到一个独立的输出目录里,不要和 `--input-dir` 混在同一个目录.
@@ -89,7 +109,30 @@ SH0-only(也就是 `--sh-bands 0`)需要:
 你可以先用最小可用跑通链路.
 再逐步打开 SH 和 delta-v1.
 
-### 2.1 最小可用(强制 SH0-only,先跑通)
+### 2.1 单帧 `.ply` 最小可用(正式入口,推荐先跑通)
+
+适用场景:
+- 你手头只有一个 `.ply`.
+- 你想先确认 `.ply -> .sog4d -> Unity` 单帧链路完整可用.
+- 你希望导入后继续使用统一的 `GsplatSequenceAsset` / `GsplatSequenceRenderer` 路线.
+
+```bash
+python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
+  --input-ply /path/to/frame.ply \
+  --output out_single_frame.sog4d \
+  --time-mapping uniform \
+  --sh-bands 0 \
+  --self-check
+```
+
+结果语义:
+- 输出仍然是标准 `.sog4d` bundle,不是单帧特化格式.
+- `meta.json.frameCount = 1`
+- 导入 Unity 后仍然会生成 `GsplatSequenceAsset` 与带 `GsplatSequenceRenderer` 的 prefab.
+- `TimeNormalized` / `AutoPlay` / `Loop` 等 API 仍然可设置.
+  - 但显示结果会稳定退化为固定帧,不会伪造第二帧.
+
+### 2.2 最小可用(强制 SH0-only,先跑通)
 
 适用场景:
 - 先确认 Unity 导入与播放链路没问题.
@@ -104,7 +147,7 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
   --self-check
 ```
 
-### 2.2 带 SH3(默认推荐,delta-v1)
+### 2.3 带 SH3(默认推荐,delta-v1)
 
 适用场景:
 - 保留 SH3 细节.
@@ -128,7 +171,7 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
 - `--delta-segment-length` 越大,segment 数越少,文件数更少.
   但单个 delta 文件会更大.
 
-### 2.3 带 SH3(全量 labels,不使用 delta)
+### 2.4 带 SH3(全量 labels,不使用 delta)
 
 适用场景:
 - 你想要最直观的 bundle 结构.
@@ -146,7 +189,7 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
   --self-check
 ```
 
-### 2.4 体积优先(更小的 shN palette)
+### 2.5 体积优先(更小的 shN palette)
 
 适用场景:
 - 更小 bundle.
@@ -165,7 +208,7 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
   --self-check
 ```
 
-### 2.5 质量优先(更大采样量,更稳定的 codebook/palette)
+### 2.6 质量优先(更大采样量,更稳定的 codebook/palette)
 
 适用场景:
 - 你在做最终交付.
@@ -211,7 +254,7 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
   - 如果你想压缩 `meta.json`/`shN_centroids.bin`/`sh/delta_*.bin`,可以改为 `deflated`.
   - 但注意: `.sog4d` 的体积大头通常在 WebP 数据图里,ZIP 再压缩收益往往不大.
 
-### 2.6 显式时间轴(time-mapping=explicit)
+### 2.7 显式时间轴(time-mapping=explicit)
 
 适用场景:
 - 你的帧不是等间隔采样.
@@ -241,7 +284,7 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
   --self-check
 ```
 
-### 2.7 线性 opacity / 线性 scale(当你的 PLY 不是 logit/log-scale)
+### 2.8 线性 opacity / 线性 scale(当你的 PLY 不是 logit/log-scale)
 
 适用场景:
 - 你的 `opacity` 已经是 [0,1].
@@ -268,7 +311,7 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
 
 - `Tools~/Sog4D/FreeTimeGsCheckpointToSog4D.md`
 
-### 2.8 手动指定 layout(调试或对齐外部工具)
+### 2.9 手动指定 layout(调试或对齐外部工具)
 
 适用场景:
 - 你想要固定宽高.
@@ -288,7 +331,7 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
 注意:
 - `width*height` 必须 >= `splatCount`.
 
-### 2.9 ZIP 压缩方式(通常不需要改)
+### 2.10 ZIP 压缩方式(通常不需要改)
 
 适用场景:
 - 你极端在意 `meta.json` 与 delta bin 的体积.
@@ -308,7 +351,7 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack \
 - WebP 本身是压缩格式.
   ZIP 再压缩通常收益很小.
 
-### 2.10 查看 `.sog4d` bundle 内容(它本质是 ZIP)
+### 2.11 查看 `.sog4d` bundle 内容(它本质是 ZIP)
 
 ```bash
 unzip -l out.sog4d | head
@@ -401,12 +444,14 @@ python3 Tools~/Sog4D/ply_sequence_to_sog4d.py normalize-meta \
 2. 等待导入完成.
    - importer 会把 WebP 数据图解码成 `Texture2DArray` 子资产.
    - importer 会生成一个可直接拖拽使用的 prefab(main object),并挂上 `GsplatSequenceRenderer`.
+   - 即使输入只有 1 帧,导入后依然是 `GsplatSequenceAsset`,不会改走别的 importer.
 3. 把该 prefab 拖进场景.
 4. 在 Inspector 里设置播放参数:
    - `AutoPlay`: 自动播放.
    - `Speed`: 归一化时间/秒.
    - `Loop`: 循环.
    - `InterpolationMode`: `Nearest` 或 `Linear`.
+   - 单帧资产下,这些时间控制仍可设置,但会稳定显示同一帧.
 5. 如果 `DecodeComputeShader` 没有自动回填,请手动指定为:
    - `Packages/wu.yize.gsplat/Runtime/Shaders/GsplatSequenceDecode.compute`
 

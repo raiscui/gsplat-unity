@@ -221,3 +221,18 @@
 
 ## 2026-03-09 22:18:00 +0800
 - 回溯结果: 本轮 `Gsplat.Tests.Editor` 的 HDRP 直接依赖编译失败已完成修复,没有新增延期事项.
+
+## 2026-03-11 21:50:00 +0800
+- 候选独立修复: 调查真实 `.ply` 对照对象在 `GsplatRenderer` 路线触发的越界异常.
+  - 现象:
+    - 为了对照验证真实 `s1-point_cloud.ply` 在 `.ply` 原生路线是否可见,把真实 `GsplatAsset` 绑定到对照对象后触发 `ArgumentOutOfRangeException`.
+  - 当前证据:
+    - stack 指向:
+      - `Runtime/GsplatRenderer.cs:2232`
+      - `Gsplat.GsplatRenderer.SetBufferData()`
+  - 为什么先不混入本轮:
+    - 本次 change 的目标是“单帧 `.ply -> .sog4d` 转换与 `.sog4d` 在 Unity 中正常导入显示”.
+    - 真实 `.sog4d` 路线已经拿到独立显示证据,这个 `.ply` 原生路线异常不会推翻本次验收结论.
+  - 后续建议:
+    - 单开一个 bugfix 任务.
+    - 先最小复现 `SetBufferData()` 的输入规模与索引边界,再决定是否修运行时或测试夹具.

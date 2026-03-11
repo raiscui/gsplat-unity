@@ -219,6 +219,31 @@
   - `LidarIntensity` 与 `LidarUnscannedIntensity` 都要随距离衰减.
   - 并且各自有独立的"衰减乘数"可调.
 
+## 2026-03-11 16:48:00 +0800 追加: sog4d 单帧 ply 支持的最小证据链
+
+- 真实样例:
+  - `/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Assets/Gsplat/ply/s1-point_cloud.ply`
+  - 已确认是 binary little endian PLY.
+- 动态证据:
+  - 目录模式 `pack --input-dir ...` 已经成功产出 `/tmp/s1_from_dir.sog4d`.
+  - 这说明 `.sog4d` 打包主链路和单帧 `frameCount = 1` 产物本身不是天然不可行.
+  - 直接文件模式 `pack --input-ply ...` 当前失败点是 `argparse`:
+    - 仍强制要求 `--input-dir`
+    - 说明正式缺口首先在 CLI 产品入口,而不是编码主流程.
+- 静态证据:
+  - `Runtime/GsplatSequenceAsset.cs`
+    - `EvaluateFromTimeNormalized(...)` 已对 `frameCount == 1` 返回 `i0=0, i1=0, a=0`.
+  - `Runtime/GsplatSequenceRenderer.cs`
+    - decode 前会把 `useLinear` 约束为 `InterpolationMode == Linear && i0 != i1`.
+    - 单帧时自然退化为不读第二帧.
+  - `Runtime/Shaders/GsplatSequenceDecode.compute`
+    - `_UseLinear == 0 || _Frame0 == _Frame1` 时直接走单帧解码路径.
+  - `Editor/GsplatSog4DImporter.cs` / `Runtime/GsplatSog4DRuntimeBundle.cs`
+    - 目前只看到 `frameCount > 0` 的显式要求,没看到“必须至少两帧”的静态证据.
+- 当前工作假设:
+  - 先补 exporter CLI 单帧入口与测试.
+  - 再用 importer/runtime 回归和真实 Unity 导入验证,确认不存在隐藏的第二帧依赖.
+
 ## 2026-03-08 20:42:00 +0800 追加: external mesh 雷达粒子稳定跑到背光面
 
 - 用户最新现场证据:
@@ -1589,3 +1614,48 @@
   - 要补 `frameCount = 1` 的导入成功与可引用语义
 - `4dgs-keyframe-motion`
   - 要补单帧时固定索引/固定插值因子的退化 requirement
+
+## 2026-03-11 21:40:00 +0800 主题: 真实单帧 `.sog4d` 的 Unity 显示验收证据
+
+### 现象
+
+- 真实样例 `Assets/Gsplat/ply/s1-point_cloud.ply` 已经成功经脚本工具转换为单帧 `.sog4d`.
+- Unity 中对应的 `GsplatSequenceRenderer` 已经满足:
+  - `Valid = true`
+  - `SplatCount = 169133`
+  - `SequenceAsset = Assets/Gsplat/sog4d/s1-point_cloud_single.sog4d`
+- 但 `manage_camera screenshot` 多次返回空画面,容易让人误以为“只导入,不显示”.
+
+### 当前假设
+
+- 主假设:
+  - `manage_camera screenshot` 没有等价捕获到当前 on-screen GameView,因此给出了显示链路上的假阴性.
+- 备选解释:
+  - 真实 `.sog4d` 虽然导入成功,但实际 draw 没有进入可见相机.
+
+### 验证动作
+
+- 静态证据:
+  - EditMode 默认 `GsplatSettings.CameraMode = ActiveCameraOnly`.
+  - 临时探针确认 `GsplatSorter.Instance.TryGetActiveCamera(...)` 在当前编辑态选中的 active camera 是 `SceneCamera(SceneView)`,不是 `Main Camera`.
+- 动态证据:
+  - 即便临时切到 `AllCameras`,`manage_camera screenshot` 仍给出空图.
+  - 改为直接抓 Unity 主窗口的 on-screen 画面后,在 GameView 中可以清楚看到 `Sog4DSingleFrameVerify` 的白色点云.
+  - on-screen 取证文件:
+    - `/tmp/unity_window_now.png`
+
+### 已验证结论
+
+- 这次真实样例 `.sog4d` 不是“只导入不显示”.
+- 当前 Unity 工程内,脚本工具产出的单帧 `.sog4d` 已经可以被 `GsplatSequenceRenderer` 正常显示.
+- 对这类 EditMode 验收:
+  - `manage_camera screenshot` 不能直接当最终显示证据
+  - 最终应以 Unity 主窗口 on-screen GameView 取证为准
+
+### 额外发现
+
+- 为了做原始 `.ply` 对照实验,曾把真实 `GsplatAsset` 绑定到 `PlySingleFrameVerify`.
+- 该支线触发了独立异常:
+  - `ArgumentOutOfRangeException`
+  - `Runtime/GsplatRenderer.cs:2232`
+- 这个问题影响 `.ply` 对照实验,但不影响本次 `.sog4d` 单帧支持的验收结论.
