@@ -20,6 +20,7 @@ namespace Gsplat
         // --------------------------------------------------------------------
         Material m_materialInstance;
         byte m_materialInstanceSHBands = 255;
+        bool? m_materialInstanceGsplatAaEnabled;
 
         MaterialPropertyBlock m_propertyBlock;
         public GraphicsBuffer PositionBuffer { get; private set; }
@@ -148,6 +149,23 @@ namespace Gsplat
 
             m_materialInstance = null;
             m_materialInstanceSHBands = 255;
+            m_materialInstanceGsplatAaEnabled = null;
+        }
+
+        void ApplyPerRendererShaderKeywords(Material mat, bool enableFootprintAaCompensation)
+        {
+            if (!mat)
+                return;
+
+            if (m_materialInstanceGsplatAaEnabled == enableFootprintAaCompensation)
+                return;
+
+            if (enableFootprintAaCompensation)
+                mat.EnableKeyword("GSPLAT_AA");
+            else
+                mat.DisableKeyword("GSPLAT_AA");
+
+            m_materialInstanceGsplatAaEnabled = enableFootprintAaCompensation;
         }
 
         void BindBuffersToPropertyBlock()
@@ -453,7 +471,7 @@ namespace Gsplat
         // 避免两个入口的行为漂移.
         // ----------------------------------------------------------------
         bool TryPrepareRender(uint splatCount, uint splatBaseIndex, Transform transform, Bounds localBounds, int layer,
-            bool gammaToLinear, int shDegree, float timeNormalized, float motionPadding,
+            bool gammaToLinear, bool enableFootprintAaCompensation, int shDegree, float timeNormalized, float motionPadding,
             int timeModel, float temporalCutoff,
             out GsplatSettings settings, out RenderParams rp, out int instanceCount)
         {
@@ -526,6 +544,7 @@ namespace Gsplat
             // - 这里优先使用 per-renderer 材质实例,以保证 Metal 下 buffer 绑定稳态.
             // - 如果实例创建失败(配置缺失等),再回退到 settings 的共享材质.
             var mat = m_materialInstance ? m_materialInstance : settings.Materials[SHBands];
+            ApplyPerRendererShaderKeywords(mat, enableFootprintAaCompensation);
             rp = new RenderParams(mat)
             {
                 worldBounds = GsplatUtils.CalcWorldBounds(localBounds, transform),
@@ -547,11 +566,13 @@ namespace Gsplat
         /// - 该函数不会做 ActiveCameraOnly 的相机选择逻辑,调用者必须自己确保 camera 是“应该渲染的目标相机”.
         /// </remarks>
         public void RenderForCamera(Camera camera, uint splatCount, Transform transform, Bounds localBounds, int layer,
-            bool gammaToLinear = false, int shDegree = 3, float timeNormalized = 0.0f, float motionPadding = 0.0f,
+            bool gammaToLinear = false, bool enableFootprintAaCompensation = false, int shDegree = 3,
+            float timeNormalized = 0.0f, float motionPadding = 0.0f,
             int timeModel = 1, float temporalCutoff = 0.01f, string diagTag = "RenderForCamera",
             uint splatBaseIndex = 0)
         {
-            if (!TryPrepareRender(splatCount, splatBaseIndex, transform, localBounds, layer, gammaToLinear, shDegree,
+            if (!TryPrepareRender(splatCount, splatBaseIndex, transform, localBounds, layer, gammaToLinear,
+                    enableFootprintAaCompensation, shDegree,
                     timeNormalized,
                     motionPadding, timeModel, temporalCutoff,
                     out var settings, out var rp, out var instanceCount))
@@ -597,10 +618,12 @@ namespace Gsplat
         /// <param name="timeModel">时间核语义: 1=window(time0+duration), 2=gaussian(mu+sigma).</param>
         /// <param name="temporalCutoff">gaussian cutoff,仅在 timeModel=2 时使用.</param>
         public void Render(uint splatCount, Transform transform, Bounds localBounds, int layer,
-            bool gammaToLinear = false, int shDegree = 3, float timeNormalized = 0.0f, float motionPadding = 0.0f,
+            bool gammaToLinear = false, bool enableFootprintAaCompensation = false, int shDegree = 3,
+            float timeNormalized = 0.0f, float motionPadding = 0.0f,
             int timeModel = 1, float temporalCutoff = 0.01f, uint splatBaseIndex = 0)
         {
-            if (!TryPrepareRender(splatCount, splatBaseIndex, transform, localBounds, layer, gammaToLinear, shDegree,
+            if (!TryPrepareRender(splatCount, splatBaseIndex, transform, localBounds, layer, gammaToLinear,
+                    enableFootprintAaCompensation, shDegree,
                     timeNormalized,
                     motionPadding, timeModel, temporalCutoff,
                     out var settings, out var rp, out var instanceCount))

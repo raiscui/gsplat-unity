@@ -4,6 +4,7 @@
 using System;
 using System.Buffers.Binary;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using NUnit.Framework;
 using UnityEditor;
@@ -15,6 +16,9 @@ namespace Gsplat.Tests
     {
         const string k_TestRootAssetPath = "Assets/__GsplatSplat4DImporterDeltaV1Tests";
         const string k_TestAssetPath = k_TestRootAssetPath + "/minimal_delta_v1.splat4d";
+        const string k_FullLabelSingleFrameAssetPath = k_TestRootAssetPath + "/minimal_full_label_single_frame_v2.splat4d";
+        const string k_StaticSingleFrameAssetPath = k_TestRootAssetPath + "/static_single_frame_v1.splat4d";
+        const string k_StaticSingleFrameFromFixtureAssetPath = k_TestRootAssetPath + "/static_single_frame_from_fixture.splat4d";
 
         [SetUp]
         public void SetUp()
@@ -44,6 +48,83 @@ namespace Gsplat.Tests
             var fullPath = Path.GetFullPath(Path.Combine(GetProjectRootPath(), assetPath));
             Directory.CreateDirectory(Path.GetDirectoryName(fullPath));
             File.WriteAllBytes(fullPath, bytes);
+        }
+
+        static string QuoteProcessArg(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return "\"\"";
+
+            if (value.IndexOfAny(new[] { ' ', '\t', '\n', '\r', '"' }) < 0)
+                return value;
+
+            return "\"" + value.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+        }
+
+        static void ExportFixturePlyToAssetPath(string assetPath)
+        {
+            var projectRoot = GetProjectRootPath();
+            var scriptPath = Path.Combine(projectRoot, "Packages", "wu.yize.gsplat", "Tools~", "Splat4D",
+                "ply_sequence_to_splat4d.py");
+            var fixturePlyPath = Path.Combine(projectRoot, "Packages", "wu.yize.gsplat", "Tools~", "Splat4D",
+                "tests", "data", "single_frame_valid_3dgs.ply");
+            var outputFullPath = Path.GetFullPath(Path.Combine(projectRoot, assetPath));
+            Directory.CreateDirectory(Path.GetDirectoryName(outputFullPath));
+
+            Assert.IsTrue(File.Exists(scriptPath), $"缺少 exporter 脚本: {scriptPath}");
+            Assert.IsTrue(File.Exists(fixturePlyPath), $"缺少单帧 3DGS 夹具: {fixturePlyPath}");
+
+            var arguments = string.Join(" ", new[]
+            {
+                QuoteProcessArg(scriptPath),
+                "--input-ply",
+                QuoteProcessArg(fixturePlyPath),
+                "--output",
+                QuoteProcessArg(outputFullPath),
+                "--mode",
+                "average",
+                "--opacity-mode",
+                "linear",
+                "--scale-mode",
+                "linear"
+            });
+
+            using var process = new Process
+            {
+                StartInfo = new ProcessStartInfo
+                {
+                    FileName = "python3",
+                    Arguments = arguments,
+                    WorkingDirectory = projectRoot,
+                    UseShellExecute = false,
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = true,
+                    CreateNoWindow = true
+                }
+            };
+
+            Assert.IsTrue(process.Start(), "启动 Python exporter 失败.");
+
+            if (!process.WaitForExit(120000))
+            {
+                try
+                {
+                    process.Kill();
+                }
+                catch
+                {
+                    // 这里只是测试超时后的兜底清理.
+                }
+
+                Assert.Fail("Python exporter 执行超时(120s).");
+            }
+
+            var stdout = process.StandardOutput.ReadToEnd();
+            var stderr = process.StandardError.ReadToEnd();
+            Assert.AreEqual(0, process.ExitCode,
+                $"Python exporter 失败.\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            Assert.IsTrue(File.Exists(outputFullPath),
+                $"exporter 已返回成功,但未生成输出文件: {outputFullPath}\nstdout:\n{stdout}\nstderr:\n{stderr}");
         }
 
         static uint FourCC(string code)
@@ -302,6 +383,192 @@ namespace Gsplat.Tests
             return fileBytes;
         }
 
+        // --------------------------------------------------------------------
+        // 最小 `.splat4d v2` full-label 构造器:
+        // - shBands=1
+        // - labelsEncoding=full
+        // - 单帧静态语义,不携带任何 SHDL/delta 段
+        // --------------------------------------------------------------------
+        static byte[] BuildMinimalSplat4DV2FullLabels()
+        {
+            const int splatCount = 1;
+            const int recordSizeBytes = 64;
+            const int shBands = 1;
+            const int frameCount = 1;
+
+            const int sh1CodebookCount = 2;
+            const int sh1CoeffCount = 3;
+
+            byte[] BuildRecsBytes()
+            {
+                using var ms = new MemoryStream();
+                using var bw = new BinaryWriter(ms);
+
+                // position(float3)
+                bw.Write(0.0f);
+                bw.Write(0.0f);
+                bw.Write(0.0f);
+
+                // scale(float3)
+                bw.Write(1.0f);
+                bw.Write(1.0f);
+                bw.Write(1.0f);
+
+                // color(bytes): 中性灰 + opacity=1
+                bw.Write((byte)128);
+                bw.Write((byte)128);
+                bw.Write((byte)128);
+                bw.Write((byte)255);
+
+                // rotation(bytes): 约等于 identity
+                bw.Write((byte)255);
+                bw.Write((byte)128);
+                bw.Write((byte)128);
+                bw.Write((byte)128);
+
+                // velocity/time/duration
+                bw.Write(0.0f);
+                bw.Write(0.0f);
+                bw.Write(0.0f);
+                bw.Write(0.0f);
+                bw.Write(1.0f);
+
+                // pad(float3)
+                bw.Write(0.0f);
+                bw.Write(0.0f);
+                bw.Write(0.0f);
+
+                var bytes = ms.ToArray();
+                Assert.AreEqual(splatCount * recordSizeBytes, bytes.Length, "RECS bytes length mismatch");
+                return bytes;
+            }
+
+            byte[] BuildMetaBytes()
+            {
+                using var ms = new MemoryStream();
+                using var bw = new BinaryWriter(ms);
+
+                bw.Write(1u); // metaVersion
+                bw.Write(0.01f);
+                bw.Write(0u); // deltaSegmentLength
+                bw.Write(0u);
+
+                // sh1 band info
+                bw.Write((uint)sh1CodebookCount);
+                bw.Write(2u); // centroidsType: f32
+                bw.Write(1u); // labelsEncoding: full
+                bw.Write(0u);
+
+                // sh2 / sh3 不使用
+                for (var i = 0; i < 8; i++)
+                    bw.Write(0u);
+
+                var bytes = ms.ToArray();
+                Assert.AreEqual(64, bytes.Length, "META bytes length must be 64");
+                return bytes;
+            }
+
+            byte[] BuildSh1CentroidsBytes()
+            {
+                using var ms = new MemoryStream();
+                using var bw = new BinaryWriter(ms);
+
+                // label 0
+                bw.Write(1.0f); bw.Write(1.1f); bw.Write(1.2f);
+                bw.Write(2.0f); bw.Write(2.1f); bw.Write(2.2f);
+                bw.Write(3.0f); bw.Write(3.1f); bw.Write(3.2f);
+
+                // label 1
+                bw.Write(10.0f); bw.Write(10.1f); bw.Write(10.2f);
+                bw.Write(20.0f); bw.Write(20.1f); bw.Write(20.2f);
+                bw.Write(30.0f); bw.Write(30.1f); bw.Write(30.2f);
+
+                var bytes = ms.ToArray();
+                Assert.AreEqual(sh1CodebookCount * sh1CoeffCount * 3 * 4, bytes.Length, "SHCT bytes length mismatch");
+                return bytes;
+            }
+
+            byte[] BuildSh1LabelsBytes()
+            {
+                using var ms = new MemoryStream();
+                using var bw = new BinaryWriter(ms);
+                bw.Write((ushort)1);
+                var bytes = ms.ToArray();
+                Assert.AreEqual(splatCount * 2, bytes.Length, "SHLB bytes length mismatch");
+                return bytes;
+            }
+
+            var recsBytes = BuildRecsBytes();
+            var metaBytes = BuildMetaBytes();
+            var shctBytes = BuildSh1CentroidsBytes();
+            var shlbBytes = BuildSh1LabelsBytes();
+
+            var sects = new List<(uint kind, uint band, uint startFrame, uint frameCount, byte[] bytes)>
+            {
+                (FourCC("RECS"), 0u, 0u, 0u, recsBytes),
+                (FourCC("META"), 0u, 0u, 0u, metaBytes),
+                (FourCC("SHCT"), 1u, 0u, 0u, shctBytes),
+                (FourCC("SHLB"), 1u, 0u, 0u, shlbBytes),
+            };
+
+            var sectionCount = sects.Count;
+            const ulong sectionTableOffset = 64;
+            var sectionTableSize = 16 + sectionCount * 32;
+            var dataOffset = (ulong)sectionTableOffset + (ulong)sectionTableSize;
+
+            var sectionEntries = new (uint kind, uint band, uint startFrame, uint frameCount, ulong offset, ulong length)[sectionCount];
+            var cur = dataOffset;
+            for (var i = 0; i < sectionCount; i++)
+            {
+                var s = sects[i];
+                sectionEntries[i] = (s.kind, s.band, s.startFrame, s.frameCount, cur, (ulong)s.bytes.Length);
+                cur += (ulong)s.bytes.Length;
+            }
+
+            using var outMs = new MemoryStream();
+            using var bwOut = new BinaryWriter(outMs);
+
+            bwOut.Write(new byte[] { (byte)'S', (byte)'P', (byte)'L', (byte)'4', (byte)'D', (byte)'V', (byte)'0', (byte)'2' });
+            bwOut.Write(2u);
+            bwOut.Write(64u);
+            bwOut.Write((uint)sectionCount);
+            bwOut.Write((uint)recordSizeBytes);
+            bwOut.Write((uint)splatCount);
+            bwOut.Write((uint)shBands);
+            bwOut.Write(1u); // timeModel=window
+            bwOut.Write((uint)frameCount);
+            bwOut.Write(sectionTableOffset);
+            bwOut.Write(0ul);
+            bwOut.Write(0ul);
+
+            Assert.AreEqual(64, outMs.Length, "v2 header length must be 64 bytes");
+
+            bwOut.Write(new byte[] { (byte)'S', (byte)'E', (byte)'C', (byte)'T' });
+            bwOut.Write(1u);
+            bwOut.Write((uint)sectionCount);
+            bwOut.Write(0u);
+
+            for (var i = 0; i < sectionCount; i++)
+            {
+                var e = sectionEntries[i];
+                bwOut.Write(e.kind);
+                bwOut.Write(e.band);
+                bwOut.Write(e.startFrame);
+                bwOut.Write(e.frameCount);
+                bwOut.Write(e.offset);
+                bwOut.Write(e.length);
+            }
+
+            Assert.AreEqual((long)sectionTableOffset + sectionTableSize, outMs.Length, "section table size mismatch");
+
+            for (var i = 0; i < sectionCount; i++)
+                bwOut.Write(sects[i].bytes);
+
+            var fileBytes = outMs.ToArray();
+            Assert.AreEqual((long)cur, fileBytes.Length, "final file length mismatch");
+            return fileBytes;
+        }
+
         static ushort[][] DecodeDeltaV1SingleSegment(ushort[] baseLabels, byte[] deltaBytes, int frameCount)
         {
             // delta-v1 layout:
@@ -349,6 +616,55 @@ namespace Gsplat.Tests
 
             Assert.AreEqual(span.Length, p, "delta has trailing bytes");
             return labelsByFrame;
+        }
+
+        static byte[] BuildMinimalStaticSingleFrameV1()
+        {
+            // 目标:
+            // - 构造最贴近工具导出结果的最小 raw v1 `.splat4d`.
+            // - 保持 velocity=0,time=0,duration=1,验证 importer 会继续产出 canonical 4D arrays.
+            using var ms = new MemoryStream();
+            using var bw = new BinaryWriter(ms);
+
+            // position(float3)
+            bw.Write(1.25f);
+            bw.Write(-0.5f);
+            bw.Write(2.0f);
+
+            // scale(float3)
+            bw.Write(1.0f);
+            bw.Write(2.0f);
+            bw.Write(3.0f);
+
+            // color(bytes): baseRgb=0.5 -> f_dc 近似 0, opacity=1
+            bw.Write((byte)128);
+            bw.Write((byte)128);
+            bw.Write((byte)128);
+            bw.Write((byte)255);
+
+            // rotation(bytes): 约等于 identity
+            bw.Write((byte)255);
+            bw.Write((byte)128);
+            bw.Write((byte)128);
+            bw.Write((byte)128);
+
+            // velocity(float3): 单帧静态语义
+            bw.Write(0.0f);
+            bw.Write(0.0f);
+            bw.Write(0.0f);
+
+            // time/duration(window)
+            bw.Write(0.0f);
+            bw.Write(1.0f);
+
+            // pad(float3)
+            bw.Write(0.0f);
+            bw.Write(0.0f);
+            bw.Write(0.0f);
+
+            var bytes = ms.ToArray();
+            Assert.AreEqual(64, bytes.Length, "raw v1 single-frame record must be 64 bytes");
+            return bytes;
         }
 
         [Test]
@@ -405,6 +721,104 @@ namespace Gsplat.Tests
 
             Assert.AreEqual(1, labelsByFrame[2][3]);
             Assert.AreEqual(3, labelsByFrame[2][5]);
+        }
+
+        [Test]
+        public void ImportV2_FullLabels_DoesNotExposeUsableDeltaSegments()
+        {
+            var bytes = BuildMinimalSplat4DV2FullLabels();
+            WriteBytesToAssetPath(k_FullLabelSingleFrameAssetPath, bytes);
+
+            AssetDatabase.ImportAsset(k_FullLabelSingleFrameAssetPath, ImportAssetOptions.ForceUpdate);
+
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_FullLabelSingleFrameAssetPath);
+            Assert.IsNotNull(prefab, "imported prefab is null");
+
+            var renderer = prefab.GetComponent<GsplatRenderer>();
+            Assert.IsNotNull(renderer, "prefab missing GsplatRenderer");
+
+            var asset = renderer.GsplatAsset;
+            Assert.IsNotNull(asset, "GsplatRenderer.GsplatAsset is null");
+
+            Assert.AreEqual(1, asset.SHBands);
+            Assert.AreEqual(0, asset.ShFrameCount, "full-label 资产不应初始化动态 SH frame 语义");
+
+            var sh1DeltaSegmentCount = asset.Sh1DeltaSegments?.Length ?? 0;
+            var sh2DeltaSegmentCount = asset.Sh2DeltaSegments?.Length ?? 0;
+            var sh3DeltaSegmentCount = asset.Sh3DeltaSegments?.Length ?? 0;
+            Assert.AreEqual(0, sh1DeltaSegmentCount, "full-label 资产不应暴露可用的 Sh1 delta segments");
+            Assert.AreEqual(0, sh2DeltaSegmentCount, "full-label 资产不应暴露可用的 Sh2 delta segments");
+            Assert.AreEqual(0, sh3DeltaSegmentCount, "full-label 资产不应暴露可用的 Sh3 delta segments");
+
+            Assert.IsNotNull(asset.SHs);
+            Assert.AreEqual(3, asset.SHs.Length, "band1 资产应解码 3 个 rest coeff");
+            Assert.AreEqual(new Vector3(10.0f, 10.1f, 10.2f), asset.SHs[0]);
+            Assert.AreEqual(new Vector3(20.0f, 20.1f, 20.2f), asset.SHs[1]);
+            Assert.AreEqual(new Vector3(30.0f, 30.1f, 30.2f), asset.SHs[2]);
+        }
+
+        [Test]
+        public void ImportV1_StaticSingleFrame4D_PreservesCanonicalArrays()
+        {
+            var bytes = BuildMinimalStaticSingleFrameV1();
+            WriteBytesToAssetPath(k_StaticSingleFrameAssetPath, bytes);
+
+            AssetDatabase.ImportAsset(k_StaticSingleFrameAssetPath, ImportAssetOptions.ForceUpdate);
+
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_StaticSingleFrameAssetPath);
+            Assert.IsNotNull(prefab, "imported prefab is null");
+
+            var renderer = prefab.GetComponent<GsplatRenderer>();
+            Assert.IsNotNull(renderer, "prefab missing GsplatRenderer");
+
+            var asset = renderer.GsplatAsset;
+            Assert.IsNotNull(asset, "GsplatRenderer.GsplatAsset is null");
+
+            Assert.AreEqual(1u, asset.SplatCount, "单帧 raw v1 `.splat4d` 应导入为 1 个 splat");
+            Assert.AreEqual(0, asset.SHBands, "raw v1 `.splat4d` 只承载 SH0");
+            Assert.AreEqual(1, asset.TimeModel, "单帧工具导出的 raw v1 `.splat4d` 应保持 window 语义");
+
+            Assert.IsNotNull(asset.Velocities, "Velocities 应存在");
+            Assert.IsNotNull(asset.Times, "Times 应存在");
+            Assert.IsNotNull(asset.Durations, "Durations 应存在");
+            Assert.AreEqual(1, asset.Velocities.Length, "Velocities 长度应与 splatCount 一致");
+            Assert.AreEqual(1, asset.Times.Length, "Times 长度应与 splatCount 一致");
+            Assert.AreEqual(1, asset.Durations.Length, "Durations 长度应与 splatCount 一致");
+
+            Assert.AreEqual(Vector3.zero, asset.Velocities[0], "单帧静态 `.splat4d` 的 velocity 应固定为 0");
+            Assert.AreEqual(0.0f, asset.Times[0], 1e-6f, "单帧静态 `.splat4d` 的 time 应固定为 0");
+            Assert.AreEqual(1.0f, asset.Durations[0], 1e-6f, "单帧静态 `.splat4d` 的 duration 应固定为 1");
+            Assert.AreEqual(1.0f, asset.MaxDuration, 1e-6f, "window 模式下 MaxDuration 应反映单帧 duration");
+        }
+
+        [Test]
+        public void ImportV1_StaticSingleFrame4D_RealFixturePlyThroughExporterAndImporter()
+        {
+            ExportFixturePlyToAssetPath(k_StaticSingleFrameFromFixtureAssetPath);
+
+            AssetDatabase.ImportAsset(k_StaticSingleFrameFromFixtureAssetPath, ImportAssetOptions.ForceUpdate);
+
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(k_StaticSingleFrameFromFixtureAssetPath);
+            Assert.IsNotNull(prefab, "真实夹具导出的 `.splat4d` 导入后 main prefab 应该存在");
+
+            var renderer = prefab.GetComponent<GsplatRenderer>();
+            Assert.IsNotNull(renderer, "导入 prefab 应自动挂载 GsplatRenderer");
+
+            var asset = renderer.GsplatAsset;
+            Assert.IsNotNull(asset, "GsplatRenderer.GsplatAsset 不应为空");
+
+            Assert.AreEqual(1u, asset.SplatCount, "真实单帧 `.ply` 夹具导出后应保持 1 个 splat");
+            Assert.AreEqual(0, asset.SHBands, "当前 `.splat4d` exporter/export path 仍应保持 SH0-only");
+            Assert.AreEqual(1, asset.TimeModel, "单帧 exporter 输出应继续走 window 语义");
+            Assert.IsNotNull(asset.Velocities, "Velocities 应存在");
+            Assert.IsNotNull(asset.Times, "Times 应存在");
+            Assert.IsNotNull(asset.Durations, "Durations 应存在");
+            Assert.AreEqual(1, asset.Velocities.Length, "Velocities 长度应与 splatCount 一致");
+            Assert.AreEqual(1, asset.Times.Length, "Times 长度应与 splatCount 一致");
+            Assert.AreEqual(1, asset.Durations.Length, "Durations 长度应与 splatCount 一致");
+            Assert.AreEqual(Vector3.zero, asset.Velocities[0], "单帧 exporter 输出的 velocity 应固定为 0");
+            Assert.AreEqual(0.0f, asset.Times[0], 1e-6f, "单帧 exporter 输出的 time 应固定为 0");
+            Assert.AreEqual(1.0f, asset.Durations[0], 1e-6f, "单帧 exporter 输出的 duration 应固定为 1");
         }
     }
 }

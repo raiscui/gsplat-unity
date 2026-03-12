@@ -23,6 +23,7 @@ Shader "Gsplat/Standard"
             #pragma fragment frag
             #pragma require compute
             #pragma multi_compile SH_BANDS_0 SH_BANDS_1 SH_BANDS_2 SH_BANDS_3
+            #pragma multi_compile_local __ GSPLAT_AA
 
             #include "UnityCG.cginc"
             #include "Gsplat.hlsl"
@@ -247,6 +248,11 @@ Shader "Gsplat/Standard"
 	                //   这样当显隐动画缩放 corner.offset 时,圆点半径也会同步缩放,
 	                //   不会出现 “sizeMul<1 时圆点突然变成方块/被裁剪” 的问题.
 	                float2 uvDot : TEXCOORD1;
+
+	                // Gaussian footprint AA compensation:
+	                // - 只作用于 Gaussian 的 alpha 能量.
+	                // - dot 模式继续使用原始 alpha,避免把 Gaussian 的 coverage 语义带到圆点路径.
+	                float gaussAlphaMul : TEXCOORD2;
 	                float4 vertex : SV_POSITION;
 	                float4 color: COLOR;
 	                UNITY_VERTEX_OUTPUT_STEREO
@@ -258,6 +264,7 @@ Shader "Gsplat/Standard"
                 UNITY_SETUP_INSTANCE_ID(v);
                 UNITY_INITIALIZE_OUTPUT(v2f, o);
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
+                o.gaussAlphaMul = 1.0;
 
                 SplatSource source;
                 if (!InitSource(v, source))
@@ -834,6 +841,18 @@ Shader "Gsplat/Standard"
                 // window: temporalWeight=1.0,保持旧行为.
                 if (_Has4D != 0)
                     color.w *= temporalWeight;
+
+                // PlayCanvas / SuperSplat 的 footprint AA compensation:
+                // - 公共 HLSL 里已经能算出 `aaFactor`,但之前主渲染链没有真正用它.
+                // - 这里把补偿限定在 Gaussian 路径:
+                //   1) `ClipCorner` 用补偿后的 alpha,让几何裁剪域与对照实现一致.
+                //   2) fragment 的 `alphaGauss` 再乘同一个系数.
+                // - ParticleDots 不使用该补偿,避免把 AA 语义串到 dot 模式.
+                float gaussAlphaMul = 1.0;
+                #if GSPLAT_AA
+                if (hasGaussCorner && styleBlend < 1.0)
+                    gaussAlphaMul = gaussCorner.aaFactor;
+                #endif
                 color.rgb = color.rgb * SH_C0 + 0.5;
                 #ifndef SH_BANDS_0
                 // calculate the model-space view direction
@@ -850,6 +869,7 @@ Shader "Gsplat/Standard"
                 // 注意: ClipCorner 不应基于“被 mask 后的 alpha”来缩放几何,否则会导致 splat 尺寸随动画剧烈变化.
                 // 因此这里先保留 baseAlpha 做 ClipCorner,最后再把 mask 乘到最终输出的 alpha 上.
                 float baseAlpha = color.w;
+                float gaussBaseAlpha = baseAlpha * gaussAlphaMul;
                 if (_VisibilityMode != 0)
                 {
                     color.rgb += visibilityGlowAdd;
@@ -862,7 +882,9 @@ Shader "Gsplat/Standard"
 	                {
 	                    // ClipCorner 的数学域要求 alpha >= 1/255,否则会出现 NaN.
 	                    // 当 alpha 很小时,最终也会在 fragment 阶段被 discard,因此这里对 ClipCorner 的 alpha 做一个下限 clamp.
-	                    ClipCorner(gaussCorner, max(baseAlpha, 1.0 / 255.0));
+	                    // ClipCorner 的数学域要求 alpha >= 1/255,否则会出现 NaN.
+	                    // 当 alpha 很小时,最终也会在 fragment 阶段被 discard,因此这里对 ClipCorner 的 alpha 做一个下限 clamp.
+	                    ClipCorner(gaussCorner, max(gaussBaseAlpha, 1.0 / 255.0));
 	                }
 
 	                // corner morph:
@@ -892,12 +914,39 @@ Shader "Gsplat/Standard"
 	                o.color = float4(max(color.rgb, float3(0, 0, 0)), finalAlpha);
 	                o.uvGauss = corner.uv;
 	                o.uvDot = uvDot;
+	                o.gaussAlphaMul = gaussAlphaMul;
 	                return o;
 	            }
 
-	            float4 frag(v2f i) : SV_Target
-	            {
-	                float styleBlend = saturate(_RenderStyleBlend);
+	            // ----------------------------------------------------------------
+	            // Gaussian 边缘保守 fade:
+	            // - 不改中心区能量,只压最外圈的 pedestal.
+	            // - 设计目标:
+	            //   1) 避免再次像 `normExp` 那样整体改写 Gaussian 主核
+	            //   2) 只在 A 非常接近边界时,把 alpha 更平滑地收敛到 0
+	            // - 经验依据:
+	            //   - `ClipCorner` 已经让很多低 alpha splat 的有效 A 域小于 0.9
+	            //   - 因此把 fade 起点放在 0.90,对多数低 alpha splat 基本无影响
+	            // ----------------------------------------------------------------
+		            float EvalConservativeGaussianEdgeFade(float a)
+		            {
+		                const float kGaussianEdgeFadeStart = 0.90;
+		                return 1.0 - smoothstep(kGaussianEdgeFadeStart, 1.0, a);
+		            }
+
+		            float EvalNormalizedGaussian(float a)
+		            {
+		                // 恢复到 `normExp` 版本.
+		                // Metal 侧这里必须使用字面量常数,否则会命中
+		                // "initial value must be a literal expression".
+		                const float kGaussianExp4 = 0.0183156389;
+		                const float kGaussianInvExp4 = 1.0186573604;
+		                return max((exp(-a * 4.0) - kGaussianExp4) * kGaussianInvExp4, 0.0);
+		            }
+
+		            float4 frag(v2f i) : SV_Target
+		            {
+		                float styleBlend = saturate(_RenderStyleBlend);
 
 	                float A_gauss = dot(i.uvGauss, i.uvGauss);
 	                float A_dot = dot(i.uvDot, i.uvDot);
@@ -907,10 +956,12 @@ Shader "Gsplat/Standard"
 	                // - 也能在 styleBlend==0/1 时保持足够接近原先的 discard 行为(只是多做了一点点片元工作).
 	                if (A_gauss > 1.0 && A_dot > 1.0) discard;
 
-	                // Gaussian: 旧核形态.
-	                float alphaGauss = 0.0;
-	                if (A_gauss <= 1.0)
-	                    alphaGauss = exp(-A_gauss * 4.0) * i.color.a;
+		                // Gaussian: 恢复到 `normExp`.
+		                float alphaGauss = 0.0;
+		                if (A_gauss <= 1.0)
+		                {
+		                    alphaGauss = EvalNormalizedGaussian(A_gauss) * i.color.a * i.gaussAlphaMul;
+		                }
 
 	                // ParticleDots: 实心 + 柔边(soft edge).
 	                // - kDotFeather 越大,柔边越宽.

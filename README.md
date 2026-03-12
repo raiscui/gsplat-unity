@@ -282,6 +282,65 @@ Record layout (byte offsets):
 - `48..51`: `duration` (float32, normalized)
 - `52..63`: padding (reserved)
 
+Offline exporter (single `.ply` or PLY sequence -> `.splat4d`):
+
+Single-frame `.ply` (formal path):
+
+```bash
+python3 Tools~/Splat4D/ply_sequence_to_splat4d.py \
+  --input-ply /path/to/frame.ply \
+  --output out_single_frame.splat4d \
+  --mode average
+```
+
+Higher-quality single-frame `.splat4d v2 + SH3`:
+
+```bash
+python3 Tools~/Splat4D/ply_sequence_to_splat4d.py \
+  --input-ply /path/to/frame_with_rest_sh3.ply \
+  --output out_single_frame_v2_sh3.splat4d \
+  --mode average \
+  --splat4d-version 2 \
+  --sh-bands 3 \
+  --sh-codebook-count 8192 \
+  --sh-centroids-type f32 \
+  --self-check
+```
+
+Sequence directory:
+
+```bash
+python3 Tools~/Splat4D/ply_sequence_to_splat4d.py \
+  --input-dir /path/to/time_*.ply \
+  --output out.splat4d \
+  --mode average
+```
+
+Higher-fidelity keyframe packing:
+
+```bash
+python3 Tools~/Splat4D/ply_sequence_to_splat4d.py \
+  --input-dir /path/to/time_*.ply \
+  --output out_keyframed.splat4d \
+  --mode keyframe \
+  --frame-step 5
+```
+
+Input rules:
+- `--input-ply` and `--input-dir` are mutually exclusive.
+- If you only have one ordinary 3DGS `.ply`, prefer `--input-ply` instead of creating a temporary directory.
+- A one-file export still stays on the same `.splat4d -> GsplatAsset -> GsplatRenderer` path.
+  - The exporter writes the canonical static defaults:
+    - `vx/vy/vz = 0`
+    - `time = 0`
+    - `duration = 1`
+  - Unity still imports it as a 4D-capable `GsplatAsset`.
+  - `TimeNormalized` / `AutoPlay` / `Loop` remain available, but playback naturally degenerates to a fixed frame because the motion window covers the full normalized range and velocity is zero.
+- A one-file input is not valid for `--mode keyframe`; the tool fails fast with `keyframe 模式至少需要 2 个 PLY`.
+- `--splat4d-version 2` currently supports single-frame input only.
+  - This keeps `RECS`, `SHCT`, and `SHLB` symmetric as “one base record per splat”.
+  - Multi-frame sequence packing should continue to use `v1 + keyframe` for now.
+
 ### `.sog4d` keyframe sequence bundle (v1)
 
 `.sog4d` is a single-file ZIP bundle designed for **per-frame keyframes** with **interpolation** over:

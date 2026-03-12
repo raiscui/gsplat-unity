@@ -14,7 +14,9 @@ using UnityEngine;
 
 namespace Gsplat.Editor
 {
-    [ScriptedImporter(1, "ply")]
+    // importer version bump:
+    // - v2: `.ply` 导入后自动生成可实例化的 main prefab,避免旧资产继续停留在 `GsplatAsset` 主对象形态.
+    [ScriptedImporter(2, "ply")]
     public class GsplatImporter : ScriptedImporter
     {
         /// <summary>
@@ -158,6 +160,7 @@ namespace Gsplat.Editor
         public override void OnImportAsset(AssetImportContext ctx)
         {
             var gsplatAsset = ScriptableObject.CreateInstance<GsplatAsset>();
+            gsplatAsset.name = Path.GetFileNameWithoutExtension(ctx.assetPath);
             var bounds = new Bounds();
 
             using (var fs = new FileStream(ctx.assetPath, FileMode.Open, FileAccess.Read))
@@ -345,6 +348,18 @@ namespace Gsplat.Editor
 
             gsplatAsset.Bounds = bounds;
             ctx.AddObjectToAsset("gsplatAsset", gsplatAsset);
+
+            // ----------------------------------------------------------------
+            // 让 `.ply` 与 `.splat4d` 保持一致的编辑器体验:
+            // - main object 直接就是可实例化的 GameObject
+            // - 用户可以像拖 `.splat4d` 一样把 `.ply` 直接拖进场景
+            // ----------------------------------------------------------------
+            var prefab = new GameObject(gsplatAsset.name);
+            var renderer = prefab.AddComponent<GsplatRenderer>();
+            renderer.GsplatAsset = gsplatAsset;
+
+            ctx.AddObjectToAsset("prefab", prefab);
+            ctx.SetMainObject(prefab);
         }
     }
 }

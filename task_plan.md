@@ -3187,3 +3187,187 @@
 
 **目前在阶段4(整理暂存区并提交)**
 - Fresh verification 已完成,接下来只剩精确提交边界.
+
+## 2026-03-11 22:26:00 +0800 追加验证: 按用户指定真实文件再次确认 `.ply -> .sog4d`
+
+### 用户指定夹具
+
+- `/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Assets/Gsplat/ply/s1-point_cloud.ply`
+
+### 当前行动目的
+
+- 使用这份真实单帧 `.ply` 再跑一遍正式打包与校验命令.
+- 给出本轮会话内的新鲜证据,确认当前仓库状态下它仍然能正确转为 `.sog4d`.
+
+### 下一步行动
+
+- [ ] 执行 `pack --input-ply ... --self-check`
+- [ ] 执行 `validate --input ...`
+- [ ] 读取输出结果,确认 `frameCount = 1` 与验证通过
+
+### 当前状态
+
+**目前在阶段4(补充最终转换证据)**
+- 这一步只做真实输入验证,不再改代码.
+
+## 2026-03-11 22:31:00 +0800 结果: 指定真实 `.ply` 已再次验证可正确转为 `.sog4d`
+
+### 已执行命令
+
+- `python3 Tools~/Sog4D/ply_sequence_to_sog4d.py pack --input-ply /Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Assets/Gsplat/ply/s1-point_cloud.ply --output /tmp/s1_point_cloud_final_check_20260311.sog4d --time-mapping uniform --sh-bands 0 --self-check`
+- `python3 Tools~/Sog4D/ply_sequence_to_sog4d.py validate --input /tmp/s1_point_cloud_final_check_20260311.sog4d`
+
+### 结果
+
+- [x] 打包成功
+- [x] `self-check` 通过
+- [x] `validate` 通过
+- [x] 输出包 `meta.json` 关键信息:
+  - `frameCount = 1`
+  - `splatCount = 169133`
+  - `timeMapping = uniform`
+  - `layout = 412 x 411`
+  - `bands = 0`
+
+### 当前状态
+
+**目前在阶段4(真实文件转换证据已补齐)**
+- 用户指定的这份 `s1-point_cloud.ply` 当前仓库状态下可以正确转为合法单帧 `.sog4d`.
+
+## 2026-03-11 22:36:00 +0800 继续: 将真实 `.sog4d` 导入当前 Unity 工程
+
+### 当前行动目的
+
+- 把刚刚验证通过的 `/tmp/s1_point_cloud_final_check_20260311.sog4d` 放入当前 Unity 工程的 `Assets/` 路径.
+- 确认 Unity importer 会把它识别为正常的 `.sog4d` 资产,而不是停留在磁盘文件层面.
+
+### 下一步行动
+
+- [ ] 检查当前 Unity 工程里的目标导入目录与既有 `.sog4d` 资产状态.
+- [ ] 将新产物复制到 `Assets/Gsplat/sog4d/` 下的明确路径.
+- [ ] 通过 Unity 运行实例或命令行 Editor 验证导入结果:
+  - 资产存在
+  - prefab / `GsplatSequenceRenderer` 可正常加载
+- [ ] 如条件允许,继续补一轮显示侧验证.
+
+### 当前状态
+
+**目前在阶段4(Unity 导入闭环)**
+- 现在从“离线转换”推进到“工程内导入验证”.
+
+## 2026-03-11 22:43:00 +0800 结果: 新生成的真实 `.sog4d` 已导入当前 Unity 工程
+
+### 导入动作
+
+- 已将新产物复制到:
+  - `/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Assets/Gsplat/sog4d/s1_point_cloud_final_check_20260311.sog4d`
+- 当前打开的 Unity 编辑器一开始没有立刻为它生成 `.meta`.
+- 随后已手动触发一次 Unity 菜单:
+  - `资产 > 刷新`
+
+### 已验证证据
+
+- [x] Unity 为该文件生成了 `.meta`:
+  - `/Users/cuiluming/local_doc/l_dev/my/unity/st-dongfeng-worldmodel/st-dongfeng-worldmodel/Assets/Gsplat/sog4d/s1_point_cloud_final_check_20260311.sog4d.meta`
+- [x] `.meta` 内记录为 `ScriptedImporter`,说明 Unity 已按自定义 importer 路径接管该资产.
+- [x] `AssetImportWorker1.log` 出现新文件的真实导入记录:
+  - `Start importing Assets/Gsplat/sog4d/s1_point_cloud_final_check_20260311.sog4d ... (ScriptedImporter)`
+- [x] `Editor.log` 也出现同一文件的 `Start importing ... (ScriptedImporter)` 记录.
+- [x] 当前没有发现这份新资产对应的 `import error` 日志.
+
+### 当前结论
+
+- 用户指定真实 `.ply` 生成的 `.sog4d` 已经成功进入当前 Unity 工程的导入链路.
+- 当前至少可以确认:
+  - 磁盘文件已进入 `Assets/`
+  - Unity 已识别并执行 `.sog4d` 的 importer
+  - 本轮没有出现导入失败证据
+
+### 下一步行动
+
+- [ ] 如果继续追求“显示”闭环,下一步要把这份新导入资产接到场景对象或验证 prefab 上,再做 on-screen 取证.
+
+### 当前状态
+
+**目前在阶段4(Unity 导入证据已补齐)**
+- 导入完成.
+- 后续如需继续,重点就转到场景绑定与显示验证.
+
+## 2026-03-11 22:48:00 +0800 支线索引: 启用 `__imgui_layout_error` 上下文集
+
+- 启用原因:
+  - 用户当前反馈的是一个新的 Unity Editor IMGUI 布局报错:
+    - `EndLayoutGroup: BeginLayoutGroup must be called first`
+  - 这与主线的 `.ply -> .sog4d` 转换闭环不同,属于新的支线调试任务.
+- 支线上下文后缀:
+  - `__imgui_layout_error`
+- 支线主题:
+  - 排查当前 package / Unity 场景中哪个 Editor UI 绘制路径触发了布局失衡,并做最小修复.
+
+## 2026-03-11 23:08:00 +0800 支线索引: 启用 `__sog4d_display_issue` 上下文集
+
+- 启用原因:
+  - 用户反馈新转换的 `.sog4d`
+    - `Assets/Gsplat/sog4d/s1_point_cloud_final_check_20260311.sog4d`
+    - 在 Unity 中显示明显不正常
+  - 并提供了对照:
+    - `Assets/Gsplat/splat/v2/ckpt_29999_v2_sh3_seg50_k512_f32_colmap_latest.splat4d`
+    - `GsplatRenderer` 显示正常
+- 支线上下文后缀:
+  - `__sog4d_display_issue`
+- 支线主题:
+  - 调查 `.sog4d` 单帧真实样例在 Unity 中显示异常的根因,区分是转换参数问题、数据解码问题,还是渲染路径问题.
+
+## 2026-03-12 14:16:26 +0800 新任务: 回读文件上下文与归档,补充 AGENTS 工具使用规范
+
+### 目标
+
+- 检索当前主线六文件、支线后缀六文件,以及 `archive/` 中已经归档的历史上下文文件.
+- 找出其中已经被事实证明的“工具使用错误 -> 正确使用方式”.
+- 只把可复用、可执行、长期有效的规则补充到 `AGENTS.md`,避免写入一次性排障噪音.
+
+### 阶段
+
+- [x] 阶段1: 清点上下文文件与归档文件,确定检索范围
+- [x] 阶段2: 从上下文中提炼“错误用法/正确用法”候选
+- [x] 阶段3: 更新 `AGENTS.md` 并做自检
+- [x] 阶段4: 回写 `notes.md` / `WORKLOG.md` / `task_plan.md`
+
+### 当前行动
+
+- 已完成 `AGENTS.md` 更新与自检.
+- 已同步回写 `notes.md`、`WORKLOG.md`,当前任务闭环完成.
+
+### 当前状态
+
+**目前已完成**
+- 本轮从上下文与归档中提炼出的 5 条工具使用规则已经补充到 `AGENTS.md`.
+
+## 2026-03-12 任务追加: git 提交当前已完成改动
+
+### 目标
+
+- [ ] 检查当前工作区状态与是否存在 submodule 变更
+- [ ] 审阅改动范围,归纳提交主题
+- [ ] 执行 git add/commit,记录 commit hash
+- [ ] 更新 WORKLOG/ERRORFIX/task_plan,完成交付
+
+### 状态
+
+**目前在提交准备阶段**
+- 正在检查 git 状态、submodule 和改动摘要,确认这次提交应包含哪些内容。
+
+## 2026-03-12 15:02:00 +0800 进展: 已完成提交前检查与验证
+
+- [x] 检查当前工作区状态与是否存在 submodule 变更
+- [x] 审阅改动范围,归纳提交主题
+- [ ] 执行 git add/commit,记录 commit hash
+- [ ] 更新 WORKLOG/ERRORFIX/task_plan,完成交付
+
+### 当前状态
+
+**目前在提交执行阶段**
+- 已确认无 submodule 变更.
+- 已确认 `git diff --check` 通过.
+- 已确认 `Tools~/Splat4D` 与 `Tools~/Sog4D` 的单帧 Python 测试通过.
+- 已确认 5 个可疑空文件不会纳入本次提交,避免把无意义临时产物带进仓库.

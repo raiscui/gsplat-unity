@@ -23,6 +23,15 @@ namespace Gsplat.Tests
         static readonly MethodInfo s_buildLidarShowHideOverlayForThisFrame =
             typeof(GsplatRenderer).GetMethod("BuildLidarShowHideOverlayForThisFrame", BindingFlags.Instance | BindingFlags.NonPublic);
 
+        static readonly MethodInfo s_updateSortRangeForTime =
+            typeof(GsplatRenderer).GetMethod("UpdateSortRangeForTime", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly MethodInfo s_manualUpdateMethod =
+            typeof(GsplatRenderer).GetMethod("Update", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly MethodInfo s_has4DFieldsMethod =
+            typeof(GsplatRenderer).GetMethod("Has4DFields", BindingFlags.Static | BindingFlags.NonPublic);
+
         static readonly FieldInfo s_renderStyleBlend01Field =
             typeof(GsplatRenderer).GetField("m_renderStyleBlend01", BindingFlags.Instance | BindingFlags.NonPublic);
 
@@ -53,6 +62,24 @@ namespace Gsplat.Tests
         static readonly FieldInfo s_visibilitySourceMaskProgressField =
             typeof(GsplatRenderer).GetField("m_visibilitySourceMaskProgress01", BindingFlags.Instance | BindingFlags.NonPublic);
 
+        static readonly FieldInfo s_effectiveSplatCountField =
+            typeof(GsplatRenderer).GetField("m_effectiveSplatCount", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_pendingSplatCountField =
+            typeof(GsplatRenderer).GetField("m_pendingSplatCount", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_sortSplatBaseIndexThisFrameField =
+            typeof(GsplatRenderer).GetField("m_sortSplatBaseIndexThisFrame", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_sortSplatCountThisFrameField =
+            typeof(GsplatRenderer).GetField("m_sortSplatCountThisFrame", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_prevAssetField =
+            typeof(GsplatRenderer).GetField("m_prevAsset", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_timeNormalizedThisFrameField =
+            typeof(GsplatRenderer).GetField("m_timeNormalizedThisFrame", BindingFlags.Instance | BindingFlags.NonPublic);
+
         static void AdvanceVisibilityState(GsplatRenderer renderer)
         {
             // 说明:
@@ -77,6 +104,24 @@ namespace Gsplat.Tests
             Assert.IsNotNull(s_advanceLidarAnimationStateIfNeeded,
                 "Expected GsplatRenderer.AdvanceLidarAnimationStateIfNeeded to exist.");
             s_advanceLidarAnimationStateIfNeeded.Invoke(renderer, null);
+        }
+
+        static void UpdateSortRangeForTime(GsplatRenderer renderer, float timeNormalized)
+        {
+            Assert.IsNotNull(s_updateSortRangeForTime, "Expected GsplatRenderer.UpdateSortRangeForTime to exist.");
+            s_updateSortRangeForTime.Invoke(renderer, new object[] { timeNormalized });
+        }
+
+        static void InvokeManualUpdate(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_manualUpdateMethod, "Expected GsplatRenderer.Update to exist.");
+            s_manualUpdateMethod.Invoke(renderer, null);
+        }
+
+        static bool InvokeHas4DFields(GsplatAsset asset)
+        {
+            Assert.IsNotNull(s_has4DFieldsMethod, "Expected GsplatRenderer.Has4DFields to exist.");
+            return (bool)s_has4DFieldsMethod.Invoke(null, new object[] { asset });
         }
 
         static float GetRenderStyleBlend01(GsplatRenderer renderer)
@@ -156,6 +201,44 @@ namespace Gsplat.Tests
             return (float)s_visibilitySourceMaskProgressField.GetValue(renderer);
         }
 
+        static void SetEffectiveSplatState(GsplatRenderer renderer, uint effectiveSplatCount, uint pendingSplatCount)
+        {
+            // 说明:
+            // - 这些字段本来由 renderer 初始化路径维护.
+            // - 测试里为了避免真的创建 GPU 资源,只把“逻辑层需要的最小状态”补齐.
+            Assert.IsNotNull(s_effectiveSplatCountField, "Expected private field 'm_effectiveSplatCount' to exist on GsplatRenderer.");
+            Assert.IsNotNull(s_pendingSplatCountField, "Expected private field 'm_pendingSplatCount' to exist on GsplatRenderer.");
+            s_effectiveSplatCountField.SetValue(renderer, effectiveSplatCount);
+            s_pendingSplatCountField.SetValue(renderer, pendingSplatCount);
+        }
+
+        static void SetPreviousAsset(GsplatRenderer renderer, GsplatAsset asset)
+        {
+            Assert.IsNotNull(s_prevAssetField, "Expected private field 'm_prevAsset' to exist on GsplatRenderer.");
+            s_prevAssetField.SetValue(renderer, asset);
+        }
+
+        static uint GetSortBaseIndexThisFrame(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_sortSplatBaseIndexThisFrameField,
+                "Expected private field 'm_sortSplatBaseIndexThisFrame' to exist on GsplatRenderer.");
+            return (uint)s_sortSplatBaseIndexThisFrameField.GetValue(renderer);
+        }
+
+        static uint GetSortCountThisFrame(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_sortSplatCountThisFrameField,
+                "Expected private field 'm_sortSplatCountThisFrame' to exist on GsplatRenderer.");
+            return (uint)s_sortSplatCountThisFrameField.GetValue(renderer);
+        }
+
+        static float GetTimeNormalizedThisFrame(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_timeNormalizedThisFrameField,
+                "Expected private field 'm_timeNormalizedThisFrame' to exist on GsplatRenderer.");
+            return (float)s_timeNormalizedThisFrameField.GetValue(renderer);
+        }
+
         static void SetVisibilityStateByName(GsplatRenderer renderer, string stateName)
         {
             Assert.IsNotNull(s_visibilityStateField, "Expected private field 'm_visibilityState' to exist on GsplatRenderer.");
@@ -216,6 +299,47 @@ namespace Gsplat.Tests
             asset.Velocities = null;
             asset.Times = null;
             asset.Durations = null;
+            return asset;
+        }
+
+        static GsplatAsset CreateMinimalStatic4DAsset1Splat()
+        {
+            // 目标:
+            // - 构造“静态单帧 `.splat4d`”在 renderer 逻辑层的最小等价资产.
+            // - velocity=0,time=0,duration=1,表示整个归一化时间轴都显示同一批 splats.
+            var asset = ScriptableObject.CreateInstance<GsplatAsset>();
+            asset.SplatCount = 1;
+            asset.SHBands = 0;
+            asset.Bounds = new Bounds(Vector3.zero, Vector3.one);
+
+            asset.Positions = new[] { Vector3.zero };
+            asset.Scales = new[] { Vector3.one };
+            asset.Rotations = new[] { new Vector4(1, 0, 0, 0) };
+            asset.Colors = new[] { new Vector4(1, 1, 1, 1) };
+            asset.Velocities = new[] { Vector3.zero };
+            asset.Times = new[] { 0.0f };
+            asset.Durations = new[] { 1.0f };
+            asset.MaxSpeed = 0.0f;
+            asset.MaxDuration = 1.0f;
+            asset.TimeModel = 1;
+            asset.TemporalGaussianCutoff = 0.01f;
+            return asset;
+        }
+
+        static GsplatAsset CreateBroken4DAssetWithTruncatedArrays()
+        {
+            // 目标:
+            // - 模拟“4D arrays 非空但长度不够”的异常资产.
+            // - 这正是本次最值当的 guard 目标: 应稳态回退,不能让上传路径继续吃到越界数组.
+            var asset = ScriptableObject.CreateInstance<GsplatAsset>();
+            asset.SplatCount = 2;
+            asset.Positions = new[] { Vector3.zero, Vector3.one };
+            asset.Scales = new[] { Vector3.one, Vector3.one };
+            asset.Rotations = new[] { new Vector4(1, 0, 0, 0), new Vector4(1, 0, 0, 0) };
+            asset.Colors = new[] { new Vector4(1, 1, 1, 1), new Vector4(1, 1, 1, 1) };
+            asset.Velocities = new[] { Vector3.zero };
+            asset.Times = new[] { 0.0f };
+            asset.Durations = new[] { 1.0f };
             return asset;
         }
 
@@ -729,6 +853,110 @@ namespace Gsplat.Tests
             Assert.IsTrue(r.Valid, "Expected renderer to become valid (showing/visible) after PlayShow.");
 
             Object.DestroyImmediate(go);
+            Object.DestroyImmediate(asset);
+        }
+
+        [Test]
+        public void StaticSingleFrame4D_Has4DFieldsRejectsTruncatedArrays()
+        {
+            var validAsset = CreateMinimalStatic4DAsset1Splat();
+            var brokenAsset = CreateBroken4DAssetWithTruncatedArrays();
+
+            Assert.IsTrue(InvokeHas4DFields(validAsset),
+                "静态单帧 4D 资产的 canonical arrays 齐全且等长时,应被识别为合法 4D 资产.");
+            Assert.IsFalse(InvokeHas4DFields(brokenAsset),
+                "4D arrays 只是非空但长度不足时,必须回退为非 4D,避免后续上传越界.");
+
+            Object.DestroyImmediate(validAsset);
+            Object.DestroyImmediate(brokenAsset);
+        }
+
+        [Test]
+        public void StaticSingleFrame4D_UpdateSortRangeForAnyTime_AlwaysKeepsWholeSplatSet()
+        {
+            var go = new GameObject("GsplatVisibilityAnimationTests_StaticSingleFrameSortRange");
+            go.SetActive(false);
+            var asset = CreateMinimalStatic4DAsset1Splat();
+            var renderer = go.AddComponent<GsplatRenderer>();
+            renderer.GsplatAsset = asset;
+
+            SetEffectiveSplatState(renderer, effectiveSplatCount: 1, pendingSplatCount: 0);
+
+            var samples = new[] { -0.25f, 0.0f, 0.35f, 1.0f, 1.75f };
+            for (var i = 0; i < samples.Length; i++)
+            {
+                UpdateSortRangeForTime(renderer, samples[i]);
+                Assert.AreEqual(0u, GetSortBaseIndexThisFrame(renderer),
+                    $"静态单帧 4D 资产不应因为时间变化偏移 baseIndex, sampleIndex={i}");
+                Assert.AreEqual(1u, GetSortCountThisFrame(renderer),
+                    $"静态单帧 4D 资产在任意时间点都应继续提交完整单帧 splat 集, sampleIndex={i}");
+            }
+
+            Object.DestroyImmediate(go);
+            Object.DestroyImmediate(asset);
+        }
+
+        [UnityTest]
+        public IEnumerator StaticSingleFrame4D_AutoPlayLoopOnlyChangesTime_NotFrameCardinality()
+        {
+            // 先等到 deltaTime 有效:
+            // - 手动反射调用 `Update` 时,我们仍依赖 Unity 提供本帧 deltaTime.
+            // - 若 deltaTime 始终为 0,Loop/Clamp 的时间推进语义就无法被证伪.
+            var guardFrames = 0;
+            while (Time.deltaTime <= 0.0f && guardFrames < 3)
+            {
+                guardFrames++;
+                yield return null;
+            }
+
+            Assert.Greater(Time.deltaTime, 0.0f, "需要一个正的 deltaTime 才能验证 AutoPlay/Loop 语义.");
+
+            var asset = CreateMinimalStatic4DAsset1Splat();
+
+            var loopOffGo = new GameObject("GsplatVisibilityAnimationTests_StaticSingleFrameLoopOff");
+            loopOffGo.SetActive(false);
+            var loopOffRenderer = loopOffGo.AddComponent<GsplatRenderer>();
+            loopOffRenderer.GsplatAsset = asset;
+            loopOffRenderer.EnableGsplatBackend = false;
+            loopOffRenderer.AutoPlay = true;
+            loopOffRenderer.Speed = 1000.0f;
+            loopOffRenderer.Loop = false;
+            loopOffRenderer.TimeNormalized = 0.95f;
+            SetEffectiveSplatState(loopOffRenderer, effectiveSplatCount: 1, pendingSplatCount: 0);
+            SetPreviousAsset(loopOffRenderer, asset);
+
+            InvokeManualUpdate(loopOffRenderer);
+            Assert.AreEqual(1.0f, loopOffRenderer.TimeNormalized, 1e-6f,
+                "Loop=false 时,AutoPlay 应把时间钳在 1.0,而不是要求不存在的第二帧.");
+            Assert.AreEqual(1.0f, GetTimeNormalizedThisFrame(loopOffRenderer), 1e-6f,
+                "本帧缓存时间应与序列化 TimeNormalized 保持一致.");
+            Assert.AreEqual(1u, GetSortCountThisFrame(loopOffRenderer),
+                "即便 AutoPlay 把时间推到末端,静态单帧 4D 资产仍应保持完整单帧提交.");
+
+            var loopOnGo = new GameObject("GsplatVisibilityAnimationTests_StaticSingleFrameLoopOn");
+            loopOnGo.SetActive(false);
+            var loopOnRenderer = loopOnGo.AddComponent<GsplatRenderer>();
+            loopOnRenderer.GsplatAsset = asset;
+            loopOnRenderer.EnableGsplatBackend = false;
+            loopOnRenderer.AutoPlay = true;
+            loopOnRenderer.Speed = 1000.0f;
+            loopOnRenderer.Loop = true;
+            loopOnRenderer.TimeNormalized = 0.95f;
+            SetEffectiveSplatState(loopOnRenderer, effectiveSplatCount: 1, pendingSplatCount: 0);
+            SetPreviousAsset(loopOnRenderer, asset);
+
+            InvokeManualUpdate(loopOnRenderer);
+            Assert.GreaterOrEqual(loopOnRenderer.TimeNormalized, 0.0f,
+                "Loop=true 时,AutoPlay 后的时间仍应保持在合法归一化区间.");
+            Assert.Less(loopOnRenderer.TimeNormalized, 1.0f,
+                "Loop=true 时,AutoPlay 应回绕到 [0,1),而不是卡在末端.");
+            Assert.AreEqual(loopOnRenderer.TimeNormalized, GetTimeNormalizedThisFrame(loopOnRenderer), 1e-6f,
+                "本帧缓存时间应跟随 Loop 后的最新归一化时间.");
+            Assert.AreEqual(1u, GetSortCountThisFrame(loopOnRenderer),
+                "Loop=true 时也不应把静态单帧 4D 资产错误地当成需要第二帧的序列.");
+
+            Object.DestroyImmediate(loopOffGo);
+            Object.DestroyImmediate(loopOnGo);
             Object.DestroyImmediate(asset);
         }
     }

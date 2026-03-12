@@ -266,9 +266,12 @@ namespace Gsplat
             if (!TryGetHdrpAggregatedFrameSettings(camera, hdrpAsset, out var frameSettings))
                 return false;
 
-            if (!frameSettings.IsEnabled(FrameSettingsField.MSAA))
-                return true;
-
+            // 说明:
+            // - HDRP 2022+ 已把旧的 `FrameSettingsField.MSAA` 迁成 `MSAAMode`.
+            // - 真实项目里常见状态是:
+            //   - legacy bit(`MSAA`) 仍然为 false
+            //   - 但 `msaaMode=FromHDRPAsset/MSAA4X` 已经有效
+            // - 如果这里继续看旧 bit,就会把已经生效的 HDRP MSAA 误判成 1x.
             sampleCount = Mathf.Max((int)frameSettings.GetResolvedMSAAMode(hdrpAsset), 1);
 
             // 说明:

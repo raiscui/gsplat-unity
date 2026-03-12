@@ -46,6 +46,12 @@ namespace Gsplat
         public GsplatAsset GsplatAsset;
         [Range(0, 3)] public int SHDegree = 3;
         public bool GammaToLinear;
+        [Tooltip("是否启用 Gaussian footprint 的抗锯齿补偿(对应 PlayCanvas 的 `GSPLAT_AA`).\n" +
+                 "说明:\n" +
+                 "- 默认关闭,与 SuperSplat / PlayCanvas 的默认配置一致.\n" +
+                 "- 更适合对带 AA 训练/导出的 splat 做对照.\n" +
+                 "- 对普通 3DGS 数据开启后,可能会让画面更软,也可能整体变暗.")]
+        public bool EnableFootprintAACompensation;
         public bool AsyncUpload;
         [Tooltip("是否启用 Gsplat 主后端(Compute 排序 + Gsplat.shader)渲染. 仅使用 VFX Graph 后端时可关闭,避免双重渲染与排序开销.")]
         public bool EnableGsplatBackend = true;
@@ -983,7 +989,7 @@ namespace Gsplat
 
                 var boundsForRender = CalcVisibilityExpandedRenderBounds(localBounds);
                 m_renderer.RenderForCamera(camera, m_sortSplatCountThisFrame, transform, boundsForRender,
-                    gameObject.layer, GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding,
+                    gameObject.layer, GammaToLinear, EnableFootprintAACompensation, SHDegree, m_timeNormalizedThisFrame, motionPadding,
                     timeModel: GetEffectiveTimeModel(), temporalCutoff: GetEffectiveTemporalCutoff(),
                     diagTag: "EditMode.CameraCallback",
                     splatBaseIndex: m_sortSplatBaseIndexThisFrame);
@@ -1040,11 +1046,19 @@ namespace Gsplat
 
         static bool Has4DFields(GsplatAsset asset)
         {
-            // 4D 数组只要有任意一个缺失,就视为 3D-only 资产,避免运行期出现数组越界或未绑定 buffer.
+            // 4D 数组判定必须同时满足:
+            // - 三组 canonical 4D arrays 都存在.
+            // - 每组长度都至少覆盖 `SplatCount`.
+            //
+            // 这样即便遇到异常/半损坏资产,也会稳态回退为 3D-only,
+            // 避免后续 `SetData(..., count)` 按 `SplatCount` 上传时发生越界.
             return asset != null &&
                    asset.Velocities != null &&
                    asset.Times != null &&
-                   asset.Durations != null;
+                   asset.Durations != null &&
+                   asset.Velocities.LongLength >= asset.SplatCount &&
+                   asset.Times.LongLength >= asset.SplatCount &&
+                   asset.Durations.LongLength >= asset.SplatCount;
         }
 
         int GetEffectiveTimeModel()
@@ -3728,7 +3742,7 @@ namespace Gsplat
                 {
                     var boundsForRender = CalcVisibilityExpandedRenderBounds(localBounds);
                     m_renderer.Render(m_sortSplatCountThisFrame, transform, boundsForRender,
-                        gameObject.layer, GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding,
+                        gameObject.layer, GammaToLinear, EnableFootprintAACompensation, SHDegree, m_timeNormalizedThisFrame, motionPadding,
                         timeModel: GetEffectiveTimeModel(), temporalCutoff: GetEffectiveTemporalCutoff(),
                         splatBaseIndex: m_sortSplatBaseIndexThisFrame);
                 }

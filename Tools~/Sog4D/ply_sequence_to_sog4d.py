@@ -557,8 +557,15 @@ def _build_sh0_codebook(
     seed: int,
 ) -> np.ndarray:
     # sh0Codebook 固定 256 项(按 spec).
+    # - method=base-rgb: 直接对齐 `.splat4d` 的 baseRgb(0..255) 量化语义.
+    #   这样 `sh0.webp` 的 RGB byte 可以和 `.splat4d` 的 baseRgb 完全同构,
+    #   避免 learned codebook 在真实单帧 PLY 上把大量暗色/负值 f_dc 挤没.
     # - method=quantile: 快速且对长尾更稳.
     # - method=kmeans: 误差更小,但需要 sklearn.
+    if method == "base-rgb":
+        codes = np.arange(256, dtype=np.float32)
+        return (((codes / 255.0) - 0.5) / SH_C0).astype(np.float32, copy=False)
+
     if samples.size == 0:
         _die("sh0Codebook: 没有样本,无法生成")
 
@@ -674,6 +681,17 @@ def _quantize_scalar_to_codebook_u8(values: np.ndarray, codebook_sorted: np.ndar
     pick0 = d0 <= d1
     out = np.where(pick0, idx0, idx1).astype(np.uint8)
     return out
+
+
+def _quantize_sh0_to_u8(values: np.ndarray, codebook_sorted: np.ndarray, method: str) -> np.ndarray:
+    # 说明:
+    # - `base-rgb` 直接复用 `.splat4d` 的 baseRgb 8bit 语义.
+    # - 其它方法仍走“在 f_dc 域里找最近 codebook scalar”的旧路径.
+    if method == "base-rgb":
+        base_rgb = 0.5 + SH_C0 * values.astype(np.float32, copy=False)
+        return _quantize_0_1_to_u8(base_rgb)
+
+    return _quantize_scalar_to_codebook_u8(values, codebook_sorted)
 
 
 # -----------------------------------------------------------------------------
@@ -865,7 +883,8 @@ def _pack_cmd(args: argparse.Namespace) -> None:
 
     # 平均分配每帧采样预算,避免某帧独占样本.
     # sh0 的采样参数按“标量总量”计数,但每个 splat 会贡献 3 个标量(f_dc.r/g/b).
-    sh0_per_frame = max(1, sh0_target // (frame_count * 3))
+    sh0_needs_sampling = args.sh0_codebook_method != "base-rgb"
+    sh0_per_frame = max(1, sh0_target // (frame_count * 3)) if sh0_needs_sampling else 0
     scale_per_frame = max(1, scale_target // frame_count)
     shn_per_frame = max(1, shn_target // frame_count) if sh_bands > 0 else 0
 
@@ -947,10 +966,13 @@ def _pack_cmd(args: argparse.Namespace) -> None:
     scale_samples = np.concatenate(scale_feat, axis=0) if scale_feat else np.empty((0, 3), dtype=np.float32)
     scale_w_all = np.concatenate(scale_w, axis=0) if scale_w else np.empty((0,), dtype=np.float32)
 
-    if sh0_samples.size == 0:
+    if sh0_needs_sampling and sh0_samples.size == 0:
         _die("sh0Codebook: 采样结果为空. 你可能给了空序列,或者权重全为 0.")
 
-    _info(f"sh0 samples: {sh0_samples.shape[0]}")
+    if sh0_needs_sampling:
+        _info(f"sh0 samples: {sh0_samples.shape[0]}")
+    else:
+        _info("sh0 samples: skipped (base-rgb mode)")
     sh0_codebook = _build_sh0_codebook(sh0_samples, sh0_w_all, args.sh0_codebook_method, int(args.seed))
 
     # scale codebook
@@ -1369,7 +1391,10 @@ def _pack_cmd(args: argparse.Namespace) -> None:
             # -----------------------------
             # sh0.webp (RGB=codebook index, A=opacity)
             # -----------------------------
-            idx_sh0 = _quantize_scalar_to_codebook_u8(frame.f_dc, sh0_codebook)  # [N,3] u8
+            # `base-rgb` 模式下:
+            # - RGB byte 会直接等于 `.splat4d` 的 baseRgb 量化结果.
+            # - `sh0Codebook` 则是与 0..255 byte 一一对应的固定 f_dc 反解表.
+            idx_sh0 = _quantize_sh0_to_u8(frame.f_dc, sh0_codebook, args.sh0_codebook_method)  # [N,3] u8
             a8 = _quantize_0_1_to_u8(opacity)  # [N] u8
             flat_sh0 = np.zeros((width * height, 4), dtype=np.uint8)
             flat_sh0[:splat_count, 0:3] = idx_sh0
@@ -1954,7 +1979,12 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     pack.add_argument("--scale-sample-count", type=int, default=200_000, help="scale 拟合采样量(总量)")
 
     # sh0 codebook
-    pack.add_argument("--sh0-codebook-method", default="quantile", choices=["quantile", "kmeans"], help="sh0Codebook 生成方法")
+    pack.add_argument(
+        "--sh0-codebook-method",
+        default="base-rgb",
+        choices=["base-rgb", "quantile", "kmeans"],
+        help="sh0Codebook 生成方法(base-rgb 默认对齐 `.splat4d` 的 baseRgb 量化语义)",
+    )
     pack.add_argument("--sh0-sample-count", type=int, default=1_000_000, help="sh0 拟合采样量(标量总量)")
 
     # SHN palette + labels

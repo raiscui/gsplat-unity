@@ -33,8 +33,11 @@ python3 Tools~/Splat4D/ply_sequence_to_splat4d.py --input-dir /path/to/time_*.pl
 ## Testing Guidelines
 
 - EditMode tests live in `Tests/Editor/` (Unity Test Framework/NUnit). In Test Runner, enable package tests and run `Gsplat.Tests.Editor`.
+- In minimal repro projects, package tests are not compiled or runnable unless `Packages/manifest.json` includes `"testables": ["wu.yize.gsplat"]`.
 - Treat `Samples~/` as the primary visual smoke test.
 - When running EditMode tests via Unity CLI (`-runTests`), if you see the Editor exit but no `-testResults` XML is generated, try removing `-quit` or moving `-quit` to the end of the argument list (some Editor versions can quit before the TestRunner starts when `-quit` is placed early).
+- Headless Unity CLI runs (`-batchmode -nographics`) use `GraphicsDeviceType.Null`; guard graphics-only initialization (for example sorter setup or VFX kernel discovery) or you can get misleading `Kernel '...' not found` logs even when importer/runtime logic is otherwise correct.
+- Do not use headless runs as final visual proof. In Edit Mode, Unity MCP `manage_camera screenshot` can also miss the actual on-screen GameView and return blank images; for final display verification, prefer an on-screen Unity window/GameView capture or a purpose-built verifier scene.
 - Note: Package Manager samples are copied into the Unity project under `Assets/Samples/...` and do not auto-update when `Samples~/` changes; if a sample fix "doesn't work", check whether you're running the copied sample instead of the package source.
 - If you changed shaders/C# but see **zero** runtime difference, first verify you are editing the copy Unity actually uses (manifest/local path vs embedded). For fast proof in Editor, log the `AssetDatabase` path of the shader/material used at the draw submission point.
 - When changing sorting/shaders, validate on a subgroup-capable graphics API (D3D12, Metal, or Vulkan).
@@ -44,6 +47,11 @@ python3 Tools~/Splat4D/ply_sequence_to_splat4d.py --input-dir /path/to/time_*.pl
 - For RGBA8 UNorm "data textures" (e.g. `TextureFormat.RGBA32`), prefer reading as `float4` and converting to bytes in HLSL; integer views can be stricter on Metal.
 - When touching VFX backend code, verify compilation both with and without `com.unity.visualeffectgraph` installed.
 - Editor SRP caveat: in Edit Mode, Unity can call `RenderPipelineManager.beginCameraRendering` multiple times within the same `Time.frameCount`. If draw submission happens only once per `ExecuteAlways.Update`, you can get `render invocation count > draw submission count` flicker. Align draw submission to the camera callbacks and do not filter SceneView cameras by `isActiveAndEnabled` (SceneView internal cameras can be disabled but still participate in SRP callbacks).
+
+## Tooling Notes
+
+- When appending Markdown/context files from shell and the body contains backticks, use a single-quoted heredoc like `cat <<'EOF'`. Unquoted heredocs or double-quoted wrapper strings can execute backticked text via shell expansion and corrupt the note.
+- Repo-local Codex skills must keep the `SKILL.md` front-matter `name` at 64 characters or fewer, or Codex will skip loading the skill as invalid.
 
 ## Commit & Pull Request Guidelines
 

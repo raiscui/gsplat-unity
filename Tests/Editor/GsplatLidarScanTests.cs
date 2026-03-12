@@ -1100,6 +1100,133 @@ namespace Gsplat.Tests
         }
 
         [Test]
+        public void GetLidarParticleMsaaSampleCount_HdrpUsesMsaaModeWhenLegacyMsaaBitIsFalse()
+        {
+            var hdrpAssetType = FindLoadedType("UnityEngine.Rendering.HighDefinition.HDRenderPipelineAsset");
+            if (hdrpAssetType == null)
+            {
+                Assert.Ignore("HDRP package is not loaded, skipping HDRP-specific LiDAR A2C test.");
+            }
+
+            var hdrpAsset = GraphicsSettings.currentRenderPipeline;
+            if (hdrpAsset == null || !hdrpAssetType.IsInstanceOfType(hdrpAsset))
+            {
+                Assert.Ignore("HDRP-specific LiDAR A2C test requires an active HDRP pipeline.");
+            }
+
+            var renderPipelineSettings = GetReflectedMemberValue(
+                hdrpAsset,
+                hdrpAssetType.FullName,
+                "currentPlatformRenderPipelineSettings");
+            var supportedLitShaderMode = GetReflectedMemberValue(
+                renderPipelineSettings,
+                "HDRP RenderPipelineSettings",
+                "supportedLitShaderMode");
+            if (string.Equals(supportedLitShaderMode.ToString(), "DeferredOnly", StringComparison.Ordinal))
+            {
+                Assert.Ignore("Current HDRP asset is DeferredOnly, MSAA is intentionally unavailable.");
+            }
+
+            if (GetReflectedMemberValue<bool>(renderPipelineSettings, "HDRP RenderPipelineSettings", "supportWater"))
+            {
+                Assert.Ignore("Current HDRP asset enables Water, HDRP 会在 sanitize 阶段禁用 MSAA.");
+            }
+
+            var hdAdditionalCameraDataType = FindLoadedType("UnityEngine.Rendering.HighDefinition.HDAdditionalCameraData");
+            var frameSettingsType = FindLoadedType("UnityEngine.Rendering.HighDefinition.FrameSettings");
+            var frameSettingsFieldType = FindLoadedType("UnityEngine.Rendering.HighDefinition.FrameSettingsField");
+            var litShaderModeType = FindLoadedType("UnityEngine.Rendering.HighDefinition.LitShaderMode");
+            var msaaModeType = FindLoadedType("UnityEngine.Rendering.HighDefinition.MSAAMode");
+            var frameSettingsOverrideMaskType =
+                FindLoadedType("UnityEngine.Rendering.HighDefinition.FrameSettingsOverrideMask");
+
+            Assert.IsNotNull(hdAdditionalCameraDataType, "Expected HDRP HDAdditionalCameraData type to be available.");
+            Assert.IsNotNull(frameSettingsType, "Expected HDRP FrameSettings type to be available.");
+            Assert.IsNotNull(frameSettingsFieldType, "Expected HDRP FrameSettingsField type to be available.");
+            Assert.IsNotNull(litShaderModeType, "Expected HDRP LitShaderMode enum to be available.");
+            Assert.IsNotNull(msaaModeType, "Expected HDRP MSAAMode enum to be available.");
+            Assert.IsNotNull(frameSettingsOverrideMaskType,
+                "Expected HDRP FrameSettingsOverrideMask type to be available.");
+
+            var cameraGo = new GameObject("hdrp-lidar-aa-legacy-bit-false-camera");
+            Camera camera = null;
+
+            try
+            {
+                camera = cameraGo.AddComponent<Camera>();
+                var hdCamera = AddComponentByType(cameraGo, hdAdditionalCameraDataType,
+                    "UnityEngine.Rendering.HighDefinition.HDAdditionalCameraData");
+
+                SetReflectedMemberValue(hdCamera, hdAdditionalCameraDataType.FullName, "customRenderingSettings", true);
+
+                var createFrameSettingsMethod = frameSettingsType.GetMethod(
+                    "Create",
+                    BindingFlags.Public | BindingFlags.Static);
+                Assert.IsNotNull(createFrameSettingsMethod, "Expected HDRP FrameSettings.Create() to exist.");
+                var customFrameSettings = createFrameSettingsMethod.Invoke(null, null);
+
+                SetReflectedMemberValue(
+                    customFrameSettings,
+                    frameSettingsType.FullName,
+                    "litShaderMode",
+                    GetEnumValue(litShaderModeType, "Forward", "UnityEngine.Rendering.HighDefinition.LitShaderMode"));
+                SetReflectedMemberValue(
+                    customFrameSettings,
+                    frameSettingsType.FullName,
+                    "msaaMode",
+                    GetEnumValue(msaaModeType, "MSAA4X", "UnityEngine.Rendering.HighDefinition.MSAAMode"));
+                SetReflectedMemberValue(
+                    hdCamera,
+                    hdAdditionalCameraDataType.FullName,
+                    "m_RenderingPathCustomFrameSettings",
+                    customFrameSettings);
+
+                var legacyMsaaEnabled = (bool)InvokeReflectedMethod(
+                    customFrameSettings,
+                    frameSettingsType.FullName,
+                    "IsEnabled",
+                    GetEnumValue(frameSettingsFieldType, "MSAA",
+                        "UnityEngine.Rendering.HighDefinition.FrameSettingsField"));
+                Assert.IsFalse(legacyMsaaEnabled,
+                    "该测试要求旧的 legacy MSAA bit 保持 false,用于锁定只看 `msaaMode` 的新语义.");
+
+                var overrideMask = Activator.CreateInstance(frameSettingsOverrideMaskType);
+                var bitArray = GetReflectedMemberValue(overrideMask, frameSettingsOverrideMaskType.FullName, "mask");
+                SetReflectedBitArrayValue(
+                    bitArray,
+                    "HDRP FrameSettingsOverrideMask.mask",
+                    Convert.ToUInt32(GetEnumValue(frameSettingsFieldType, "LitShaderMode",
+                        "UnityEngine.Rendering.HighDefinition.FrameSettingsField")),
+                    true);
+                SetReflectedBitArrayValue(
+                    bitArray,
+                    "HDRP FrameSettingsOverrideMask.mask",
+                    Convert.ToUInt32(GetEnumValue(frameSettingsFieldType, "MSAAMode",
+                        "UnityEngine.Rendering.HighDefinition.FrameSettingsField")),
+                    true);
+                SetReflectedMemberValue(overrideMask, frameSettingsOverrideMaskType.FullName, "mask", bitArray);
+                SetReflectedMemberValue(
+                    hdCamera,
+                    hdAdditionalCameraDataType.FullName,
+                    "renderingPathCustomFrameSettingsOverrideMask",
+                    overrideMask);
+
+                camera.allowMSAA = false;
+
+                Assert.AreEqual(4, GsplatUtils.GetLidarParticleMsaaSampleCount(camera));
+                Assert.IsTrue(GsplatUtils.IsLidarParticleMsaaAvailable(camera));
+
+                var diagnostics = GsplatUtils.GetLidarParticleMsaaDiagnosticSummary(camera);
+                StringAssert.Contains("msaaSamples=4", diagnostics);
+                StringAssert.Contains("msaaSource=hdrp-frame-settings", diagnostics);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(cameraGo);
+            }
+        }
+
+        [Test]
         public void SyncLidarColorBlendTargetFromSerializedMode_DoesNotRestartWhenAnimating_GsplatRenderer()
         {
             // 说明:

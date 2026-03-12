@@ -227,12 +227,12 @@ namespace Gsplat.VFX
 	            if (!GsplatRenderer)
 	                GsplatRenderer = GetComponent<GsplatRenderer>();
 
-	            // Kernel id 缓存,避免每帧 FindKernel.
-	            if (VfxComputeShader)
-	            {
-	                m_kernelBuildAxes = VfxComputeShader.FindKernel("BuildAxes");
-	                m_kernelBuildDynamic = VfxComputeShader.FindKernel("BuildDynamic");
-	            }
+	            // Kernel id 缓存:
+	            // - 正常图形环境下,这里会尽早缓存 kernel id,避免后续每帧重复 FindKernel.
+	            // - 但在 batchmode/-nographics 或某些平台限制下,FindKernel 可能直接抛异常.
+	            // - 因此这里统一复用 `EnsureKernelsReady()`,把“不支持/不可用”降级成安全 no-op,
+	            //   避免 importer 在 headless 验证或 CI 场景下因为 VFX 预览链路报错.
+	            _ = EnsureKernelsReady();
 	        }
 
         protected override void OnDisable()
@@ -290,12 +290,35 @@ namespace Gsplat.VFX
         }
 #endif
 
+        static bool HasNullGraphicsDevice()
+        {
+            // ----------------------------------------------------------------
+            // batchmode / -nographics / dedicated-server 一类环境下,
+            // Unity 会切到 Null graphics device.
+            //
+            // 关键事实:
+            // - 在这类环境里,`ComputeShader.FindKernel(...)` 即使被 try/catch 包住,
+            //   也可能先把 "Kernel 'xxx' not found" 打进日志,再抛异常.
+            // - 我们的 batch verifier 只需要 importer/runtime 语义,
+            //   并不依赖 VFX 预览链路真正可运行.
+            //
+            // 因此:
+            // - 只要是 Null graphics device,这里就直接把 VFX compute 降级成 no-op.
+            // - 这样能避免 headless 验证时被无关的 VFX kernel 日志污染.
+            // ----------------------------------------------------------------
+            return SystemInfo.graphicsDeviceType == UnityEngine.Rendering.GraphicsDeviceType.Null;
+        }
+
         bool EnsureKernelsReady()
         {
             if (!VfxComputeShader)
                 return false;
+            if (HasNullGraphicsDevice())
+                return false;
             if (m_kernelBuildAxes >= 0 && m_kernelBuildDynamic >= 0)
                 return true;
+            if (!VfxComputeShader.HasKernel("BuildAxes") || !VfxComputeShader.HasKernel("BuildDynamic"))
+                return false;
 
             try
             {

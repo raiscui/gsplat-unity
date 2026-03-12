@@ -1659,3 +1659,116 @@
   - `ArgumentOutOfRangeException`
   - `Runtime/GsplatRenderer.cs:2232`
 - 这个问题影响 `.ply` 对照实验,但不影响本次 `.sog4d` 单帧支持的验收结论.
+
+## 2026-03-12 14:19:07 +0800 主题: 回读上下文与归档后,准备补充 AGENTS 的工具使用规范
+
+### 检索范围
+
+- 当前主线六文件:
+  - `task_plan.md`
+  - `notes.md`
+  - `WORKLOG.md`
+  - `LATER_PLANS.md`
+  - `ERRORFIX.md`
+- 当前支线后缀集:
+  - `__imgui_layout_error`
+  - `__sog4d_display_issue`
+  - `__splat4d_edge_opacity`
+  - `__splat4d_single_frame_support`
+- 历史归档:
+  - `archive/task_plan_*.md`
+  - `archive/notes_*.md`
+  - `archive/WORKLOG_*.md`
+  - `archive/ERRORFIX_*.md`
+- 说明:
+  - 本次是用户明确要求“连归档一起回读”,所以检索范围刻意扩大到了 `archive/`.
+
+### 已有 AGENTS 里已经覆盖的规则
+
+- Unity CLI `-runTests` 与 `-quit` 的 XML 落盘坑.
+- `Samples~/` 与 `Assets/Samples/...` copy 不自动同步.
+- 先用 `AssetDatabase` 路径证明运行时到底用了哪份 shader / material.
+- Metal 下 `StructuredBuffer.GetDimensions` 不可用.
+- Metal 下 `requires a ComputeBuffer ... Skipping draw calls` 属于缺 buffer 绑定.
+- `ComputeShader.IsSupported` 与 `GetKernelThreadGroupSizes` 的主次关系.
+
+### 当前确认仍缺在 AGENTS 里的高价值规则
+
+- `manage_camera screenshot` 在 Unity EditMode 验收里会给出假阴性.
+  - 证据来源:
+    - `notes.md` 2026-03-11 21:40:00 条目
+  - 正确用法:
+    - 它不能直接当最终显示证据.
+    - 最终应使用 Unity 主窗口 on-screen GameView 取证,或等价的真实窗口截图.
+
+- 最小 Unity package 测试工程如果不在 `Packages/manifest.json` 声明 `"testables": ["wu.yize.gsplat"]`,包内 tests 默认不会被编译/执行.
+  - 证据来源:
+    - `archive/notes_2026-02-24_105820.md`
+  - 正确用法:
+    - 建最小复现工程时,先补 `testables`,再跑 CLI package tests.
+
+- `-batchmode -nographics` 是 headless/Null graphics device 环境,不能把这类环境下的 VFX kernel 噪声误判为 importer/runtime 主链失败.
+  - 证据来源:
+    - `archive/notes_2026-02-24_105820.md`
+    - `ERRORFIX__splat4d_single_frame_support.md`
+  - 正确用法:
+    - 遇到 `GraphicsDeviceType.Null` 时,要跳过 sorter 初始化或 VFX kernel 探测.
+    - 这类模式不适合作为最终视觉截图证据.
+
+- shell 追加 Markdown 上下文时,正文里只要有反引号,就必须用单引号 heredoc.
+  - 证据来源:
+    - `ERRORFIX__splat4d_edge_opacity.md`
+  - 正确用法:
+    - 用 `cat <<'EOF'`,不要用未加引号 heredoc,也不要把整段 Markdown 放进会触发 shell 展开的双引号字符串.
+
+- repo 内自定义 Codex skill 的 `SKILL.md` front-matter `name` 不能超过 64 个字符.
+  - 证据来源:
+    - `archive/ERRORFIX_2026-03-02_175246.md`
+  - 正确用法:
+    - 新建或重命名 skill 时,先检查 `name` 长度,否则会被 Codex 直接跳过加载.
+
+### 结论
+
+- 本次适合补到 `AGENTS.md` 的,主要是 5 条“工具/命令/MCP 使用姿势”规则.
+- 其中 3 条应放在 `Testing Guidelines`:
+  - `testables`
+  - headless `-batchmode -nographics`
+  - `manage_camera screenshot` 假阴性
+- 另外 2 条更适合单独新增一个轻量的 tooling/codex 协作小节:
+  - 单引号 heredoc
+  - skill name 长度上限
+
+## 2026-03-12 15:02:00 +0800 主题: git 提交前的边界确认
+
+### 已观察到的事实
+
+- 当前仓库没有 submodule 变更.
+- `git diff --check` 已通过,没有空白错误.
+- Python 自动化验证已通过:
+  - `python3 -m unittest Tools~/Splat4D/tests/test_single_frame_cli.py`
+    - `Ran 7 tests in 11.140s`
+    - `OK`
+  - `python3 -m unittest Tools~/Sog4D/tests/test_single_frame_cli.py`
+    - `Ran 2 tests in 3.959s`
+    - `OK`
+- 当前工作区存在 5 个可疑未跟踪空文件:
+  - `=`
+  - `A_gauss`
+  - `ClipCorner`
+  - `alphaGauss`
+  - `baseAlpha`
+- 这些文件当前都是 0 byte,且文件名像是调试过程中遗落的临时产物,不是正式源码或规格文件.
+
+### 提交边界判断
+
+- 本次会纳入提交:
+  - 已修改的正式源码 / 测试 / 文档 / OpenSpec / 六文件上下文
+  - 新增的 `Tests/Editor/GsplatPlyImporterTests.cs`
+  - 新增的 `Tools~/Splat4D/tests/test_single_frame_cli.py` 与测试夹具 `single_frame_valid_3dgs.ply`
+  - 新增的 `openspec/changes/splat4d-single-frame-ply-support/`
+  - 新增的 `openspec/changes/sog4d-ply-sh-layout-audit/`
+- 本次先不纳入提交:
+  - 上述 5 个可疑空文件及其 `.meta`
+- 理由:
+  - 它们没有内容,也没有落在已识别的实现/文档/规格主线里.
+  - 在没有额外证据前,把它们当成正式资产提交风险更大.

@@ -51,6 +51,12 @@ namespace Gsplat
 
         [Range(0, 3)] public int SHDegree = 3;
         public bool GammaToLinear;
+        [Tooltip("是否启用 Gaussian footprint 的抗锯齿补偿(对应 PlayCanvas 的 `GSPLAT_AA`).\n" +
+                 "说明:\n" +
+                 "- 默认关闭,与 SuperSplat / PlayCanvas 的默认配置一致.\n" +
+                 "- 更适合对带 AA 训练/导出的 splat 做对照.\n" +
+                 "- 对普通 3DGS 数据开启后,可能会让画面更软,也可能整体变暗.")]
+        public bool EnableFootprintAACompensation;
 
         [Tooltip("是否启用 Gsplat 主后端(Compute 排序 + Gsplat.shader)渲染.\n" +
                  "如果未来增加其它后端(例如 VFX Graph 序列后端),可关闭以避免双重渲染与排序开销.")]
@@ -931,7 +937,7 @@ namespace Gsplat
 
                 var boundsForRender = CalcVisibilityExpandedRenderBounds(localBounds);
                 m_renderer.RenderForCamera(camera, SplatCount, transform, boundsForRender, gameObject.layer,
-                    GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
+                    GammaToLinear, EnableFootprintAACompensation, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
                     timeModel: 1, temporalCutoff: 0.01f,
                     diagTag: "EditMode.CameraCallback");
             }
@@ -2308,7 +2314,7 @@ namespace Gsplat
 
                     var boundsForRender = CalcVisibilityExpandedRenderBounds(localBounds);
                     m_renderer.Render(SplatCount, transform, boundsForRender, gameObject.layer,
-                        GammaToLinear, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
+                        GammaToLinear, EnableFootprintAACompensation, SHDegree, m_timeNormalizedThisFrame, motionPadding: 0.0f,
                         timeModel: 1, temporalCutoff: 0.01f);
                 }
 

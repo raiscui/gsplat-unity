@@ -2189,3 +2189,71 @@
 - 以后遇到“明明 Valid 了但截图是空的”,要先区分:
   - 这是显示真的失败
   - 还是取证手段本身给了假阴性
+
+## 2026-03-12 14:21:10 +0800 任务名称: 回读文件上下文与归档,补充 AGENTS 工具使用规范
+
+### 任务内容
+- 回读当前主线六文件、多个支线后缀六文件,以及 `archive/` 中的历史上下文文件.
+- 从这些上下文里提炼“工具使用错误 -> 正确用法”的长期规则.
+- 把当前 `AGENTS.md` 还没覆盖的高价值规则补进去.
+
+### 完成过程
+- 范围清点:
+  - 检索了当前主线文件:
+    - `task_plan.md`
+    - `notes.md`
+    - `WORKLOG.md`
+    - `LATER_PLANS.md`
+    - `ERRORFIX.md`
+  - 检索了当前支线:
+    - `__imgui_layout_error`
+    - `__sog4d_display_issue`
+    - `__splat4d_edge_opacity`
+    - `__splat4d_single_frame_support`
+  - 检索了 `archive/` 中的历史 `task_plan/notes/WORKLOG/ERRORFIX`.
+- 候选收敛:
+  - 先排除了 `AGENTS.md` 已经写过的规则:
+    - `-runTests` / `-quit`
+    - `Samples~/` copy 不自动更新
+    - `AssetDatabase` 路径取证
+    - Metal `GetDimensions`
+    - Metal buffer 绑定与 `GetKernelThreadGroupSizes`
+  - 再把仍缺失的规则收敛成 5 条:
+    - 最小 package 测试工程需要 `testables`
+    - `-batchmode -nographics` 的 Null graphics device 语义
+    - `manage_camera screenshot` 的 EditMode 假阴性
+    - 追加 Markdown 要用单引号 heredoc
+    - repo-local skill name 长度上限 64
+- 文档落地:
+  - `AGENTS.md`:
+    - 在 `Testing Guidelines` 补了 3 条验证/CLI 相关规范
+    - 新增 `Tooling Notes` 小节,补了 2 条 shell/Codex skill 规则
+  - `notes.md`:
+    - 记录了本次检索范围、候选筛选过程与最终结论
+  - `task_plan.md`:
+    - 勾选了当前任务的阶段进展并同步当前状态
+
+### 总结感悟
+- 上下文文件里最有价值的长期知识,往往不是“怎么修这次 bug”,而是“哪种工具姿势会稳定给出假证据”.
+- 这次补进 `AGENTS.md` 的 5 条规则,本质上都属于“减少误判成本”:
+  - 少走错误命令
+  - 少把 headless 噪声当根因
+  - 少把截图假阴性当显示失败
+
+## 2026-03-12 15:02:00 +0800 任务名称: 提交当前单帧 PLY / `.splat4d` 相关改动
+
+### 任务内容
+- 整理当前工作区的源码、文档、OpenSpec 与上下文改动.
+- 在提交前做最小必要验证,避免只凭静态阅读就直接 commit.
+- 识别并排除明显不是正式产物的未跟踪临时文件.
+
+### 完成过程
+- 检查了 `git status`、`git diff --stat`、`git submodule status --recursive`.
+- 运行了两组 Python 自动化验证:
+  - `python3 -m unittest Tools~/Splat4D/tests/test_single_frame_cli.py`
+  - `python3 -m unittest Tools~/Sog4D/tests/test_single_frame_cli.py`
+- 识别出 `=`、`A_gauss`、`ClipCorner`、`alphaGauss`、`baseAlpha` 及其 `.meta` 属于可疑空文件,本次不纳入提交.
+
+### 总结感悟
+- 这类“帮用户直接提交”的动作,关键不是机械执行 `git commit`,而是先把提交边界和验证证据讲清楚.
+- 对未跟踪文件,宁可先排除可疑空产物,也不要为了追求工作区更干净而误把垃圾文件带进历史.
