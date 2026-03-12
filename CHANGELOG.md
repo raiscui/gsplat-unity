@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `GsplatActiveCameraOverride` component to explicitly pick a Game/VR camera as the active camera in `ActiveCameraOnly` mode (supports priority + last-enabled tie-break).
 - Added optional Editor diagnostics (`GsplatSettings.EnableEditorDiagnostics`) to collect camera/sort/draw traces and auto-dump context when Metal skips draw calls due to missing buffer bindings.
+- Added `EnableFootprintAACompensation` to `GsplatRenderer` and `GsplatSequenceRenderer`, exposing a per-renderer `GSPLAT_AA`-style Gaussian footprint compensation path for A/B comparison (default: off).
 - Added optional burn-ring visibility animation (Show/Hide) for `GsplatRenderer` and `GsplatSequenceRenderer` (easeInOutQuad ring expansion, smoke-like noise, configurable center, separate show/hide ring+trail widths, per-splat grow/shrink + position warp distortion, adjustable `WarpStrength`, and Inspector buttons). Disabled by default to keep legacy behavior.
 - Added `VisibilityNoiseMode` dropdown for the burn-ring visibility animation to switch between `ValueSmoke` (default), `CurlSmoke` (curl-like warp field), and `HashLegacy` (legacy comparison).
 - Added `ShowGlowStartBoost` for the burn-ring visibility animation, and tuned show/hide glow so the burn front ring stays on the outer side and brighter (boost), with an inward-decaying afterglow tail (brighter interior, less abrupt outer rim).
@@ -51,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fixed Metal draw-skip warnings ("requires a ComputeBuffer ... but none provided") by binding all required `GraphicsBuffer` resources on a per-renderer material instance (and rebinding before each draw call, treating the 4D buffers as always-required bindings, using dummy buffers when needed).
+- Fixed `.ply` imports so the main object is now a playable prefab with `GsplatRenderer`, and bumped the importer version so existing cached `.ply` assets reimport into the new shape automatically.
 - Fixed Editor Edit Mode flicker in `ActiveCameraOnly` mode by making SceneView the deterministic default active camera (GameView selection uses a sticky "last interacted viewport" hint, and you can always force a Game/VR camera via `GsplatActiveCameraOverride`).
 - Fixed Editor Edit Mode flicker in SRP where a camera can trigger multiple `beginCameraRendering` invocations within the same frame, but draw submission was happening only once in `ExecuteAlways.Update` (draw submission is now aligned to the camera callbacks in Edit Mode `ActiveCameraOnly`).
 - Fixed splats disappearing in the GameView (Edit Mode) while dragging `TimeNormalized` in the Inspector (GameView stays "sticky" as the active viewport even when Inspector takes focus).

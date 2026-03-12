@@ -81,7 +81,13 @@ Diagnostics note (Editor):
 
 ### Import Assets
 
-Copy or drag & drop the PLY file anywhere into your project's `Assets` folder. The package will then automatically read the file and import it as a `Gsplat Asset`.
+Copy or drag & drop a supported source file anywhere into your project's `Assets` folder.
+
+- `.ply` and `.splat4d`
+  - The importer creates a playable prefab (main object) with a `GsplatRenderer` component, so you can drag the imported asset straight into the Scene / Hierarchy.
+  - The underlying `GsplatAsset` is still kept as a sub-asset, so you can also wire it manually if you prefer a custom setup.
+- `.sog4d`
+  - The importer creates a playable prefab (main object) with a `GsplatSequenceRenderer` component, while keeping the sequence asset and stream textures as sub-assets.
 
 This package also supports:
 
@@ -91,9 +97,19 @@ This package also supports:
 
 ### Add Gsplat Renderer
 
-Create or choose a game object in your scene, and add the `Gsplat Renderer` component on it. Point the `Gsplat Asset` field to one of your imported Gsplat Assets. Then it should appear in the viewport.
+If you prefer a manual setup instead of dragging the imported prefab into the scene, create or choose a game object in your scene, add the `Gsplat Renderer` component on it, and point the `Gsplat Asset` field to one of your imported Gsplat Assets.
 
 The `SH Degree` option sets the order of SH coefficients used for rendering. The final value is capped by the Gsplat Asset's `SH Bands`.
+
+### Gaussian footprint AA compensation
+
+Both `Gsplat Renderer` and `GsplatSequenceRenderer` expose `EnableFootprintAACompensation`.
+
+- It mirrors the PlayCanvas / SuperSplat-style `GSPLAT_AA` footprint compensation path.
+- It is **off by default**, matching the upstream default behavior.
+- Treat it as an A/B comparison or data-conditional option:
+  - it is more appropriate for AA-trained / AA-exported splat data
+  - on ordinary 3DGS assets it can make the image softer, and may also reduce perceived brightness
 
 ### Render style (Gaussian vs ParticleDots)
 

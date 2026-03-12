@@ -249,3 +249,11 @@
   - 后续建议:
     - 下次做上下文维护或 continuous-learning 回合时,统一续档这 3 个文件.
     - 续档时一起检查 `.meta` 与 archive 归档状态,避免再让根目录长期堆积超大上下文文件.
+
+## 2026-03-12 23:42:00 +0800
+- 状态更新: 2026-03-12 14:21:10 +0800 记录的“主线上下文文件超过 1000 行需要续档”已在本轮 continuous-learning 完成。
+- 已处理:
+  - 默认组 `task_plan.md` / `notes.md` / `WORKLOG.md`
+  - 支线 `notes__splat4d_edge_opacity.md`
+  - 支线 `notes__splat4d_single_frame_support.md`
+- 当前没有新增仅因上下文体积产生的延期事项。

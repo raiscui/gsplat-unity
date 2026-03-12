@@ -34,6 +34,7 @@ python3 Tools~/Splat4D/ply_sequence_to_splat4d.py --input-dir /path/to/time_*.pl
 
 - EditMode tests live in `Tests/Editor/` (Unity Test Framework/NUnit). In Test Runner, enable package tests and run `Gsplat.Tests.Editor`.
 - In minimal repro projects, package tests are not compiled or runnable unless `Packages/manifest.json` includes `"testables": ["wu.yize.gsplat"]`.
+- When changing a `ScriptedImporter` output shape (for example main object type, prefab generation, sub-assets, or default renderer binding), bump the `[ScriptedImporter(version, ...)]` number and update importer tests; otherwise existing imported assets can stay cached in the old shape and make the fix look ineffective.
 - Treat `Samples~/` as the primary visual smoke test.
 - When running EditMode tests via Unity CLI (`-runTests`), if you see the Editor exit but no `-testResults` XML is generated, try removing `-quit` or moving `-quit` to the end of the argument list (some Editor versions can quit before the TestRunner starts when `-quit` is placed early).
 - Headless Unity CLI runs (`-batchmode -nographics`) use `GraphicsDeviceType.Null`; guard graphics-only initialization (for example sorter setup or VFX kernel discovery) or you can get misleading `Kernel '...' not found` logs even when importer/runtime logic is otherwise correct.
