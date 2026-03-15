@@ -189,18 +189,17 @@ Shader "Gsplat/Standard"
             }
 
             // ----------------------------------------------------------------
-            // Easing: easeOutCirc
+            // Easing: easeInSine
             // - 用于 hide 的 size shrink 节奏:
-            //   先迅速变小,再更慢地收尾.
+            //   起手更克制,到靠近前沿时再更明显地进入 afterglow 缩放.
             //
             // 标准定义:
-            // - easeOutCirc(t) = sqrt(1 - (t-1)^2)
+            // - easeInSine(t) = 1 - cos((t * PI) / 2)
             // ----------------------------------------------------------------
-            float EaseOutCirc(float t)
+            float EaseInSine(float t)
             {
                 t = saturate(t);
-                float u = t - 1.0;
-                return sqrt(saturate(1.0 - u * u));
+                return 1.0 - cos(t * UNITY_PI * 0.5);
             }
 
             // ----------------------------------------------------------------
@@ -464,13 +463,14 @@ Shader "Gsplat/Standard"
                     // hide 余辉更“拖尾”:
                     // - 用户反馈: glow 一过,余辉粒子几乎就全没了.
                     // - 根因: hide 的 visible/tail 直接用线性(1-passed)衰减时,会显得过快/过短.
-                    // - 处理: 对 hide 的 passed 做一个轻量 ease-in(平方),让衰减在前段更慢,尾段更快.
+                    // - 处理: 对 hide 的 passed 做一个轻量 ease-in,让衰减在前段更慢,尾段更快.
+                    // - 本轮为了和“预收缩”阶段统一语言,这里同样使用 EaseInSine.
                     //   这样余辉存在时间更长,但 passed=1 时仍能完全烧尽(不引入 lingering).
                     float passedForFade = passed;
                     float passedForTail = passed;
                     if (_VisibilityMode == 2)
                     {
-                        passedForFade = passed * passed;
+                        passedForFade = EaseInSine(passed);
                         passedForTail = passedForFade;
                     }
 
@@ -667,7 +667,7 @@ Shader "Gsplat/Standard"
                         // - 0: 远离前沿(尺寸保持正常)
                         // - 1: 到达前沿(已缩到 afterglowScale)
                         float tApproach = saturate((shrinkBand - edgeDistForFade) / shrinkBand);
-                        tApproach = EaseOutCirc(tApproach);
+                        tApproach = EaseInSine(tApproach);
                         float preScale = lerp(1.0, hideAfterglowScale, tApproach);
 
                         // tail 内继续 shrink(前沿扫过后):

@@ -56,6 +56,9 @@ namespace Gsplat.Tests
         static readonly FieldInfo s_visibilityProgress01Field =
             typeof(GsplatRenderer).GetField("m_visibilityProgress01", BindingFlags.Instance | BindingFlags.NonPublic);
 
+        static readonly FieldInfo s_visibilityLastAdvanceRealtimeField =
+            typeof(GsplatRenderer).GetField("m_visibilityLastAdvanceRealtime", BindingFlags.Instance | BindingFlags.NonPublic);
+
         static readonly FieldInfo s_visibilitySourceMaskModeField =
             typeof(GsplatRenderer).GetField("m_visibilitySourceMaskMode", BindingFlags.Instance | BindingFlags.NonPublic);
 
@@ -254,6 +257,13 @@ namespace Gsplat.Tests
             s_visibilityProgress01Field.SetValue(renderer, Mathf.Clamp01(progress01));
         }
 
+        static void SetVisibilityLastAdvanceRealtime(GsplatRenderer renderer, float realtimeSeconds)
+        {
+            Assert.IsNotNull(s_visibilityLastAdvanceRealtimeField,
+                "Expected private field 'm_visibilityLastAdvanceRealtime' to exist on GsplatRenderer.");
+            s_visibilityLastAdvanceRealtimeField.SetValue(renderer, realtimeSeconds);
+        }
+
         static void SetVisibilitySourceMaskByName(GsplatRenderer renderer, string modeName, float progress01)
         {
             Assert.IsNotNull(s_visibilitySourceMaskModeField,
@@ -267,7 +277,7 @@ namespace Gsplat.Tests
             s_visibilitySourceMaskProgressField.SetValue(renderer, Mathf.Clamp01(progress01));
         }
 
-        static (float gate, int mode, float progress, int sourceMode, float sourceProgress, float maxRadius) BuildLidarShowHideOverlay(
+        static (float gate, int mode, float progress, int sourceMode, float sourceProgress, float maxRadius, float ringWidth, float trailWidth) BuildLidarShowHideOverlay(
             GsplatRenderer renderer, Bounds localBounds)
         {
             Assert.IsNotNull(s_buildLidarShowHideOverlayForThisFrame,
@@ -279,7 +289,8 @@ namespace Gsplat.Tests
                 0.0f, 0, 1.0f, 1, 1.0f, Vector3.zero, 0.0f, 0.0f, 0.0f
             };
             s_buildLidarShowHideOverlayForThisFrame.Invoke(renderer, args);
-            return ((float)args[1], (int)args[2], (float)args[3], (int)args[4], (float)args[5], (float)args[7]);
+            return ((float)args[1], (int)args[2], (float)args[3], (int)args[4], (float)args[5], (float)args[7],
+                (float)args[8], (float)args[9]);
         }
 
         static GsplatAsset CreateMinimalAsset1Splat()
@@ -300,6 +311,32 @@ namespace Gsplat.Tests
             asset.Times = null;
             asset.Durations = null;
             return asset;
+        }
+
+        static GsplatAsset CreateMinimalAssetWithBounds(Bounds bounds)
+        {
+            var asset = ScriptableObject.CreateInstance<GsplatAsset>();
+            asset.SplatCount = 1;
+            asset.SHBands = 0;
+            asset.Bounds = bounds;
+            asset.Positions = new[] { bounds.center };
+            asset.Scales = new[] { Vector3.one };
+            asset.Rotations = new[] { new Vector4(1, 0, 0, 0) };
+            asset.Colors = new[] { new Vector4(1, 1, 1, 1) };
+            asset.Velocities = null;
+            asset.Times = null;
+            asset.Durations = null;
+            return asset;
+        }
+
+        static float EaseInOutQuad(float t)
+        {
+            t = Mathf.Clamp01(t);
+            if (t < 0.5f)
+                return 2.0f * t * t;
+
+            var a = -2.0f * t + 2.0f;
+            return 1.0f - (a * a) * 0.5f;
         }
 
         static GsplatAsset CreateMinimalStatic4DAsset1Splat()
@@ -353,6 +390,7 @@ namespace Gsplat.Tests
 
             // 显式启用显隐动画,但不要 OnEnable 自动播 show,避免测试依赖动画完成时序.
             r.EnableVisibilityAnimation = true;
+            r.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
             r.PlayShowOnEnable = false;
             r.HideDuration = 0.05f;
 
@@ -616,6 +654,7 @@ namespace Gsplat.Tests
             var r = go.AddComponent<GsplatRenderer>();
 
             r.EnableVisibilityAnimation = true;
+            r.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
             r.PlayShowOnEnable = false;
             r.ShowDuration = 0.2f;
             r.HideDuration = 0.2f;
@@ -677,6 +716,7 @@ namespace Gsplat.Tests
             var r = go.AddComponent<GsplatRenderer>();
 
             r.EnableVisibilityAnimation = true;
+            r.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
             r.PlayShowOnEnable = false;
             r.ShowDuration = 0.2f;
             r.HideDuration = 0.2f;
@@ -771,6 +811,124 @@ namespace Gsplat.Tests
         }
 
         [Test]
+        public void BuildLidarShowHideOverlay_VisibilityRadiusScale_ScalesMaxRadius()
+        {
+            var go = new GameObject("GsplatVisibilityAnimationTests_VisibilityRadiusScale");
+            var r = go.AddComponent<GsplatRenderer>();
+            var bounds = new Bounds(Vector3.zero, Vector3.one * 2.0f);
+
+            r.EnableVisibilityAnimation = true;
+            r.VisibilityRadiusScale = 1.0f;
+            var overlayA = BuildLidarShowHideOverlay(r, bounds);
+
+            r.VisibilityRadiusScale = 2.0f;
+            var overlayB = BuildLidarShowHideOverlay(r, bounds);
+
+            Assert.AreEqual(overlayA.maxRadius * 2.0f, overlayB.maxRadius, 1e-5f,
+                "Expected VisibilityRadiusScale to multiply reveal maxRadius.");
+            Assert.AreEqual(overlayA.trailWidth * 2.0f, overlayB.trailWidth, 1e-5f,
+                "Expected VisibilityRadiusScale to scale trail width together with maxRadius.");
+
+            Object.DestroyImmediate(go);
+        }
+
+        [Test]
+        public void AdvanceVisibilityState_WorldSpeedMode_KeepsRevealFrontDistanceComparableAcrossBoundsScales()
+        {
+            var smallGo = new GameObject("GsplatVisibilityAnimationTests_WorldSpeed_Small");
+            var largeGo = new GameObject("GsplatVisibilityAnimationTests_WorldSpeed_Large");
+            var smallAsset = CreateMinimalAssetWithBounds(new Bounds(Vector3.zero, new Vector3(2.0f, 2.0f, 2.0f)));
+            var largeAsset = CreateMinimalAssetWithBounds(new Bounds(Vector3.zero, new Vector3(20.0f, 20.0f, 20.0f)));
+            var small = smallGo.AddComponent<GsplatRenderer>();
+            var large = largeGo.AddComponent<GsplatRenderer>();
+
+            small.GsplatAsset = smallAsset;
+            large.GsplatAsset = largeAsset;
+
+            small.EnableVisibilityAnimation = true;
+            large.EnableVisibilityAnimation = true;
+            small.VisibilityProgressMode = GsplatVisibilityProgressMode.WorldSpeed;
+            large.VisibilityProgressMode = GsplatVisibilityProgressMode.WorldSpeed;
+            small.ShowWorldSpeed = 12.5f;
+            large.ShowWorldSpeed = 12.5f;
+            small.ShowTrailWidthNormalized = 0.2f;
+            large.ShowTrailWidthNormalized = 0.2f;
+
+            SetVisibilityStateByName(small, "Showing");
+            SetVisibilityStateByName(large, "Showing");
+            SetVisibilityProgress01(small, 0.0f);
+            SetVisibilityProgress01(large, 0.0f);
+            SetVisibilitySourceMaskByName(small, "FullHidden", 0.0f);
+            SetVisibilitySourceMaskByName(large, "FullHidden", 0.0f);
+
+            var now = Time.realtimeSinceStartup;
+            SetVisibilityLastAdvanceRealtime(small, now - 0.1f);
+            SetVisibilityLastAdvanceRealtime(large, now - 0.1f);
+
+            AdvanceVisibilityState(small);
+            AdvanceVisibilityState(large);
+
+            var smallOverlay = BuildLidarShowHideOverlay(small, smallAsset.Bounds);
+            var largeOverlay = BuildLidarShowHideOverlay(large, largeAsset.Bounds);
+
+            var smallRadius = EaseInOutQuad(smallOverlay.progress) * (smallOverlay.maxRadius + smallOverlay.trailWidth);
+            var largeRadius = EaseInOutQuad(largeOverlay.progress) * (largeOverlay.maxRadius + largeOverlay.trailWidth);
+
+            Assert.AreEqual(smallRadius, largeRadius, 1e-3f,
+                "Expected WorldSpeed mode to keep reveal front distance comparable across different bounds scales.");
+            Assert.Less(largeOverlay.progress, smallOverlay.progress,
+                "Expected larger bounds to advance more slowly in normalized progress when using the same world speed.");
+
+            Object.DestroyImmediate(smallGo);
+            Object.DestroyImmediate(largeGo);
+            Object.DestroyImmediate(smallAsset);
+            Object.DestroyImmediate(largeAsset);
+        }
+
+        [Test]
+        public void AdvanceVisibilityState_LegacyDurationMode_ProgressRemainsBoundsIndependent()
+        {
+            var smallGo = new GameObject("GsplatVisibilityAnimationTests_LegacyDuration_Small");
+            var largeGo = new GameObject("GsplatVisibilityAnimationTests_LegacyDuration_Large");
+            var smallAsset = CreateMinimalAssetWithBounds(new Bounds(Vector3.zero, new Vector3(2.0f, 2.0f, 2.0f)));
+            var largeAsset = CreateMinimalAssetWithBounds(new Bounds(Vector3.zero, new Vector3(20.0f, 20.0f, 20.0f)));
+            var small = smallGo.AddComponent<GsplatRenderer>();
+            var large = largeGo.AddComponent<GsplatRenderer>();
+
+            small.GsplatAsset = smallAsset;
+            large.GsplatAsset = largeAsset;
+
+            small.EnableVisibilityAnimation = true;
+            large.EnableVisibilityAnimation = true;
+            small.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
+            large.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
+            small.ShowDuration = 4.0f;
+            large.ShowDuration = 4.0f;
+
+            SetVisibilityStateByName(small, "Showing");
+            SetVisibilityStateByName(large, "Showing");
+            SetVisibilityProgress01(small, 0.0f);
+            SetVisibilityProgress01(large, 0.0f);
+            SetVisibilitySourceMaskByName(small, "FullHidden", 0.0f);
+            SetVisibilitySourceMaskByName(large, "FullHidden", 0.0f);
+
+            var now = Time.realtimeSinceStartup;
+            SetVisibilityLastAdvanceRealtime(small, now - 0.1f);
+            SetVisibilityLastAdvanceRealtime(large, now - 0.1f);
+
+            AdvanceVisibilityState(small);
+            AdvanceVisibilityState(large);
+
+            Assert.AreEqual(GetVisibilityProgress01(small), GetVisibilityProgress01(large), 1e-5f,
+                "Expected LegacyDuration mode to keep normalized progress independent from bounds size.");
+
+            Object.DestroyImmediate(smallGo);
+            Object.DestroyImmediate(largeGo);
+            Object.DestroyImmediate(smallAsset);
+            Object.DestroyImmediate(largeAsset);
+        }
+
+        [Test]
         public void LidarRenderPointCloud_Signature_ContainsShowHideNoiseParams()
         {
             // 说明:
@@ -814,6 +972,7 @@ namespace Gsplat.Tests
             var r = go.AddComponent<GsplatRenderer>();
 
             r.EnableVisibilityAnimation = true;
+            r.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
             r.PlayShowOnEnable = false;
             r.ShowDuration = 0.05f;
             r.HideDuration = 0.05f;

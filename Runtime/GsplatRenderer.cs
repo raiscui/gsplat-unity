@@ -411,12 +411,49 @@ namespace Gsplat
                  "仅在 EnableVisibilityAnimation=true 时生效.")]
         public bool PlayShowOnEnable = true;
 
+        [Tooltip("显隐动画进度的驱动方式.\n" +
+                 "说明:\n" +
+                 "- WorldSpeed: 按目标世界空间前沿速度推进,不同尺度的 3DGS 更容易得到接近的 reveal 形态.\n" +
+                 "- LegacyDuration: 兼容旧行为,继续按 ShowDuration / HideDuration 直接推进 progress.\n" +
+                 "- 默认按当前项目里 ckpt 参考效果切到 WorldSpeed.")]
+        public GsplatVisibilityProgressMode VisibilityProgressMode = GsplatVisibilityProgressMode.WorldSpeed;
+
         [Min(0.0f)]
-        [Tooltip("show 动画时长(秒).")]
+        [Tooltip("显隐 reveal 半径的额外倍率.\n" +
+                 "说明:\n" +
+                 "- 1: 使用资产 bounds 推导出的原始 reveal 半径.\n" +
+                 "- <1: reveal 球更小,同时在 WorldSpeed 模式下也会更快播完.\n" +
+                 "- >1: reveal 球更大,同时在 WorldSpeed 模式下会播得更久.")]
+        public float VisibilityRadiusScale = GsplatVisibilityAnimationUtil.k_DefaultVisibilityRadiusScale;
+
+        [Min(0.0f)]
+        [Tooltip("show 阶段的目标世界空间前沿速度(units/s).\n" +
+                 "说明:\n" +
+                 "- 仅在 VisibilityProgressMode=WorldSpeed 时生效.\n" +
+                 "- 默认值按当前项目里 `ckpt_29999_v2_sh3_seg50_k512_f32_colmap_latest` 的现有效果标定.\n" +
+                 "- 值越大,show 的球形扩张越快.")]
+        public float ShowWorldSpeed = GsplatVisibilityAnimationUtil.k_DefaultShowWorldSpeed;
+
+        [Min(0.0f)]
+        [Tooltip("hide 阶段的目标世界空间前沿速度(units/s).\n" +
+                 "说明:\n" +
+                 "- 仅在 VisibilityProgressMode=WorldSpeed 时生效.\n" +
+                 "- 默认值同样按当前项目里 ckpt 的现有效果标定.\n" +
+                 "- 值越大,hide 的燃烧收束越快.")]
+        public float HideWorldSpeed = GsplatVisibilityAnimationUtil.k_DefaultHideWorldSpeed;
+
+        [Min(0.0f)]
+        [Tooltip("show 动画时长(秒).\n" +
+                 "说明:\n" +
+                 "- 仅在 VisibilityProgressMode=LegacyDuration 时使用.\n" +
+                 "- WorldSpeed 模式下,show 的总时长会由目标世界速度和 reveal 半径共同决定.")]
         public float ShowDuration = 1.0f;
 
         [Min(0.0f)]
-        [Tooltip("hide 动画时长(秒).")]
+        [Tooltip("hide 动画时长(秒).\n" +
+                 "说明:\n" +
+                 "- 仅在 VisibilityProgressMode=LegacyDuration 时使用.\n" +
+                 "- WorldSpeed 模式下,hide 的总时长会由目标世界速度和 reveal 半径共同决定.")]
         public float HideDuration = 1.2f;
 
         [Range(0.0f, 1.0f)]
@@ -2875,33 +2912,15 @@ namespace Gsplat
 
             if (m_visibilityState == VisibilityAnimState.Showing)
             {
-                var duration = ShowDuration;
-                if (duration <= 0.0f || float.IsNaN(duration) || float.IsInfinity(duration))
-                {
-                    m_visibilityProgress01 = 1.0f;
+                m_visibilityProgress01 = CalcVisibilityAdvancedProgress(dt, hiding: false, m_visibilityProgress01);
+                if (m_visibilityProgress01 >= 1.0f)
                     m_visibilityState = VisibilityAnimState.Visible;
-                }
-                else
-                {
-                    m_visibilityProgress01 = Mathf.Clamp01(m_visibilityProgress01 + dt / duration);
-                    if (m_visibilityProgress01 >= 1.0f)
-                        m_visibilityState = VisibilityAnimState.Visible;
-                }
             }
             else if (m_visibilityState == VisibilityAnimState.Hiding)
             {
-                var duration = HideDuration;
-                if (duration <= 0.0f || float.IsNaN(duration) || float.IsInfinity(duration))
-                {
-                    m_visibilityProgress01 = 1.0f;
+                m_visibilityProgress01 = CalcVisibilityAdvancedProgress(dt, hiding: true, m_visibilityProgress01);
+                if (m_visibilityProgress01 >= 1.0f)
                     m_visibilityState = VisibilityAnimState.Hidden;
-                }
-                else
-                {
-                    m_visibilityProgress01 = Mathf.Clamp01(m_visibilityProgress01 + dt / duration);
-                    if (m_visibilityProgress01 >= 1.0f)
-                        m_visibilityState = VisibilityAnimState.Hidden;
-                }
             }
 
             // 终态时把 source mask 重置为稳定值,避免下一次动画读到过期 snapshot.
@@ -3030,7 +3049,7 @@ namespace Gsplat
             sourceProgress = Mathf.Clamp01(sourceProgress);
 
             var centerModel = CalcVisibilityCenterModel(localBounds);
-            var maxRadius = CalcVisibilityMaxRadius(localBounds, centerModel);
+            var maxRadius = CalcVisibilityEffectiveMaxRadius(localBounds, centerModel);
 
             // show/hide 的 ring/trail 宽度允许分别调参.
             var ringWidthNorm = ShowRingWidthNormalized;
@@ -3041,8 +3060,8 @@ namespace Gsplat
                 trailWidthNorm = HideTrailWidthNormalized;
             }
 
-            var ringWidth = maxRadius * Mathf.Clamp01(ringWidthNorm);
-            var trailWidth = maxRadius * Mathf.Clamp01(trailWidthNorm);
+            var ringWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ringWidthNorm);
+            var trailWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, trailWidthNorm);
 
             var glowIntensity = mode == 2 ? HideGlowIntensity : ShowGlowIntensity;
             var showGlowSparkleStrength = mode == 1 ? ShowGlowSparkleStrength : 0.0f;
@@ -3097,9 +3116,9 @@ namespace Gsplat
             sourceMaskProgress = 1.0f;
 
             centerModel = CalcVisibilityCenterModel(localBounds);
-            maxRadius = CalcVisibilityMaxRadius(localBounds, centerModel);
-            ringWidth = maxRadius * Mathf.Clamp01(ShowRingWidthNormalized);
-            trailWidth = maxRadius * Mathf.Clamp01(ShowTrailWidthNormalized);
+            maxRadius = CalcVisibilityEffectiveMaxRadius(localBounds, centerModel);
+            ringWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ShowRingWidthNormalized);
+            trailWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ShowTrailWidthNormalized);
 
             if (!EnableVisibilityAnimation)
             {
@@ -3119,8 +3138,8 @@ namespace Gsplat
                     progress = Mathf.Clamp01(m_visibilityProgress01);
                     sourceMaskMode = (int)m_visibilitySourceMaskMode;
                     sourceMaskProgress = Mathf.Clamp01(m_visibilitySourceMaskProgress01);
-                    ringWidth = maxRadius * Mathf.Clamp01(ShowRingWidthNormalized);
-                    trailWidth = maxRadius * Mathf.Clamp01(ShowTrailWidthNormalized);
+                    ringWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ShowRingWidthNormalized);
+                    trailWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ShowTrailWidthNormalized);
                     break;
 
                 case VisibilityAnimState.Hiding:
@@ -3128,8 +3147,8 @@ namespace Gsplat
                     progress = Mathf.Clamp01(m_visibilityProgress01);
                     sourceMaskMode = (int)m_visibilitySourceMaskMode;
                     sourceMaskProgress = Mathf.Clamp01(m_visibilitySourceMaskProgress01);
-                    ringWidth = maxRadius * Mathf.Clamp01(HideRingWidthNormalized);
-                    trailWidth = maxRadius * Mathf.Clamp01(HideTrailWidthNormalized);
+                    ringWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, HideRingWidthNormalized);
+                    trailWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, HideTrailWidthNormalized);
                     break;
 
                 case VisibilityAnimState.Hidden:
@@ -3203,6 +3222,44 @@ namespace Gsplat
             return Mathf.Sqrt(maxDistSq);
         }
 
+        float CalcVisibilityEffectiveMaxRadius(Bounds localBounds, Vector3 centerModel)
+        {
+            var rawMaxRadius = CalcVisibilityMaxRadius(localBounds, centerModel);
+            return GsplatVisibilityAnimationUtil.CalcScaledMaxRadius(rawMaxRadius, VisibilityRadiusScale);
+        }
+
+        float CalcVisibilityAdvancedProgress(float dt, bool hiding, float currentProgress)
+        {
+            var duration = hiding ? HideDuration : ShowDuration;
+            var worldSpeed = hiding ? HideWorldSpeed : ShowWorldSpeed;
+            var trailWidthNorm = hiding ? HideTrailWidthNormalized : ShowTrailWidthNormalized;
+            var progressMode = GsplatVisibilityAnimationUtil.SanitizeProgressMode(VisibilityProgressMode);
+
+            if (progressMode == GsplatVisibilityProgressMode.LegacyDuration)
+            {
+                return GsplatVisibilityAnimationUtil.CalcAdvancedProgress(
+                    currentProgress,
+                    dt,
+                    progressMode,
+                    duration,
+                    worldSpeed,
+                    totalRange: 0.0f);
+            }
+
+            var localBounds = ResolveVisibilityLocalBoundsForThisFrame();
+            var centerModel = CalcVisibilityCenterModel(localBounds);
+            var maxRadius = CalcVisibilityEffectiveMaxRadius(localBounds, centerModel);
+            var totalRange = GsplatVisibilityAnimationUtil.CalcTotalRange(maxRadius, trailWidthNorm);
+
+            return GsplatVisibilityAnimationUtil.CalcAdvancedProgress(
+                currentProgress,
+                dt,
+                progressMode,
+                duration,
+                worldSpeed,
+                totalRange);
+        }
+
         Bounds CalcVisibilityExpandedRenderBounds(Bounds baseBounds)
         {
             // 说明:
@@ -3234,7 +3291,7 @@ namespace Gsplat
                 return baseBounds;
 
             var centerModel = CalcVisibilityCenterModel(baseBounds);
-            var maxRadius = CalcVisibilityMaxRadius(baseBounds, centerModel);
+            var maxRadius = CalcVisibilityEffectiveMaxRadius(baseBounds, centerModel);
 
             // 与 shader 侧 warpAmp 的同量纲上界(更保守一点).
             var warpPadding = maxRadius * ns * ws * 0.15f;
@@ -3539,6 +3596,8 @@ namespace Gsplat
             if (Application.isPlaying)
                 return;
 
+            ValidateVisibilitySerializedFields();
+
             var t = TimeNormalized;
             if (float.IsNaN(t) || float.IsInfinity(t))
                 t = 0.0f;
@@ -3588,6 +3647,8 @@ namespace Gsplat
 
         void Update()
         {
+            ValidateVisibilitySerializedFields();
+
             // 先推进显隐动画状态机:
             // - 这样本帧 render/相机回调使用的 uniforms 都基于同一个 progress.
             // - 也能确保 hide 播完后及时进入 Hidden,从根源停掉 sorter/draw 开销.
@@ -4032,6 +4093,22 @@ namespace Gsplat
             }
 
             lidarExternalTargets = normalizedTargets;
+        }
+
+        void ValidateVisibilitySerializedFields()
+        {
+            VisibilityProgressMode = GsplatVisibilityAnimationUtil.SanitizeProgressMode(VisibilityProgressMode);
+
+            VisibilityRadiusScale = GsplatVisibilityAnimationUtil.SanitizeRadiusScale(VisibilityRadiusScale);
+            ShowWorldSpeed = GsplatVisibilityAnimationUtil.SanitizeWorldSpeed(
+                ShowWorldSpeed,
+                GsplatVisibilityAnimationUtil.k_DefaultShowWorldSpeed);
+            HideWorldSpeed = GsplatVisibilityAnimationUtil.SanitizeWorldSpeed(
+                HideWorldSpeed,
+                GsplatVisibilityAnimationUtil.k_DefaultHideWorldSpeed);
+
+            ShowDuration = GsplatVisibilityAnimationUtil.SanitizeDuration(ShowDuration, 1.0f);
+            HideDuration = GsplatVisibilityAnimationUtil.SanitizeDuration(HideDuration, 1.2f);
         }
 
         void ValidateLidarSerializedFields()
