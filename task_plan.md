@@ -89,3 +89,15 @@
   - `LATER_PLANS__show_hide_scale_tuning.md`
   - `EPIPHANY_LOG__show_hide_scale_tuning.md`
   - `ERRORFIX__show_hide_scale_tuning.md`
+
+## [2026-03-16 21:54:40] [Session ID: 99992] 支线索引: __lidar_edge_aliasing
+
+- 启用原因: 用户在提高 `LidarAzimuthBins` 与 `LidarBeamCount` 后,观察到 RadarScan/LiDAR 扫描出来的 mesh 轮廓仍然呈现巨大锯齿,需要独立判断这是采样离散化、深度重建方式,还是渲染/精度优化路径造成的现象。
+- 支线主题: 追踪 `LidarAzimuthBins`、`LidarBeamCount` 与扫描结果 mesh 边缘形成过程,按"现象 -> 假设 -> 验证计划 -> 结论"给出原因解释,必要时提出后续改进方向。
+- 对应上下文集:
+  - `task_plan__lidar_edge_aliasing.md`
+  - `notes__lidar_edge_aliasing.md`
+  - `WORKLOG__lidar_edge_aliasing.md`
+  - `LATER_PLANS__lidar_edge_aliasing.md`
+  - `EPIPHANY_LOG__lidar_edge_aliasing.md`
+  - `ERRORFIX__lidar_edge_aliasing.md`

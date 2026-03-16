@@ -42,7 +42,7 @@ namespace Gsplat.Tests
         sealed class TimeMappingJson
         {
             public string type; // "uniform" | "explicit"
-            public float[] frameTimesNormalized;
+            public float[] frameTimesNormalized = Array.Empty<float>();
         }
 
         [Serializable]

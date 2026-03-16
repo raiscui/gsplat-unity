@@ -208,6 +208,9 @@ namespace Gsplat
             GameObject[] staticTargets,
             GameObject[] dynamicTargets,
             float dynamicUpdateHz,
+            GsplatLidarExternalCaptureResolutionMode captureResolutionMode,
+            float captureResolutionScale,
+            Vector2Int explicitCaptureResolution,
             GsplatLidarExternalTargetVisibilityMode visibilityMode)
         {
             if (lidarScan == null || settings == null || !frustumCamera)
@@ -247,7 +250,13 @@ namespace Gsplat
             if (!EnsureResolveKernel(settings.ComputeShader))
                 return false;
 
-            if (!TryResolveCaptureSize(frustumCamera, layout, out var captureWidth, out var captureHeight))
+            if (!TryResolveCaptureSize(frustumCamera,
+                    layout,
+                    captureResolutionMode,
+                    captureResolutionScale,
+                    explicitCaptureResolution,
+                    out var captureWidth,
+                    out var captureHeight))
                 return false;
 
             EnsureFallbackTextures();
@@ -888,7 +897,7 @@ namespace Gsplat
             }
         }
 
-        static bool TryResolveCaptureSize(Camera frustumCamera,
+        static bool TryResolveAutoCaptureBaseSize(Camera frustumCamera,
             in GsplatLidarLayout layout,
             out int captureWidth,
             out int captureHeight)
@@ -916,6 +925,68 @@ namespace Gsplat
 
             captureWidth = Mathf.Max(layout.ActiveAzimuthBins, 1);
             captureHeight = Mathf.Max(layout.ActiveBeamCount, 1);
+            return true;
+        }
+
+        static int ClampCaptureDimensionToHardwareLimit(int value)
+        {
+            return Mathf.Clamp(value, 1, Mathf.Max(SystemInfo.maxTextureSize, 1));
+        }
+
+        static int ResolveScaledCaptureDimension(int baseValue, float scale)
+        {
+            var scaledValue = (double)baseValue * scale;
+            if (double.IsNaN(scaledValue) || double.IsInfinity(scaledValue) || scaledValue <= 0.0)
+                return ClampCaptureDimensionToHardwareLimit(baseValue);
+
+            var roundedValue = scaledValue >= int.MaxValue
+                ? int.MaxValue
+                : (int)Math.Round(scaledValue, MidpointRounding.AwayFromZero);
+            return ClampCaptureDimensionToHardwareLimit(Mathf.Max(roundedValue, 1));
+        }
+
+        static bool TryResolveCaptureSize(Camera frustumCamera,
+            in GsplatLidarLayout layout,
+            GsplatLidarExternalCaptureResolutionMode captureResolutionMode,
+            float captureResolutionScale,
+            Vector2Int explicitCaptureResolution,
+            out int captureWidth,
+            out int captureHeight)
+        {
+            captureWidth = 0;
+            captureHeight = 0;
+
+            var sanitizedMode =
+                GsplatUtils.SanitizeLidarExternalCaptureResolutionMode(captureResolutionMode);
+            var sanitizedScale =
+                float.IsNaN(captureResolutionScale) || float.IsInfinity(captureResolutionScale) || captureResolutionScale <= 0.0f
+                    ? 1.0f
+                    : captureResolutionScale;
+
+            if (sanitizedMode == GsplatLidarExternalCaptureResolutionMode.Explicit)
+            {
+                // 说明:
+                // - 显式模式直接让用户精确指定 capture RT 宽高.
+                // - 仍然需要按硬件上限 clamp,避免申请超过设备支持的纹理尺寸.
+                captureWidth = ClampCaptureDimensionToHardwareLimit(Mathf.Max(explicitCaptureResolution.x, 1));
+                captureHeight = ClampCaptureDimensionToHardwareLimit(Mathf.Max(explicitCaptureResolution.y, 1));
+                return true;
+            }
+
+            if (!TryResolveAutoCaptureBaseSize(frustumCamera, layout, out captureWidth, out captureHeight))
+                return false;
+
+            captureWidth = ClampCaptureDimensionToHardwareLimit(captureWidth);
+            captureHeight = ClampCaptureDimensionToHardwareLimit(captureHeight);
+
+            if (sanitizedMode != GsplatLidarExternalCaptureResolutionMode.Scale)
+                return true;
+
+            // 说明:
+            // - Scale 模式在 Auto 基准尺寸上做 supersample / 降采样.
+            // - 它保留默认决策来源,但把精度与性能的权衡显式交给用户控制.
+            captureWidth = ResolveScaledCaptureDimension(captureWidth, sanitizedScale);
+            captureHeight = ResolveScaledCaptureDimension(captureHeight, sanitizedScale);
             return true;
         }
 
@@ -1522,6 +1593,23 @@ namespace Gsplat
                 return float.PositiveInfinity;
 
             return depth * depth;
+        }
+
+        static Vector2Int DebugResolveCaptureSizeForInputs(Camera frustumCamera,
+            GsplatLidarLayout layout,
+            GsplatLidarExternalCaptureResolutionMode captureResolutionMode,
+            float captureResolutionScale,
+            Vector2Int explicitCaptureResolution)
+        {
+            return TryResolveCaptureSize(frustumCamera,
+                layout,
+                captureResolutionMode,
+                captureResolutionScale,
+                explicitCaptureResolution,
+                out var captureWidth,
+                out var captureHeight)
+                ? new Vector2Int(captureWidth, captureHeight)
+                : Vector2Int.zero;
         }
     }
 }

@@ -159,6 +159,13 @@ Enable it in the Inspector:
   - `LidarExternalDynamicTargets` = dynamic scan roots
     - Designed for moving props, animated meshes, and `SkinnedMeshRenderer`
     - In `CameraFrustum` mode, dynamic targets use a separate capture cache and refresh at `LidarExternalDynamicUpdateHz`
+  - Optional frustum external capture resolution controls (`CameraFrustum` GPU capture only):
+    - `LidarExternalCaptureResolutionMode`
+      - `Auto` = use `LidarFrustumCamera.pixelRect`, then fall back to `targetTexture`, then fall back to the active LiDAR grid size
+      - `Scale` = multiply the `Auto` base size by `LidarExternalCaptureResolutionScale`
+      - `Explicit` = use `LidarExternalCaptureResolution` directly (`width`, `height`)
+    - Use `Scale > 1` or an explicit larger resolution when you need sharper external-mesh depth sampling along silhouettes
+    - This improves the offscreen external depth/color capture precision, but it does **not** change the LiDAR beam / azimuth grid semantics themselves
   - Legacy `LidarExternalTargets` is still accepted and maps to `LidarExternalStaticTargets` for backward compatibility
   - `LidarExternalTargetVisibilityMode = ForceRenderingOff` by default, so those targets can stay scan-only (participate in LiDAR, but stop rendering as ordinary meshes)
   - `ForceRenderingOffInPlayMode` keeps the original mesh visible while editing, but automatically hides it during Play mode
@@ -217,6 +224,9 @@ r.LidarFrustumCamera = lidarCamera;
 r.LidarExternalStaticTargets = new[] { roadSignsRoot, roadSurfaceRoot };
 r.LidarExternalDynamicTargets = new[] { carRoot, characterRoot };
 r.LidarExternalDynamicUpdateHz = 15.0f;
+r.LidarExternalCaptureResolutionMode = GsplatLidarExternalCaptureResolutionMode.Scale;
+r.LidarExternalCaptureResolutionScale = 2.0f; // supersample frustum external capture for sharper mesh silhouettes
+r.LidarExternalCaptureResolution = new Vector2Int(2560, 1440); // only used in Explicit mode
 r.LidarExternalTargetVisibilityMode = GsplatLidarExternalTargetVisibilityMode.ForceRenderingOffInPlayMode;
 r.LidarExternalHitBiasMeters = 0.0f; // keep at 0 by default, opt in only if points look slightly behind the mesh
 r.HideSplatsWhenLidarEnabled = true;
@@ -243,6 +253,7 @@ Manual verification checklist:
 - With `LidarExternalStaticTargets` / `LidarExternalDynamicTargets` configured, external meshes participate in the same first-return competition as gsplat
 - In `CameraFrustum` mode, static external meshes do not recapture every LiDAR tick when only gsplat data updates
 - In `CameraFrustum` mode, dynamic external meshes refresh at `LidarExternalDynamicUpdateHz` and can remain stale between refreshes by design
+- In `CameraFrustum` mode, increasing `LidarExternalCaptureResolutionMode=Scale` or using a larger `Explicit` resolution should make external-mesh silhouettes look less blocky, while leaving the LiDAR grid semantics unchanged
 - With `LidarExternalTargetVisibilityMode=ForceRenderingOff`, external targets disappear as ordinary meshes but still remain valid LiDAR scan targets
 - With `LidarExternalTargetVisibilityMode=ForceRenderingOffInPlayMode`, external targets remain visible while editing but switch to scan-only during Play mode
 - With ordinary meshes still visible, `LidarExternalHitBiasMeters` can stay at `0` by default, and only be increased slightly (`0.01`, `0.02`, ...) if the RadarScan particles look like they are sitting just behind the source mesh surface

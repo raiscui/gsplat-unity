@@ -416,7 +416,7 @@ namespace Gsplat.Tests
             {
                 go.SetActive(false);
                 var renderer = go.AddComponent<GsplatRenderer>();
-                typeof(GsplatRenderer).GetProperty(nameof(GsplatRenderer.LidarExternalTargets))!
+                typeof(GsplatRenderer).GetProperty("LidarExternalTargets")!
                     .SetValue(renderer, new[] { a, b });
 
                 CollectionAssert.AreEqual(new[] { a, b }, renderer.LidarExternalStaticTargets);
@@ -439,7 +439,7 @@ namespace Gsplat.Tests
             {
                 go.SetActive(false);
                 var renderer = go.AddComponent<GsplatSequenceRenderer>();
-                typeof(GsplatSequenceRenderer).GetProperty(nameof(GsplatSequenceRenderer.LidarExternalTargets))!
+                typeof(GsplatSequenceRenderer).GetProperty("LidarExternalTargets")!
                     .SetValue(renderer, new[] { a, b });
 
                 CollectionAssert.AreEqual(new[] { a, b }, renderer.LidarExternalStaticTargets);

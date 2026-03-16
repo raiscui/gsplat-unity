@@ -153,6 +153,31 @@ namespace Gsplat
                  "- 后续 frustum GPU capture 路线会消费该门禁,用于 dynamic 组复用上一轮 capture.")]
         public float LidarExternalDynamicUpdateHz = 10.0f;
 
+        [Tooltip("frustum external GPU capture 的分辨率模式.\n" +
+                 "说明:\n" +
+                 "- Auto: 沿用当前 frustum capture 的默认基准尺寸.\n" +
+                 "- Scale: 在 Auto 基准上再乘以倍率,用于 supersample / 降采样.\n" +
+                 "- Explicit: 直接使用 `LidarExternalCaptureResolution` 指定的宽高.\n" +
+                 "- 仅在 `LidarApertureMode=CameraFrustum` 且 external mesh 走 GPU capture 时生效.")]
+        public GsplatLidarExternalCaptureResolutionMode LidarExternalCaptureResolutionMode =
+            GsplatLidarExternalCaptureResolutionMode.Auto;
+
+        [Min(0.01f)]
+        [Tooltip("frustum external GPU capture 的分辨率倍率.\n" +
+                 "说明:\n" +
+                 "- 仅在 `LidarExternalCaptureResolutionMode=Scale` 时生效.\n" +
+                 "- 1 表示保持 Auto 基准尺寸.\n" +
+                 "- >1 表示 supersample,可提高 external depth / color capture 精度.\n" +
+                 "- <1 表示降低 capture 分辨率,换取性能.")]
+        public float LidarExternalCaptureResolutionScale = 1.0f;
+
+        [Tooltip("frustum external GPU capture 的显式分辨率(width,height).\n" +
+                 "说明:\n" +
+                 "- 仅在 `LidarExternalCaptureResolutionMode=Explicit` 时生效.\n" +
+                 "- 建议保持与 frustum camera 的 aspect 接近,避免把 capture 采样拉伸.\n" +
+                 "- 这是 external mesh depth/color capture 的离屏分辨率,不是最终屏幕输出分辨率.")]
+        public Vector2Int LidarExternalCaptureResolution = new(1920, 1080);
+
         [Obsolete("Use LidarExternalStaticTargets and LidarExternalDynamicTargets instead.")]
         public GameObject[] LidarExternalTargets
         {
@@ -2114,6 +2139,9 @@ namespace Gsplat
                         LidarExternalStaticTargets,
                         LidarExternalDynamicTargets,
                         LidarExternalDynamicUpdateHz,
+                        LidarExternalCaptureResolutionMode,
+                        LidarExternalCaptureResolutionScale,
+                        LidarExternalCaptureResolution,
                         LidarExternalTargetVisibilityMode))
                 {
                     DisposeLidarExternalTargetHelper();
@@ -2646,6 +2674,20 @@ namespace Gsplat
             {
                 LidarExternalDynamicUpdateHz = 10.0f;
             }
+
+            LidarExternalCaptureResolutionMode =
+                GsplatUtils.SanitizeLidarExternalCaptureResolutionMode(LidarExternalCaptureResolutionMode);
+
+            if (float.IsNaN(LidarExternalCaptureResolutionScale) || float.IsInfinity(LidarExternalCaptureResolutionScale) ||
+                LidarExternalCaptureResolutionScale <= 0.0f)
+            {
+                LidarExternalCaptureResolutionScale = 1.0f;
+            }
+
+            if (LidarExternalCaptureResolution.x < 1)
+                LidarExternalCaptureResolution.x = 1920;
+            if (LidarExternalCaptureResolution.y < 1)
+                LidarExternalCaptureResolution.y = 1080;
 
             if (LidarAzimuthBins < 64)
                 LidarAzimuthBins = 2048;

@@ -81,6 +81,27 @@ namespace Gsplat.Tests
             return (float)m.Invoke(null, new object[] { linearViewDepth, rayForwardDot });
         }
 
+        static Vector2Int InvokeDebugResolveCaptureSizeForInputs(Camera frustumCamera,
+            object layout,
+            GsplatLidarExternalCaptureResolutionMode captureResolutionMode,
+            float captureResolutionScale,
+            Vector2Int explicitCaptureResolution)
+        {
+            var type = GetExternalGpuCaptureType();
+            var m = type.GetMethod("DebugResolveCaptureSizeForInputs",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.IsNotNull(m, "Expected debug capture-size helper to exist.");
+            return (Vector2Int)m.Invoke(null,
+                new object[]
+                {
+                    frustumCamera,
+                    layout,
+                    captureResolutionMode,
+                    captureResolutionScale,
+                    explicitCaptureResolution
+                });
+        }
+
         static bool InvokeIsDynamicCaptureUpdateDue(double nowRealtime,
             float updateHz,
             double lastCaptureRealtime,
@@ -199,6 +220,98 @@ namespace Gsplat.Tests
             var depthSq = InvokeDebugComputeRayDepthSqFromLinearViewDepth(5.0f, 0.5f);
             Assert.AreEqual(100.0f, depthSq, 1.0e-6f,
                 "Expected helper to convert linear view depth into LiDAR ray-distance squared.");
+        }
+
+        [Test]
+        public void ExternalGpuCapture_DebugResolveCaptureSizeForInputs_UsesAutoScaleAndExplicitModes()
+        {
+            var cameraGo = new GameObject("ExternalGpuCapture_CaptureSizeCamera");
+
+            try
+            {
+                var camera = cameraGo.AddComponent<Camera>();
+                camera.orthographic = false;
+                camera.fieldOfView = 60.0f;
+                camera.aspect = 16.0f / 9.0f;
+                camera.pixelRect = new Rect(0.0f, 0.0f, 640.0f, 360.0f);
+
+                var layout = InvokeCreateCameraFrustumLayout(camera, 2048, 128, 10.0f, -30.0f);
+
+                Assert.AreEqual(new Vector2Int(640, 360),
+                    InvokeDebugResolveCaptureSizeForInputs(camera,
+                        layout,
+                        GsplatLidarExternalCaptureResolutionMode.Auto,
+                        1.0f,
+                        new Vector2Int(1920, 1080)));
+
+                Assert.AreEqual(new Vector2Int(960, 540),
+                    InvokeDebugResolveCaptureSizeForInputs(camera,
+                        layout,
+                        GsplatLidarExternalCaptureResolutionMode.Scale,
+                        1.5f,
+                        new Vector2Int(1920, 1080)));
+
+                Assert.AreEqual(new Vector2Int(1234, 567),
+                    InvokeDebugResolveCaptureSizeForInputs(camera,
+                        layout,
+                        GsplatLidarExternalCaptureResolutionMode.Explicit,
+                        1.0f,
+                        new Vector2Int(1234, 567)));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(cameraGo);
+            }
+        }
+
+        [Test]
+        public void ExternalGpuCapture_DebugResolveCaptureSizeForInputs_FallsBackToTargetTextureAndClampsToHardwareLimit()
+        {
+            var cameraGo = new GameObject("ExternalGpuCapture_CaptureSizeFallbackCamera");
+            RenderTexture targetTexture = null;
+
+            try
+            {
+                var camera = cameraGo.AddComponent<Camera>();
+                camera.orthographic = false;
+                camera.fieldOfView = 60.0f;
+                camera.aspect = 16.0f / 9.0f;
+                camera.pixelRect = new Rect(0.0f, 0.0f, 640.0f, 360.0f);
+
+                var layout = InvokeCreateCameraFrustumLayout(camera, 2048, 128, 10.0f, -30.0f);
+                targetTexture = new RenderTexture(320, 180, 0);
+                camera.pixelRect = Rect.zero;
+                camera.targetTexture = targetTexture;
+
+                Assert.AreEqual(new Vector2Int(320, 180),
+                    InvokeDebugResolveCaptureSizeForInputs(camera,
+                        layout,
+                        GsplatLidarExternalCaptureResolutionMode.Auto,
+                        1.0f,
+                        new Vector2Int(1920, 1080)));
+
+                var maxTextureSize = Mathf.Max(SystemInfo.maxTextureSize, 1);
+                Assert.AreEqual(new Vector2Int(maxTextureSize, maxTextureSize),
+                    InvokeDebugResolveCaptureSizeForInputs(camera,
+                        layout,
+                        GsplatLidarExternalCaptureResolutionMode.Explicit,
+                        1.0f,
+                        new Vector2Int(maxTextureSize + 257, maxTextureSize + 513)));
+            }
+            finally
+            {
+                if (cameraGo)
+                {
+                    var camera = cameraGo.GetComponent<Camera>();
+                    if (camera)
+                        camera.targetTexture = null;
+                }
+
+                if (targetTexture)
+                    UnityEngine.Object.DestroyImmediate(targetTexture);
+
+                UnityEngine.Object.DestroyImmediate(cameraGo);
+            }
         }
 
         [Test]

@@ -22,6 +22,9 @@ namespace Gsplat.Editor
                 nameof(GsplatSequenceRenderer.LidarExternalStaticTargets),
                 nameof(GsplatSequenceRenderer.LidarExternalDynamicTargets),
                 nameof(GsplatSequenceRenderer.LidarExternalDynamicUpdateHz),
+                nameof(GsplatSequenceRenderer.LidarExternalCaptureResolutionMode),
+                nameof(GsplatSequenceRenderer.LidarExternalCaptureResolutionScale),
+                nameof(GsplatSequenceRenderer.LidarExternalCaptureResolution),
                 nameof(GsplatSequenceRenderer.LidarExternalTargetVisibilityMode),
                 nameof(GsplatSequenceRenderer.LidarRotationHz),
                 nameof(GsplatSequenceRenderer.LidarUpdateHz),
@@ -121,6 +124,42 @@ namespace Gsplat.Editor
                 includeChildren: true);
             EditorGUILayout.PropertyField(
                 serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarExternalDynamicUpdateHz)));
+            if (useFrustumCamera)
+            {
+                var captureResolutionModeProp =
+                    serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarExternalCaptureResolutionMode));
+                var captureResolutionScaleProp =
+                    serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarExternalCaptureResolutionScale));
+                var explicitCaptureResolutionProp =
+                    serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarExternalCaptureResolution));
+
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("External Capture", EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(captureResolutionModeProp);
+
+                using (new EditorGUI.DisabledScope(
+                           captureResolutionModeProp.enumValueIndex !=
+                           (int)GsplatLidarExternalCaptureResolutionMode.Scale))
+                {
+                    EditorGUILayout.PropertyField(captureResolutionScaleProp);
+                }
+
+                using (new EditorGUI.DisabledScope(
+                           captureResolutionModeProp.enumValueIndex !=
+                           (int)GsplatLidarExternalCaptureResolutionMode.Explicit))
+                {
+                    EditorGUILayout.PropertyField(explicitCaptureResolutionProp);
+                }
+
+                EditorGUILayout.HelpBox(
+                    "external capture 分辨率说明:\n" +
+                    "- 仅在 `CameraFrustum + external GPU capture` 路线生效.\n" +
+                    "- Auto: 先取 frustum camera 的 pixelRect; 如果无效,再回退 targetTexture; 最后回退 active LiDAR grid.\n" +
+                    "- Scale: 在 Auto 基准上乘倍率,适合 supersample 提高 external mesh 边缘采样精度.\n" +
+                    "- Explicit: 直接指定离屏 depth/color capture 的宽高.\n" +
+                    "- 这个参数控制的是 external mesh 的离屏采样精度,不会改变 LiDAR 自己的 beam / azimuth 离散语义.",
+                    MessageType.Info);
+            }
             EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarExternalTargetVisibilityMode)));
             EditorGUILayout.HelpBox(
                 "说明:\n" +

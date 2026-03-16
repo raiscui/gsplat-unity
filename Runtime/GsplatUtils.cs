@@ -69,6 +69,19 @@ namespace Gsplat
     }
 
     /// <summary>
+    /// frustum external GPU capture 的分辨率模式.
+    /// - Auto: 复用当前 frustum camera 的默认 capture 基准尺寸.
+    /// - Scale: 先解析 Auto 的基准尺寸,再乘以倍率.
+    /// - Explicit: 直接使用显式的宽高.
+    /// </summary>
+    public enum GsplatLidarExternalCaptureResolutionMode
+    {
+        Auto = 0,
+        Scale = 1,
+        Explicit = 2
+    }
+
+    /// <summary>
     /// LiDAR 粒子抗锯齿模式.
     /// - LegacySoftEdge: 继续使用固定 feather 的旧边缘语义.
     /// - AnalyticCoverage: 使用屏幕导数驱动的本地 coverage AA.
@@ -204,6 +217,21 @@ namespace Gsplat
             return IsLidarParticleMsaaAvailable(camera)
                 ? requestedMode
                 : GsplatLidarParticleAntialiasingMode.AnalyticCoverage;
+        }
+
+        public static bool IsValidLidarExternalCaptureResolutionMode(GsplatLidarExternalCaptureResolutionMode mode)
+        {
+            return mode == GsplatLidarExternalCaptureResolutionMode.Auto ||
+                   mode == GsplatLidarExternalCaptureResolutionMode.Scale ||
+                   mode == GsplatLidarExternalCaptureResolutionMode.Explicit;
+        }
+
+        public static GsplatLidarExternalCaptureResolutionMode SanitizeLidarExternalCaptureResolutionMode(
+            GsplatLidarExternalCaptureResolutionMode mode)
+        {
+            return IsValidLidarExternalCaptureResolutionMode(mode)
+                ? mode
+                : GsplatLidarExternalCaptureResolutionMode.Auto;
         }
 
 #if GSPLAT_ENABLE_HDRP
