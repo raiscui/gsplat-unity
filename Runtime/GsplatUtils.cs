@@ -472,6 +472,23 @@ namespace Gsplat
             return transformedBounds;
         }
 
+        public static void BuildRigidTransformMatrices(Transform transform,
+            out Matrix4x4 localToWorld,
+            out Matrix4x4 worldToLocal)
+        {
+            // LiDAR 传感器坐标系必须只保留平移 + 旋转:
+            // - range image / external hit 里的距离语义都是“世界射线距离”.
+            // - 如果把节点缩放混进传感器矩阵,最终用 `dir * range` 重建世界点位时,
+            //   external hit 会被按缩放倍数再次推远,看起来就会离开 mesh 表面.
+            localToWorld = Matrix4x4.identity;
+            worldToLocal = Matrix4x4.identity;
+            if (!transform)
+                return;
+
+            localToWorld = Matrix4x4.TRS(transform.position, transform.rotation, Vector3.one);
+            worldToLocal = localToWorld.inverse;
+        }
+
         // --------------------------------------------------------------------
         // GPU 资源预算估算(粗略)
         // - 目的: 在创建 GraphicsBuffer 之前给出可读的显存占用提示,让失败是可解释的.

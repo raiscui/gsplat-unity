@@ -104,5 +104,44 @@ namespace Gsplat.Tests
             Assert.That(transformed.size.y, Is.EqualTo(4.0f).Within(1.0e-5f));
             Assert.That(transformed.size.z, Is.EqualTo(2.0f).Within(1.0e-5f));
         }
+
+        [Test]
+        public void BuildRigidTransformMatrices_IgnoresScaleButPreservesPose()
+        {
+            // 目的:
+            // - 锁定 LiDAR 传感器矩阵的核心语义: 只保留 position + rotation,不吸收节点缩放.
+            // - 防止 future refactor 再次把 `localToWorldMatrix/worldToLocalMatrix` 直接塞回 LiDAR 路径.
+            var go = new GameObject("GsplatUtilsTests_BuildRigidTransformMatrices");
+            try
+            {
+                var tr = go.transform;
+                tr.position = new Vector3(3.0f, -2.0f, 5.0f);
+                tr.rotation = Quaternion.Euler(15.0f, 30.0f, -10.0f);
+                tr.localScale = new Vector3(2.0f, 3.0f, 4.0f);
+
+                GsplatUtils.BuildRigidTransformMatrices(tr, out var localToWorld, out var worldToLocal);
+
+                var localProbe = new Vector3(0.0f, 0.0f, 5.0f);
+                var expectedWorld = tr.position + tr.rotation * localProbe;
+                var actualWorld = localToWorld.MultiplyPoint3x4(localProbe);
+                var roundTrip = worldToLocal.MultiplyPoint3x4(expectedWorld);
+
+                Assert.That(actualWorld.x, Is.EqualTo(expectedWorld.x).Within(1.0e-5f));
+                Assert.That(actualWorld.y, Is.EqualTo(expectedWorld.y).Within(1.0e-5f));
+                Assert.That(actualWorld.z, Is.EqualTo(expectedWorld.z).Within(1.0e-5f));
+
+                Assert.That(roundTrip.x, Is.EqualTo(localProbe.x).Within(1.0e-5f));
+                Assert.That(roundTrip.y, Is.EqualTo(localProbe.y).Within(1.0e-5f));
+                Assert.That(roundTrip.z, Is.EqualTo(localProbe.z).Within(1.0e-5f));
+
+                var scaledWorld = tr.localToWorldMatrix.MultiplyPoint3x4(localProbe);
+                Assert.That(Vector3.Distance(scaledWorld, expectedWorld), Is.GreaterThan(1.0f),
+                    "对照组应证明直接使用带缩放矩阵会把 LiDAR 世界点位推远,否则这个回归测试就失去意义.");
+            }
+            finally
+            {
+                Object.DestroyImmediate(go);
+            }
+        }
     }
 }

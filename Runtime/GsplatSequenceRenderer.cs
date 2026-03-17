@@ -2051,8 +2051,10 @@ namespace Gsplat
             }
 
             m_lidarLoggedMissingOrigin = false;
-            lidarLocalToWorld = sensorTransform.localToWorldMatrix;
-            worldToLidar = sensorTransform.worldToLocalMatrix;
+            // 序列后端与静态后端保持同一条 LiDAR 传感器语义:
+            // - 传感器矩阵只表达位姿(position + rotation),不吸收节点缩放。
+            // - 这样 external target 的世界距离命中与最终点位重建才能保持一致。
+            GsplatUtils.BuildRigidTransformMatrices(sensorTransform, out lidarLocalToWorld, out worldToLidar);
             return true;
         }
 

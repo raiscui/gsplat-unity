@@ -101,3 +101,15 @@
   - `LATER_PLANS__lidar_edge_aliasing.md`
   - `EPIPHANY_LOG__lidar_edge_aliasing.md`
   - `ERRORFIX__lidar_edge_aliasing.md`
+
+## [2026-03-17 22:53:05] [Session ID: lidar_scaled_surface_offset_20260317_225305] 支线索引: __lidar_scaled_surface_offset
+
+- 启用原因: 用户反馈 RadarScan/LiDAR 效果在“被缩放过的高斯组件”上,`LidarExternalStaticTargets` 生成的外部目标点云会偏离 mesh 表面。该问题与既有 `__lidar_edge_aliasing` 的锯齿分析不同,需要独立追踪缩放矩阵在 LiDAR 传感器坐标系中的传播方式。
+- 支线主题: 追踪缩放后的 `GsplatRenderer` / `GsplatSequenceRenderer` 在 LiDAR range image、external target 命中与最终点云重建中的矩阵链路,验证是否存在“传感器缩放污染 LiDAR 坐标系,导致 external hit 被按缩放倍数推远”的问题,并完成修复与回归测试。
+- 对应上下文集:
+  - `task_plan__lidar_scaled_surface_offset.md`
+  - `notes__lidar_scaled_surface_offset.md`
+  - `WORKLOG__lidar_scaled_surface_offset.md`
+  - `LATER_PLANS__lidar_scaled_surface_offset.md`
+  - `EPIPHANY_LOG__lidar_scaled_surface_offset.md`
+  - `ERRORFIX__lidar_scaled_surface_offset.md`

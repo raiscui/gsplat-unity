@@ -199,6 +199,39 @@ namespace Gsplat.Tests
             return args[0];
         }
 
+        static object InvokeTryGetEffectiveLidarRuntimeContext(object obj, string ownerName, bool logWhenMissing,
+            out bool succeeded, out Matrix4x4 lidarLocalToWorld, out Matrix4x4 worldToLidar,
+            out Camera resolvedFrustumCamera)
+        {
+            var m = obj.GetType().GetMethod("TryGetEffectiveLidarRuntimeContext",
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.IsNotNull(m, $"Expected {ownerName}.TryGetEffectiveLidarRuntimeContext to exist.");
+
+            var args = new object[] { null, Matrix4x4.identity, Matrix4x4.identity, null, logWhenMissing };
+            succeeded = (bool)m.Invoke(obj, args);
+            lidarLocalToWorld = (Matrix4x4)args[1];
+            worldToLidar = (Matrix4x4)args[2];
+            resolvedFrustumCamera = args[3] as Camera;
+            return args[0];
+        }
+
+        static void AssertMatrixReconstructsRigidWorldDistance(Matrix4x4 lidarLocalToWorld, Matrix4x4 worldToLidar,
+            Transform sensorTransform, float rangeMeters)
+        {
+            var localPoint = Vector3.forward * rangeMeters;
+            var expectedWorldPoint = sensorTransform.position + sensorTransform.rotation * localPoint;
+            var actualWorldPoint = lidarLocalToWorld.MultiplyPoint3x4(localPoint);
+            var recoveredLocalPoint = worldToLidar.MultiplyPoint3x4(expectedWorldPoint);
+
+            Assert.That(actualWorldPoint.x, Is.EqualTo(expectedWorldPoint.x).Within(1.0e-5f));
+            Assert.That(actualWorldPoint.y, Is.EqualTo(expectedWorldPoint.y).Within(1.0e-5f));
+            Assert.That(actualWorldPoint.z, Is.EqualTo(expectedWorldPoint.z).Within(1.0e-5f));
+
+            Assert.That(recoveredLocalPoint.x, Is.EqualTo(localPoint.x).Within(1.0e-5f));
+            Assert.That(recoveredLocalPoint.y, Is.EqualTo(localPoint.y).Within(1.0e-5f));
+            Assert.That(recoveredLocalPoint.z, Is.EqualTo(localPoint.z).Within(1.0e-5f));
+        }
+
         static T GetReflectedPropertyValue<T>(object obj, string ownerName, string propertyName)
         {
             Assert.IsNotNull(obj, $"Expected {ownerName} reflected object to be non-null.");
@@ -231,6 +264,44 @@ namespace Gsplat.Tests
             var baselineVerticalSpanRad = Mathf.Max((baselineUpFovDeg - baselineDownFovDeg) * Mathf.Deg2Rad, 1.0e-6f);
             var verticalFovRad = camera.fieldOfView * Mathf.Deg2Rad;
             return Mathf.Max(1, Mathf.RoundToInt(baseBeamCount * verticalFovRad / baselineVerticalSpanRad));
+        }
+
+        static void ComputeFrustumAngleBoundsFromViewportSamples(Camera camera, Matrix4x4 worldToSensor,
+            out float azimuthMinRad, out float azimuthMaxRad,
+            out float beamMinRad, out float beamMaxRad)
+        {
+            azimuthMinRad = float.PositiveInfinity;
+            azimuthMaxRad = float.NegativeInfinity;
+            beamMinRad = float.PositiveInfinity;
+            beamMaxRad = float.NegativeInfinity;
+
+            var viewportSamples = new[]
+            {
+                new Vector2(0.0f, 0.0f),
+                new Vector2(1.0f, 0.0f),
+                new Vector2(0.0f, 1.0f),
+                new Vector2(1.0f, 1.0f),
+                new Vector2(0.5f, 0.0f),
+                new Vector2(0.5f, 1.0f),
+                new Vector2(0.0f, 0.5f),
+                new Vector2(1.0f, 0.5f),
+            };
+
+            for (var i = 0; i < viewportSamples.Length; i++)
+            {
+                var sample = viewportSamples[i];
+                var worldPoint = camera.ViewportToWorldPoint(new Vector3(sample.x, sample.y, 1.0f));
+                var localDirection = worldToSensor.MultiplyPoint3x4(worldPoint);
+                var direction = localDirection.normalized;
+                var horizontal = Mathf.Sqrt(direction.x * direction.x + direction.z * direction.z);
+                var azimuthRad = Mathf.Atan2(direction.x, direction.z);
+                var beamRad = Mathf.Atan2(direction.y, Mathf.Max(horizontal, 1.0e-6f));
+
+                azimuthMinRad = Mathf.Min(azimuthMinRad, azimuthRad);
+                azimuthMaxRad = Mathf.Max(azimuthMaxRad, azimuthRad);
+                beamMinRad = Mathf.Min(beamMinRad, beamRad);
+                beamMaxRad = Mathf.Max(beamMaxRad, beamRad);
+            }
         }
 
         static bool InvokeShouldForceSourceRendererOff(GsplatLidarExternalTargetVisibilityMode visibilityMode, bool isPlaying)
@@ -534,6 +605,74 @@ namespace Gsplat.Tests
         }
 
         [Test]
+        public void TryGetEffectiveLidarRuntimeContext_IgnoresSensorScale_GsplatRenderer()
+        {
+            var host = new GameObject("GsplatRenderer_ScaledLidarSensor");
+            var origin = new GameObject("lidar-origin-scaled");
+            try
+            {
+                host.SetActive(false);
+                host.transform.localScale = new Vector3(2.0f, 2.0f, 2.0f);
+
+                origin.transform.SetParent(host.transform, false);
+                origin.transform.localPosition = new Vector3(1.5f, -0.5f, 2.0f);
+                origin.transform.localRotation = Quaternion.Euler(0.0f, 35.0f, 0.0f);
+                origin.transform.localScale = Vector3.one;
+
+                var renderer = host.AddComponent<GsplatRenderer>();
+                renderer.EnableLidarScan = true;
+                renderer.LidarApertureMode = GsplatLidarApertureMode.Surround360;
+                renderer.LidarOrigin = origin.transform;
+
+                InvokeTryGetEffectiveLidarRuntimeContext(renderer, nameof(GsplatRenderer), logWhenMissing: false,
+                    out var succeeded, out var lidarLocalToWorld, out var worldToLidar, out var resolvedCamera);
+
+                Assert.IsTrue(succeeded);
+                Assert.IsNull(resolvedCamera);
+                AssertMatrixReconstructsRigidWorldDistance(lidarLocalToWorld, worldToLidar, origin.transform, 6.0f);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+                UnityEngine.Object.DestroyImmediate(origin);
+            }
+        }
+
+        [Test]
+        public void TryGetEffectiveLidarRuntimeContext_IgnoresSensorScale_GsplatSequenceRenderer()
+        {
+            var host = new GameObject("GsplatSequenceRenderer_ScaledLidarSensor");
+            var origin = new GameObject("lidar-seq-origin-scaled");
+            try
+            {
+                host.SetActive(false);
+                host.transform.localScale = new Vector3(0.5f, 0.5f, 0.5f);
+
+                origin.transform.SetParent(host.transform, false);
+                origin.transform.localPosition = new Vector3(-2.0f, 1.0f, 3.0f);
+                origin.transform.localRotation = Quaternion.Euler(10.0f, -20.0f, 5.0f);
+                origin.transform.localScale = Vector3.one;
+
+                var renderer = host.AddComponent<GsplatSequenceRenderer>();
+                renderer.EnableLidarScan = true;
+                renderer.LidarApertureMode = GsplatLidarApertureMode.Surround360;
+                renderer.LidarOrigin = origin.transform;
+
+                InvokeTryGetEffectiveLidarRuntimeContext(renderer, nameof(GsplatSequenceRenderer), logWhenMissing: false,
+                    out var succeeded, out var lidarLocalToWorld, out var worldToLidar, out var resolvedCamera);
+
+                Assert.IsTrue(succeeded);
+                Assert.IsNull(resolvedCamera);
+                AssertMatrixReconstructsRigidWorldDistance(lidarLocalToWorld, worldToLidar, origin.transform, 4.0f);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+                UnityEngine.Object.DestroyImmediate(origin);
+            }
+        }
+
+        [Test]
         public void TryGetEffectiveLidarLayout_UsesFrustumDensityDerivedCounts_GsplatRenderer()
         {
             var host = new GameObject("GsplatRenderer_FrustumLayout");
@@ -626,6 +765,70 @@ namespace Gsplat.Tests
             {
                 UnityEngine.Object.DestroyImmediate(host);
                 UnityEngine.Object.DestroyImmediate(cameraGo);
+            }
+        }
+
+        [Test]
+        public void TryGetEffectiveLidarLayout_UsesRigidCameraFrameForAngles_WhenParentScaled()
+        {
+            var host = new GameObject("GsplatRenderer_ScaledFrustumLayout");
+            var cameraParent = new GameObject("lidar-scaled-camera-parent");
+            var cameraGo = new GameObject("lidar-scaled-layout-camera");
+            try
+            {
+                host.SetActive(false);
+
+                cameraParent.transform.position = new Vector3(1.0f, 2.0f, -3.0f);
+                cameraParent.transform.rotation = Quaternion.Euler(7.0f, 22.0f, -5.0f);
+                cameraParent.transform.localScale = new Vector3(2.0f, 0.5f, 3.0f);
+
+                cameraGo.transform.SetParent(cameraParent.transform, false);
+                cameraGo.transform.localPosition = new Vector3(0.25f, -0.1f, 0.4f);
+                cameraGo.transform.localRotation = Quaternion.Euler(-4.0f, 15.0f, 0.0f);
+
+                var renderer = host.AddComponent<GsplatRenderer>();
+                var camera = cameraGo.AddComponent<Camera>();
+                camera.aspect = 16.0f / 9.0f;
+                camera.fieldOfView = 60.0f;
+
+                renderer.LidarApertureMode = GsplatLidarApertureMode.CameraFrustum;
+                renderer.LidarFrustumCamera = camera;
+                renderer.LidarAzimuthBins = 2048;
+                renderer.LidarBeamCount = 128;
+                renderer.LidarUpFovDeg = 10.0f;
+                renderer.LidarDownFovDeg = -30.0f;
+
+                var layout = InvokeTryGetEffectiveLidarLayout(renderer, nameof(GsplatRenderer), logWhenMissing: false,
+                    out var succeeded, out _);
+
+                Assert.IsTrue(succeeded);
+
+                GsplatUtils.BuildRigidTransformMatrices(camera.transform, out _, out var rigidWorldToSensor);
+                ComputeFrustumAngleBoundsFromViewportSamples(camera, rigidWorldToSensor,
+                    out var expectedAzimuthMinRad, out var expectedAzimuthMaxRad,
+                    out var expectedBeamMinRad, out var expectedBeamMaxRad);
+
+                ComputeFrustumAngleBoundsFromViewportSamples(camera, camera.transform.worldToLocalMatrix,
+                    out var scaledAzimuthMinRad, out var scaledAzimuthMaxRad,
+                    out var scaledBeamMinRad, out var scaledBeamMaxRad);
+
+                Assert.That(Mathf.Abs(expectedBeamMinRad - scaledBeamMinRad), Is.GreaterThan(1.0e-3f),
+                    "这个测试需要证明: 带父级缩放时,scaled local frame 与 rigid frame 的 beam 角域确实不同,否则它就不能充当有效回归样本.");
+
+                var actualAzimuthMinRad = GetReflectedPropertyValue<float>(layout, "GsplatLidarLayout", "AzimuthMinRad");
+                var actualAzimuthMaxRad = GetReflectedPropertyValue<float>(layout, "GsplatLidarLayout", "AzimuthMaxRad");
+                var actualBeamMinRad = GetReflectedPropertyValue<float>(layout, "GsplatLidarLayout", "BeamMinRad");
+                var actualBeamMaxRad = GetReflectedPropertyValue<float>(layout, "GsplatLidarLayout", "BeamMaxRad");
+
+                Assert.That(actualAzimuthMinRad, Is.EqualTo(expectedAzimuthMinRad).Within(1.0e-4f));
+                Assert.That(actualAzimuthMaxRad, Is.EqualTo(expectedAzimuthMaxRad).Within(1.0e-4f));
+                Assert.That(actualBeamMinRad, Is.EqualTo(expectedBeamMinRad).Within(1.0e-4f));
+                Assert.That(actualBeamMaxRad, Is.EqualTo(expectedBeamMaxRad).Within(1.0e-4f));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(host);
+                UnityEngine.Object.DestroyImmediate(cameraParent);
             }
         }
 

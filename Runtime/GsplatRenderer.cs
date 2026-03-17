@@ -3445,8 +3445,12 @@ namespace Gsplat
             }
 
             m_lidarLoggedMissingOrigin = false;
-            lidarLocalToWorld = sensorTransform.localToWorldMatrix;
-            worldToLidar = sensorTransform.worldToLocalMatrix;
+            // LiDAR 传感器矩阵要忽略节点缩放:
+            // - splat first-return 通过 `worldToLidar * transform.localToWorldMatrix`
+            //   仍能保留真实世界距离语义。
+            // - external target 的 hit distance 本来就是世界距离,如果再乘传感器缩放,
+            //   点位会被额外推远,表现成偏离 mesh 表面。
+            GsplatUtils.BuildRigidTransformMatrices(sensorTransform, out lidarLocalToWorld, out worldToLidar);
             return true;
         }
 

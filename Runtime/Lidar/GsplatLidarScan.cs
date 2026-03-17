@@ -163,11 +163,18 @@ namespace Gsplat
                 new Vector2(1.0f, 0.5f),
             };
 
+            // 关键说明:
+            // - 这里不能直接用 `frustumCamera.transform.InverseTransformPoint(...)`.
+            // - 一旦父级有非 1 缩放,那个 local frame 会把 scale 吸进角域计算.
+            // - 但 LiDAR 运行时 ray / 点云重建已经切到 rigid sensor frame 了,
+            //   所以 frustum layout 也必须使用同一套 rigid worldToSensor 语义.
+            GsplatUtils.BuildRigidTransformMatrices(frustumCamera.transform, out _, out var rigidWorldToSensor);
+
             for (var i = 0; i < viewportSamples.Length; i++)
             {
                 var sample = viewportSamples[i];
                 var worldPoint = frustumCamera.ViewportToWorldPoint(new Vector3(sample.x, sample.y, 1.0f));
-                var localDirection = frustumCamera.transform.InverseTransformPoint(worldPoint);
+                var localDirection = rigidWorldToSensor.MultiplyPoint3x4(worldPoint);
 
                 if (!TryComputeAngles(localDirection, out var azimuthRad, out var beamRad))
                 {
