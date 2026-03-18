@@ -20,6 +20,8 @@ namespace Gsplat
     [ExecuteAlways]
     public sealed class GsplatSequenceRenderer : MonoBehaviour, IGsplat, IGsplatRenderSubmitter
     {
+        const float k_defaultDualTrackSwitchTriggerProgress01 = 0.35f;
+
         public GsplatSequenceAsset SequenceAsset;
 
         [Header("Runtime .sog4d Loading (Player build)")]
@@ -202,6 +204,13 @@ namespace Gsplat
                  "- 默认 5Hz(1 圈 0.2 秒).\n" +
                  "- 当值非法或 <=0 时会回退到安全默认值(5Hz).")]
         public float LidarRotationHz = 5.0f;
+
+        [Tooltip("是否启用 RadarScan 的扫描头运动效果.\n" +
+                 "说明:\n" +
+                 "- 开启(默认): 使用扫描头旋转 + 余辉 trail 的传统 RadarScan 观感.\n" +
+                 "- 关闭: 不再播放扫描头运动,所有 LiDAR 粒子会直接以稳定可见的点云形式呈现.\n" +
+                 "- 该开关不会关闭 LiDAR 采样/点云渲染本身,也不会影响开关时的淡入淡出(show/hide)过渡.")]
+        public bool LidarEnableScanMotion = true;
 
         [Min(0.0f)]
         [Tooltip("LiDAR range image 的更新频率(Hz).\n" +
@@ -493,6 +502,14 @@ namespace Gsplat
         public float HideDuration = 1.2f;
 
         [Range(0.0f, 1.0f)]
+        [Tooltip("双向 dual-track 切换里“第二效果”开始介入的共享触发进度(0..1).\n" +
+                 "说明:\n" +
+                 "- `show-hide-switch-高斯` 与 `show-hide-switch-雷达` 共用这一条阈值.\n" +
+                 "- 0 表示第二效果立刻开始,1 表示等第一效果完全结束才开始.\n" +
+                 "- 默认 0.35,对应当前已验证过的 overlap 手感.")]
+        public float DualTrackSwitchTriggerProgress01 = k_defaultDualTrackSwitchTriggerProgress01;
+
+        [Range(0.0f, 1.0f)]
         [FormerlySerializedAs("RingWidthNormalized")]
         [Tooltip("show: 燃烧环宽度(径向空间宽度,相对 maxRadius 的比例).\n" +
                  "注意: 这不是粒子大小,它只影响“燃烧前沿在空间中有多厚”.")]
@@ -689,7 +706,18 @@ namespace Gsplat
         float m_radarToGaussianLidarHideOverlayLastAdvanceRealtime = -1.0f;
         VisibilitySourceMaskMode m_radarToGaussianLidarHideOverlaySourceMaskMode = VisibilitySourceMaskMode.FullVisible;
         float m_radarToGaussianLidarHideOverlaySourceMaskProgress01 = 1.0f;
-        const float k_radarToGaussianShowTriggerProgress01 = 0.35f;
+
+        // --------------------------------------------------------------------
+        // Gaussian -> RadarScan 的 show/hide 编排状态(非序列化)
+        // --------------------------------------------------------------------
+        bool m_pendingGaussianToRadarShowSwitch;
+        bool m_pendingGaussianToRadarFinalizeRadarMode;
+        bool m_gaussianToRadarLidarShowOverlayActive;
+        float m_gaussianToRadarLidarShowOverlayProgress01 = 1.0f;
+        float m_gaussianToRadarLidarShowOverlayLastAdvanceRealtime = -1.0f;
+        VisibilitySourceMaskMode m_gaussianToRadarLidarShowOverlaySourceMaskMode =
+            VisibilitySourceMaskMode.FullHidden;
+        float m_gaussianToRadarLidarShowOverlaySourceMaskProgress01;
 
 #if UNITY_EDITOR
         // --------------------------------------------------------------------
@@ -730,9 +758,7 @@ namespace Gsplat
             if (m_lidarColorAnimating || m_lidarVisibilityAnimating)
                 return true;
 
-            if (m_pendingRadarToGaussianShowSwitch ||
-                m_pendingRadarToGaussianDisableLidar ||
-                m_radarToGaussianLidarHideOverlayActive)
+            if (IsRadarToGaussianDualTrackActive() || IsGaussianToRadarDualTrackActive())
             {
                 return true;
             }
@@ -833,6 +859,8 @@ namespace Gsplat
                     continue;
                 }
 
+                r.AdvancePendingRadarToGaussianShowSwitchIfNeeded();
+                r.AdvancePendingGaussianToRadarShowSwitchIfNeeded();
                 r.AdvanceVisibilityStateIfNeeded();
                 r.AdvanceRenderStyleStateIfNeeded();
                 r.AdvanceLidarAnimationStateIfNeeded();
@@ -1013,6 +1041,7 @@ namespace Gsplat
                 return;
 
             AdvancePendingRadarToGaussianShowSwitchIfNeeded();
+            AdvancePendingGaussianToRadarShowSwitchIfNeeded();
             AdvanceVisibilityStateIfNeeded();
             AdvanceRenderStyleStateIfNeeded();
             AdvanceLidarAnimationStateIfNeeded();
@@ -1095,6 +1124,52 @@ namespace Gsplat
             return m_lidarVisibility01 > 1.0e-4f;
         }
 
+        float GetDualTrackSwitchTriggerProgress01()
+        {
+            var progress01 = DualTrackSwitchTriggerProgress01;
+            if (float.IsNaN(progress01) || float.IsInfinity(progress01))
+                progress01 = k_defaultDualTrackSwitchTriggerProgress01;
+            return Mathf.Clamp01(progress01);
+        }
+
+        bool HasGaussianMainVisualToExit()
+        {
+            if (m_visibilityState == VisibilityAnimState.Hidden)
+                return false;
+
+            if (RenderStyle == GsplatRenderStyle.Gaussian)
+                return true;
+
+            if (m_renderStyleAnimating && m_renderStyleAnimTargetBlend01 < 0.999f)
+                return true;
+
+            return m_renderStyleBlend01 < 0.999f;
+        }
+
+        bool IsRadarToGaussianDualTrackActive()
+        {
+            return m_pendingRadarToGaussianShowSwitch ||
+                   m_pendingRadarToGaussianDisableLidar ||
+                   m_radarToGaussianLidarHideOverlayActive;
+        }
+
+        bool IsGaussianToRadarDualTrackActive()
+        {
+            return m_pendingGaussianToRadarShowSwitch ||
+                   m_pendingGaussianToRadarFinalizeRadarMode ||
+                   m_gaussianToRadarLidarShowOverlayActive;
+        }
+
+        void ApplyVisibilityStableState(bool visible)
+        {
+            m_visibilityState = visible ? VisibilityAnimState.Visible : VisibilityAnimState.Hidden;
+            m_visibilityProgress01 = 1.0f;
+            m_visibilityLastAdvanceRealtime = -1.0f;
+            SetVisibilitySourceMask(visible
+                ? VisibilitySourceMaskMode.FullVisible
+                : VisibilitySourceMaskMode.FullHidden);
+        }
+
         void ResetRadarToGaussianLidarHideOverlayState()
         {
             // ----------------------------------------------------------------
@@ -1107,6 +1182,20 @@ namespace Gsplat
             m_radarToGaussianLidarHideOverlayLastAdvanceRealtime = -1.0f;
             m_radarToGaussianLidarHideOverlaySourceMaskMode = VisibilitySourceMaskMode.FullVisible;
             m_radarToGaussianLidarHideOverlaySourceMaskProgress01 = 1.0f;
+        }
+
+        void ResetGaussianToRadarLidarShowOverlayState()
+        {
+            // ----------------------------------------------------------------
+            // 反向 dual-track 的专用 show overlay:
+            // - 只服务于 "Gaussian -> RadarScan" 这条 overlap 切换路径.
+            // - 取消/完成后统一归零,避免把 show mode 残留到普通雷达模式里.
+            // ----------------------------------------------------------------
+            m_gaussianToRadarLidarShowOverlayActive = false;
+            m_gaussianToRadarLidarShowOverlayProgress01 = 1.0f;
+            m_gaussianToRadarLidarShowOverlayLastAdvanceRealtime = -1.0f;
+            m_gaussianToRadarLidarShowOverlaySourceMaskMode = VisibilitySourceMaskMode.FullHidden;
+            m_gaussianToRadarLidarShowOverlaySourceMaskProgress01 = 0.0f;
         }
 
         void CaptureRadarToGaussianLidarHideOverlayFromCurrentHideState()
@@ -1160,7 +1249,7 @@ namespace Gsplat
             }
         }
 
-        bool HasRadarToGaussianHideReachedShowTrigger()
+        bool WillVisibilityHideReachDualTrackTriggerThisTick()
         {
             if (!EnableVisibilityAnimation)
                 return false;
@@ -1171,7 +1260,20 @@ namespace Gsplat
             if (m_visibilityState != VisibilityAnimState.Hiding)
                 return false;
 
-            return m_visibilityProgress01 >= k_radarToGaussianShowTriggerProgress01;
+            var triggerProgress01 = GetDualTrackSwitchTriggerProgress01();
+            if (m_visibilityProgress01 >= triggerProgress01)
+                return true;
+
+            var dt = 0.0f;
+            if (m_visibilityLastAdvanceRealtime >= 0.0f)
+                dt = Mathf.Max(0.0f, Time.realtimeSinceStartup - m_visibilityLastAdvanceRealtime);
+            if (float.IsNaN(dt) || float.IsInfinity(dt) || dt < 0.0f)
+                dt = 0.0f;
+
+            if (dt <= 0.0f)
+                return false;
+
+            return CalcVisibilityAdvancedProgress(dt, hiding: true, m_visibilityProgress01) >= triggerProgress01;
         }
 
         void FinalizeRadarToGaussianLidarDisableIfNeeded()
@@ -1187,7 +1289,7 @@ namespace Gsplat
             // - Gaussian show 启动后,LiDAR 还要继续把专用 hide overlay 跑到终点.
             // - 只有这条 hide 轨真的结束,才允许关闭 LiDAR runtime.
             // ----------------------------------------------------------------
-            SetRadarScanEnabled(enableRadarScan: false, animated: false, durationSeconds: 0.0f);
+            SetRadarScanEnabledWithoutCancel(enableRadarScan: false, animated: false, durationSeconds: 0.0f);
         }
 
         void CancelPendingRadarToGaussianShowSwitch()
@@ -1195,6 +1297,19 @@ namespace Gsplat
             m_pendingRadarToGaussianShowSwitch = false;
             m_pendingRadarToGaussianDisableLidar = false;
             ResetRadarToGaussianLidarHideOverlayState();
+        }
+
+        void CancelPendingGaussianToRadarShowSwitch()
+        {
+            m_pendingGaussianToRadarShowSwitch = false;
+            m_pendingGaussianToRadarFinalizeRadarMode = false;
+            ResetGaussianToRadarLidarShowOverlayState();
+        }
+
+        void CancelPendingDualTrackSwitches()
+        {
+            CancelPendingRadarToGaussianShowSwitch();
+            CancelPendingGaussianToRadarShowSwitch();
         }
 
         void ArmRadarToGaussianShowSwitch()
@@ -1220,9 +1335,7 @@ namespace Gsplat
             // ----------------------------------------------------------------
             if (!EnableVisibilityAnimation)
             {
-                m_visibilityState = VisibilityAnimState.Visible;
-                m_visibilityProgress01 = 1.0f;
-                SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
+                ApplyVisibilityStableState(visible: true);
                 return;
             }
 
@@ -1262,7 +1375,7 @@ namespace Gsplat
             if (!EnableVisibilityAnimation)
                 return;
 
-            PlayHide();
+            PlayHideWithoutCancel();
         }
 
         void TriggerRadarToGaussianShowSwitchNow()
@@ -1274,7 +1387,7 @@ namespace Gsplat
             CaptureRadarToGaussianLidarHideOverlayFromCurrentHideState();
             m_pendingRadarToGaussianDisableLidar = true;
             // 不能走 `SetRenderStyle(...)`,因为它会先 cancel,把刚抓到的专用 hide overlay 清掉.
-            ApplyRenderStyleTransition(GsplatRenderStyle.Gaussian, animated: false, durationSeconds: 0.0f);
+            SetRenderStyleWithoutCancel(GsplatRenderStyle.Gaussian, animated: false, durationSeconds: 0.0f);
             BeginGaussianShowFromHiddenForRadarSwitch();
         }
 
@@ -1291,7 +1404,7 @@ namespace Gsplat
             // - show 的触发点现在绑定到“visibility hide 轨”自身.
             // - 当前阈值会比 0.5 略早一点,让衔接更紧密,但仍保留明显的先 hide 再 overlap 体感.
             // ----------------------------------------------------------------
-            if (HasRadarToGaussianHideReachedShowTrigger())
+            if (WillVisibilityHideReachDualTrackTriggerThisTick())
             {
                 TriggerRadarToGaussianShowSwitchNow();
                 return;
@@ -1301,22 +1414,127 @@ namespace Gsplat
                 TriggerRadarToGaussianShowSwitchNow();
         }
 
+        void BeginGaussianToRadarLidarShowOverlay()
+        {
+            if (!EnableVisibilityAnimation)
+            {
+                ResetGaussianToRadarLidarShowOverlayState();
+                return;
+            }
+
+            m_gaussianToRadarLidarShowOverlayActive = true;
+            m_gaussianToRadarLidarShowOverlayProgress01 = 0.0f;
+            m_gaussianToRadarLidarShowOverlayLastAdvanceRealtime = -1.0f;
+            m_gaussianToRadarLidarShowOverlaySourceMaskMode = VisibilitySourceMaskMode.FullHidden;
+            m_gaussianToRadarLidarShowOverlaySourceMaskProgress01 = 0.0f;
+        }
+
+        void AdvanceGaussianToRadarLidarShowOverlayIfNeeded()
+        {
+            if (!m_gaussianToRadarLidarShowOverlayActive)
+                return;
+
+            if (!EnableVisibilityAnimation)
+            {
+                ResetGaussianToRadarLidarShowOverlayState();
+                return;
+            }
+
+            var now = Time.realtimeSinceStartup;
+            var dt = 0.0f;
+            if (m_gaussianToRadarLidarShowOverlayLastAdvanceRealtime >= 0.0f)
+                dt = Mathf.Max(0.0f, now - m_gaussianToRadarLidarShowOverlayLastAdvanceRealtime);
+            m_gaussianToRadarLidarShowOverlayLastAdvanceRealtime = now;
+            if (float.IsNaN(dt) || float.IsInfinity(dt) || dt < 0.0f)
+                dt = 0.0f;
+
+            m_gaussianToRadarLidarShowOverlayProgress01 = CalcVisibilityAdvancedProgress(
+                dt,
+                hiding: false,
+                m_gaussianToRadarLidarShowOverlayProgress01);
+
+            if (m_gaussianToRadarLidarShowOverlayProgress01 >= 1.0f)
+            {
+                m_gaussianToRadarLidarShowOverlayProgress01 = 1.0f;
+                m_gaussianToRadarLidarShowOverlayActive = false;
+            }
+        }
+
+        void ArmGaussianToRadarShowSwitch()
+        {
+            m_pendingGaussianToRadarShowSwitch = true;
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                RequestEditorRepaintForVisibilityAnimation(force: true, reason: "GaussianToRadar.Arm");
+                RegisterVisibilityEditorTickerIfAnimating();
+            }
+#endif
+        }
+
+        void TriggerGaussianToRadarShowSwitchNow()
+        {
+            if (!m_pendingGaussianToRadarShowSwitch)
+                return;
+
+            m_pendingGaussianToRadarShowSwitch = false;
+            m_pendingGaussianToRadarFinalizeRadarMode = true;
+            HideSplatsWhenLidarEnabled = true;
+            SetRadarScanEnabledWithoutCancel(enableRadarScan: true, animated: false, durationSeconds: 0.0f);
+            BeginGaussianToRadarLidarShowOverlay();
+        }
+
+        void FinalizeGaussianToRadarRadarModeIfNeeded()
+        {
+            if (!m_pendingGaussianToRadarFinalizeRadarMode)
+                return;
+
+            if (m_visibilityState != VisibilityAnimState.Hidden)
+                return;
+
+            m_pendingGaussianToRadarFinalizeRadarMode = false;
+            ResetGaussianToRadarLidarShowOverlayState();
+            HideSplatsWhenLidarEnabled = true;
+            SetRadarScanEnabledWithoutCancel(enableRadarScan: true, animated: false, durationSeconds: 0.0f);
+            SetRenderStyleWithoutCancel(GsplatRenderStyle.ParticleDots, animated: false, durationSeconds: 0.0f);
+            ApplyVisibilityStableState(visible: true);
+        }
+
+        void AdvancePendingGaussianToRadarShowSwitchIfNeeded()
+        {
+            AdvanceGaussianToRadarLidarShowOverlayIfNeeded();
+            FinalizeGaussianToRadarRadarModeIfNeeded();
+
+            if (!m_pendingGaussianToRadarShowSwitch)
+                return;
+
+            if (WillVisibilityHideReachDualTrackTriggerThisTick())
+            {
+                TriggerGaussianToRadarShowSwitchNow();
+                return;
+            }
+
+            if (!EnableVisibilityAnimation && !HasGaussianMainVisualToExit())
+                TriggerGaussianToRadarShowSwitchNow();
+        }
+
         public void PlayRadarScanToGaussianShowHideSwitch(float durationSeconds = -1.0f)
         {
-            CancelPendingRadarToGaussianShowSwitch();
+            CancelPendingDualTrackSwitches();
 
             if (!HasRadarVisibilityToExit())
             {
-                SetRenderStyle(GsplatRenderStyle.Gaussian, animated: false, durationSeconds: 0.0f);
-                SetVisible(true, animated: true);
+                SetRenderStyleWithoutCancel(GsplatRenderStyle.Gaussian, animated: false, durationSeconds: 0.0f);
+                SetVisibleWithoutCancel(visible: true, animated: true);
                 return;
             }
 
             if (!EnableVisibilityAnimation)
             {
-                SetRadarScanEnabled(enableRadarScan: false, animated: false, durationSeconds: 0.0f);
-                SetRenderStyle(GsplatRenderStyle.Gaussian, animated: false, durationSeconds: 0.0f);
-                SetVisible(true, animated: false);
+                SetRadarScanEnabledWithoutCancel(enableRadarScan: false, animated: false, durationSeconds: 0.0f);
+                SetRenderStyleWithoutCancel(GsplatRenderStyle.Gaussian, animated: false, durationSeconds: 0.0f);
+                SetVisibleWithoutCancel(visible: true, animated: false);
                 return;
             }
 
@@ -1334,11 +1552,44 @@ namespace Gsplat
             ArmRadarToGaussianShowSwitch();
         }
 
-        public void SetRenderStyleAndRadarScan(GsplatRenderStyle style, bool enableRadarScan, bool animated = true,
+        public void PlayGaussianToRadarScanShowHideSwitch(float durationSeconds = -1.0f)
+        {
+            CancelPendingDualTrackSwitches();
+
+            _ = durationSeconds;
+
+            if (!HasGaussianMainVisualToExit())
+            {
+                HideSplatsWhenLidarEnabled = true;
+                SetRadarScanEnabledWithoutCancel(enableRadarScan: true, animated: false, durationSeconds: 0.0f);
+                SetRenderStyleWithoutCancel(GsplatRenderStyle.ParticleDots, animated: false, durationSeconds: 0.0f);
+                SetVisibleWithoutCancel(visible: true, animated: false);
+                return;
+            }
+
+            if (!EnableVisibilityAnimation)
+            {
+                HideSplatsWhenLidarEnabled = true;
+                SetRadarScanEnabledWithoutCancel(enableRadarScan: true, animated: false, durationSeconds: 0.0f);
+                SetRenderStyleWithoutCancel(GsplatRenderStyle.ParticleDots, animated: false, durationSeconds: 0.0f);
+                SetVisibleWithoutCancel(visible: true, animated: false);
+                return;
+            }
+
+            PlayHideWithoutCancel();
+
+            if (WillVisibilityHideReachDualTrackTriggerThisTick())
+            {
+                TriggerGaussianToRadarShowSwitchNow();
+                return;
+            }
+
+            ArmGaussianToRadarShowSwitch();
+        }
+
+        void SetRenderStyleAndRadarScanWithoutCancel(GsplatRenderStyle style, bool enableRadarScan, bool animated = true,
             float durationSeconds = -1.0f)
         {
-            CancelPendingRadarToGaussianShowSwitch();
-
             // ----------------------------------------------------------------
             // 组合切换 API:
             // - 目标: 让序列后端与静态后端拥有一致的“风格 + 雷达模式”切换语义.
@@ -1352,8 +1603,8 @@ namespace Gsplat
                 style = GsplatRenderStyle.ParticleDots;
             }
 
-            SetRadarScanEnabled(enableRadarScan, animated, durationSeconds);
-            SetRenderStyle(style, animated, durationSeconds);
+            SetRadarScanEnabledWithoutCancel(enableRadarScan, animated, durationSeconds);
+            SetRenderStyleWithoutCancel(style, animated, durationSeconds);
 
 #if UNITY_EDITOR
             if (!Application.isPlaying)
@@ -1364,10 +1615,15 @@ namespace Gsplat
 #endif
         }
 
-        public void SetRadarScanEnabled(bool enableRadarScan, bool animated = true, float durationSeconds = -1.0f)
+        public void SetRenderStyleAndRadarScan(GsplatRenderStyle style, bool enableRadarScan, bool animated = true,
+            float durationSeconds = -1.0f)
         {
-            CancelPendingRadarToGaussianShowSwitch();
+            CancelPendingDualTrackSwitches();
+            SetRenderStyleAndRadarScanWithoutCancel(style, enableRadarScan, animated, durationSeconds);
+        }
 
+        void SetRadarScanEnabledWithoutCancel(bool enableRadarScan, bool animated = true, float durationSeconds = -1.0f)
+        {
             var d = ResolveRadarScanVisibilityDurationSeconds(enableRadarScan, durationSeconds);
 
             EnableLidarScan = enableRadarScan;
@@ -1398,6 +1654,12 @@ namespace Gsplat
                 RegisterVisibilityEditorTickerIfAnimating();
             }
 #endif
+        }
+
+        public void SetRadarScanEnabled(bool enableRadarScan, bool animated = true, float durationSeconds = -1.0f)
+        {
+            CancelPendingDualTrackSwitches();
+            SetRadarScanEnabledWithoutCancel(enableRadarScan, animated, durationSeconds);
         }
 
         public void SetLidarColorMode(GsplatLidarColorMode colorMode, bool animated = true, float durationSeconds = -1.0f)
@@ -1467,10 +1729,15 @@ namespace Gsplat
 #endif
         }
 
+        void SetRenderStyleWithoutCancel(GsplatRenderStyle style, bool animated = true, float durationSeconds = -1.0f)
+        {
+            ApplyRenderStyleTransition(style, animated, durationSeconds);
+        }
+
         public void SetRenderStyle(GsplatRenderStyle style, bool animated = true, float durationSeconds = -1.0f)
         {
-            CancelPendingRadarToGaussianShowSwitch();
-            ApplyRenderStyleTransition(style, animated, durationSeconds);
+            CancelPendingDualTrackSwitches();
+            SetRenderStyleWithoutCancel(style, animated, durationSeconds);
         }
 
         public void SetParticleDotRadiusPixels(float radiusPixels)
@@ -1560,35 +1827,31 @@ namespace Gsplat
             }
         }
 
-        public void SetVisible(bool visible, bool animated = true)
+        void SetVisibleWithoutCancel(bool visible, bool animated = true)
         {
-            CancelPendingRadarToGaussianShowSwitch();
-
             if (!animated || !EnableVisibilityAnimation)
             {
-                m_visibilityState = visible ? VisibilityAnimState.Visible : VisibilityAnimState.Hidden;
-                m_visibilityProgress01 = 1.0f;
-                SetVisibilitySourceMask(visible
-                    ? VisibilitySourceMaskMode.FullVisible
-                    : VisibilitySourceMaskMode.FullHidden);
+                ApplyVisibilityStableState(visible);
                 return;
             }
 
             if (visible)
-                PlayShow();
+                PlayShowWithoutCancel();
             else
-                PlayHide();
+                PlayHideWithoutCancel();
         }
 
-        public void PlayShow()
+        public void SetVisible(bool visible, bool animated = true)
         {
-            CancelPendingRadarToGaussianShowSwitch();
+            CancelPendingDualTrackSwitches();
+            SetVisibleWithoutCancel(visible, animated);
+        }
 
+        void PlayShowWithoutCancel()
+        {
             if (!EnableVisibilityAnimation)
             {
-                m_visibilityState = VisibilityAnimState.Visible;
-                m_visibilityProgress01 = 1.0f;
-                SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
+                ApplyVisibilityStableState(visible: true);
                 return;
             }
 
@@ -1607,15 +1870,17 @@ namespace Gsplat
 #endif
         }
 
-        public void PlayHide()
+        public void PlayShow()
         {
-            CancelPendingRadarToGaussianShowSwitch();
+            CancelPendingDualTrackSwitches();
+            PlayShowWithoutCancel();
+        }
 
+        void PlayHideWithoutCancel()
+        {
             if (!EnableVisibilityAnimation)
             {
-                m_visibilityState = VisibilityAnimState.Hidden;
-                m_visibilityProgress01 = 1.0f;
-                SetVisibilitySourceMask(VisibilitySourceMaskMode.FullHidden);
+                ApplyVisibilityStableState(visible: false);
                 return;
             }
 
@@ -1632,6 +1897,12 @@ namespace Gsplat
             RequestEditorRepaintForVisibilityAnimation(force: true, reason: "PlayHide");
             RegisterVisibilityEditorTickerIfAnimating();
 #endif
+        }
+
+        public void PlayHide()
+        {
+            CancelPendingDualTrackSwitches();
+            PlayHideWithoutCancel();
         }
 
         void InitVisibilityOnEnable()
@@ -1694,7 +1965,7 @@ namespace Gsplat
             m_lidarVisibilityAnimDurationSeconds = RenderStyleSwitchDurationSeconds;
             m_lidarVisibilityLastAdvanceRealtime = -1.0f;
             m_lidarKeepAliveDuringFadeOut = false;
-            CancelPendingRadarToGaussianShowSwitch();
+            CancelPendingDualTrackSwitches();
         }
 
         void SyncLidarColorBlendTargetFromSerializedMode(bool animated)
@@ -2077,6 +2348,36 @@ namespace Gsplat
             maxRadius = CalcVisibilityEffectiveMaxRadius(localBounds, centerModel);
             ringWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ShowRingWidthNormalized);
             trailWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ShowTrailWidthNormalized);
+
+            if (m_pendingGaussianToRadarFinalizeRadarMode)
+            {
+                if (m_gaussianToRadarLidarShowOverlayActive)
+                {
+                    gate = 1.0f;
+                    mode = 1;
+                    progress = Mathf.Clamp01(m_gaussianToRadarLidarShowOverlayProgress01);
+                    sourceMaskMode = (int)m_gaussianToRadarLidarShowOverlaySourceMaskMode;
+                    sourceMaskProgress = Mathf.Clamp01(m_gaussianToRadarLidarShowOverlaySourceMaskProgress01);
+                    ringWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ShowRingWidthNormalized);
+                    trailWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ShowTrailWidthNormalized);
+                    return;
+                }
+
+                // ----------------------------------------------------------------
+                // reverse finalize 尾段:
+                // - `show-hide-switch-雷达` 的 LiDAR 已经完成前半段 reveal.
+                // - 若专用 show overlay 先结束,但 finalize 还没落到稳定 RadarScan,
+                //   这里不能回退到共享 Gaussian hide/hidden,否则会出现后半段闪断.
+                // ----------------------------------------------------------------
+                gate = 1.0f;
+                mode = 0;
+                progress = 1.0f;
+                sourceMaskMode = (int)VisibilitySourceMaskMode.FullVisible;
+                sourceMaskProgress = 1.0f;
+                ringWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ShowRingWidthNormalized);
+                trailWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ShowTrailWidthNormalized);
+                return;
+            }
 
             if (m_radarToGaussianLidarHideOverlayActive)
             {
@@ -2605,6 +2906,7 @@ namespace Gsplat
             ValidateVisibilitySerializedFields();
 
             AdvancePendingRadarToGaussianShowSwitchIfNeeded();
+            AdvancePendingGaussianToRadarShowSwitchIfNeeded();
             AdvanceVisibilityStateIfNeeded();
             AdvanceRenderStyleStateIfNeeded();
             AdvanceLidarAnimationStateIfNeeded();
@@ -3149,6 +3451,10 @@ namespace Gsplat
 
             ShowDuration = GsplatVisibilityAnimationUtil.SanitizeDuration(ShowDuration, 1.0f);
             HideDuration = GsplatVisibilityAnimationUtil.SanitizeDuration(HideDuration, 1.2f);
+
+            if (float.IsNaN(DualTrackSwitchTriggerProgress01) || float.IsInfinity(DualTrackSwitchTriggerProgress01))
+                DualTrackSwitchTriggerProgress01 = k_defaultDualTrackSwitchTriggerProgress01;
+            DualTrackSwitchTriggerProgress01 = Mathf.Clamp01(DualTrackSwitchTriggerProgress01);
         }
 
         void EnsureLidarResources()
@@ -3271,7 +3577,7 @@ namespace Gsplat
 
             m_lidarScan.RenderPointCloud(settings, targetCam, gameObject.layer, GammaToLinear,
                 layout,
-                lidarLocalToWorld, Time.realtimeSinceStartup, LidarRotationHz,
+                lidarLocalToWorld, Time.realtimeSinceStartup, LidarRotationHz, LidarEnableScanMotion,
                 LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels, LidarParticleAAFringePixels,
                 LidarParticleAntialiasingMode, effectiveLidarParticleAaMode,
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
@@ -3331,7 +3637,7 @@ namespace Gsplat
 
             m_lidarScan.RenderPointCloud(settings, camera, gameObject.layer, GammaToLinear,
                 layout,
-                lidarLocalToWorld, Time.realtimeSinceStartup, LidarRotationHz,
+                lidarLocalToWorld, Time.realtimeSinceStartup, LidarRotationHz, LidarEnableScanMotion,
                 LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels, LidarParticleAAFringePixels,
                 LidarParticleAntialiasingMode, effectiveLidarParticleAaMode,
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
@@ -3359,7 +3665,8 @@ namespace Gsplat
             if (EnableLidarScan &&
                 HideSplatsWhenLidarEnabled &&
                 !ShouldDelayHideSplatsForLidarFadeIn() &&
-                !m_pendingRadarToGaussianDisableLidar)
+                !m_pendingRadarToGaussianDisableLidar &&
+                !m_pendingGaussianToRadarFinalizeRadarMode)
             {
                 return false;
             }

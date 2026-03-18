@@ -28,6 +28,7 @@ namespace Gsplat.Editor
                 nameof(GsplatRenderer.LidarExternalCaptureResolution),
                 nameof(GsplatRenderer.LidarExternalTargetVisibilityMode),
                 nameof(GsplatRenderer.LidarRotationHz),
+                nameof(GsplatRenderer.LidarEnableScanMotion),
                 nameof(GsplatRenderer.LidarUpdateHz),
                 nameof(GsplatRenderer.LidarAzimuthBins),
                 nameof(GsplatRenderer.LidarUpFovDeg),
@@ -225,7 +226,20 @@ namespace Gsplat.Editor
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField("Timing", EditorStyles.boldLabel);
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarUpdateHz)));
-                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarRotationHz)));
+                var enableScanMotionProp =
+                    serializedObject.FindProperty(nameof(GsplatRenderer.LidarEnableScanMotion));
+                EditorGUILayout.PropertyField(enableScanMotionProp);
+                using (new EditorGUI.DisabledScope(!enableScanMotionProp.boolValue &&
+                                                   !enableScanMotionProp.hasMultipleDifferentValues))
+                {
+                    EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarRotationHz)));
+                }
+                EditorGUILayout.HelpBox(
+                    "提示:\n" +
+                    "- `LidarEnableScanMotion` 控制的是扫描头旋转 + trail 余辉,不是 LiDAR 点云本体.\n" +
+                    "- 关闭后会直接显示稳定的雷达粒子,适合只看规则点云分布,不想保留扫描动作的场景.\n" +
+                    "- 关闭后 `LidarRotationHz`、`LidarTrailGamma` 与未扫到底色相关参数会失去实际作用.",
+                    MessageType.Info);
 
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField("Visual", EditorStyles.boldLabel);
@@ -302,14 +316,25 @@ namespace Gsplat.Editor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarShowHideGlowColor)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarShowGlowIntensity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarHideGlowIntensity)));
-                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarTrailGamma)));
+                using (new EditorGUI.DisabledScope(!enableScanMotionProp.boolValue &&
+                                                   !enableScanMotionProp.hasMultipleDifferentValues))
+                {
+                    EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarTrailGamma)));
+                }
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarIntensity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarIntensityDistanceDecayMode)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarIntensityDistanceDecay)));
                 var keepUnscannedProp =
                     serializedObject.FindProperty(nameof(GsplatRenderer.LidarKeepUnscannedPoints));
-                EditorGUILayout.PropertyField(keepUnscannedProp);
-                using (new EditorGUI.DisabledScope(!keepUnscannedProp.boolValue && !keepUnscannedProp.hasMultipleDifferentValues))
+                using (new EditorGUI.DisabledScope(!enableScanMotionProp.boolValue &&
+                                                   !enableScanMotionProp.hasMultipleDifferentValues))
+                {
+                    EditorGUILayout.PropertyField(keepUnscannedProp);
+                }
+                using (new EditorGUI.DisabledScope(
+                           (!enableScanMotionProp.boolValue &&
+                            !enableScanMotionProp.hasMultipleDifferentValues) ||
+                           (!keepUnscannedProp.boolValue && !keepUnscannedProp.hasMultipleDifferentValues)))
                 {
                     EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarUnscannedIntensity)));
                     EditorGUILayout.PropertyField(
@@ -353,7 +378,9 @@ namespace Gsplat.Editor
                 "使用下方按钮可播放动画切换:\n" +
                 "- Gaussian/ParticleDots: 时长=RenderStyleSwitchDurationSeconds(默认 easeInOutQuart).\n" +
                 "- RadarScan: RenderStyle 仍用 RenderStyleSwitchDurationSeconds,但雷达淡入/淡出优先用 LidarShowDuration/LidarHideDuration(>=0),否则复用 RenderStyleSwitchDurationSeconds.\n" +
-                "- show-hide-switch-高斯: 走双轨 overlap 切换. 雷达先完整执行 visibility hide,高斯在 hide 过半前一点开始 show,中段允许两者同屏,hide 结束后才关闭 LiDAR.",
+                "- show-hide-switch-高斯: 走双轨 overlap 切换. 雷达先完整执行 visibility hide,高斯在 hide 过半前一点开始 show,中段允许两者同屏,hide 结束后才关闭 LiDAR.\n" +
+                "- show-hide-switch-雷达: 走反向双轨 overlap 切换. 高斯先执行 visibility hide,到共享阈值后开始 Radar show,高斯 hide 完成后再落到稳定 RadarScan.\n" +
+                "- 两个 dual-track 按钮共用 DualTrackSwitchTriggerProgress01,默认 0.35.",
                 MessageType.Info);
 
             var anyDurationZero = false;
@@ -438,6 +465,21 @@ namespace Gsplat.Editor
                         if (!r)
                             continue;
                         r.PlayRadarScanToGaussianShowHideSwitch(durationSeconds: -1.0f);
+                        EditorUtility.SetDirty(r);
+                    }
+
+                    EditorApplication.QueuePlayerLoopUpdate();
+                    UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+                }
+
+                if (GUILayout.Button("show-hide-switch-雷达"))
+                {
+                    foreach (var obj in targets)
+                    {
+                        var r = obj as GsplatRenderer;
+                        if (!r)
+                            continue;
+                        r.PlayGaussianToRadarScanShowHideSwitch(durationSeconds: -1.0f);
                         EditorUtility.SetDirty(r);
                     }
 

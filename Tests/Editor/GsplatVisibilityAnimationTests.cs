@@ -12,6 +12,7 @@ namespace Gsplat.Tests
     public sealed class GsplatVisibilityAnimationTests
     {
         const float kRadarToGaussianShowTriggerProgress01 = 0.35f;
+        const float kCustomDualTrackSwitchTriggerProgress01 = 0.6f;
 
         static readonly MethodInfo s_advanceVisibilityStateIfNeeded =
             typeof(GsplatRenderer).GetMethod("AdvanceVisibilityStateIfNeeded", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -69,6 +70,12 @@ namespace Gsplat.Tests
 
         static readonly FieldInfo s_visibilitySourceMaskProgressField =
             typeof(GsplatRenderer).GetField("m_visibilitySourceMaskProgress01", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_pendingGaussianToRadarFinalizeRadarModeField =
+            typeof(GsplatRenderer).GetField("m_pendingGaussianToRadarFinalizeRadarMode", BindingFlags.Instance | BindingFlags.NonPublic);
+
+        static readonly FieldInfo s_gaussianToRadarLidarShowOverlayActiveField =
+            typeof(GsplatRenderer).GetField("m_gaussianToRadarLidarShowOverlayActive", BindingFlags.Instance | BindingFlags.NonPublic);
 
         static readonly FieldInfo s_effectiveSplatCountField =
             typeof(GsplatRenderer).GetField("m_effectiveSplatCount", BindingFlags.Instance | BindingFlags.NonPublic);
@@ -287,6 +294,20 @@ namespace Gsplat.Tests
             Assert.IsNotNull(s_visibilitySourceMaskProgressField,
                 "Expected private field 'm_visibilitySourceMaskProgress01' to exist on GsplatRenderer.");
             s_visibilitySourceMaskProgressField.SetValue(renderer, Mathf.Clamp01(progress01));
+        }
+
+        static void SetPendingGaussianToRadarFinalizeRadarMode(GsplatRenderer renderer, bool pending)
+        {
+            Assert.IsNotNull(s_pendingGaussianToRadarFinalizeRadarModeField,
+                "Expected private field 'm_pendingGaussianToRadarFinalizeRadarMode' to exist on GsplatRenderer.");
+            s_pendingGaussianToRadarFinalizeRadarModeField.SetValue(renderer, pending);
+        }
+
+        static void SetGaussianToRadarLidarShowOverlayActive(GsplatRenderer renderer, bool active)
+        {
+            Assert.IsNotNull(s_gaussianToRadarLidarShowOverlayActiveField,
+                "Expected private field 'm_gaussianToRadarLidarShowOverlayActive' to exist on GsplatRenderer.");
+            s_gaussianToRadarLidarShowOverlayActiveField.SetValue(renderer, active);
         }
 
         static (float gate, int mode, float progress, int sourceMode, float sourceProgress, float maxRadius, float ringWidth, float trailWidth) BuildLidarShowHideOverlay(
@@ -741,8 +762,11 @@ namespace Gsplat.Tests
             r.EnableVisibilityAnimation = true;
             r.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
             r.PlayShowOnEnable = false;
+            // 刻意拉开 show/hide 时长:
+            // - 让 Gaussian hide 尾巴明显长于 LiDAR show overlay.
+            // - 这样更接近用户报告的“雷达已经出来,后半段又闪没一次”的风险窗口.
             r.ShowDuration = 0.2f;
-            r.HideDuration = 0.3f;
+            r.HideDuration = 1.2f;
             r.GsplatAsset = asset;
 
             go.SetActive(true);
@@ -797,7 +821,7 @@ namespace Gsplat.Tests
                 "Expected the shared visibility hide progress to stay below the early trigger point before Gaussian show starts.");
 
             var triggered = false;
-            while (Time.realtimeSinceStartup - switchStart < 1.0f)
+            while (Time.realtimeSinceStartup - switchStart < 4.0f)
             {
                 InvokeManualUpdate(r);
                 if (r.RenderStyle == GsplatRenderStyle.Gaussian && GetVisibilityStateName(r) == "Showing")
@@ -940,6 +964,340 @@ namespace Gsplat.Tests
 
             Object.DestroyImmediate(go);
             Object.DestroyImmediate(asset);
+        }
+
+        [UnityTest]
+        public IEnumerator PlayGaussianToRadarScanShowHideSwitch_DelaysRadarShowUntilSharedTrigger_AndRestoresStableRadarMode()
+        {
+            // 目的:
+            // - 锁定反向按钮的核心时序:
+            //   1) Gaussian 先走 hide.
+            //   2) 到共享阈值前,雷达不能抢跑.
+            //   3) overlap 阶段保持 Gaussian + LiDAR 同屏.
+            //   4) Gaussian hide 完成后,再落到稳定 RadarScan.
+            var go = new GameObject("GsplatVisibilityAnimationTests_GaussianToRadar_ShowHideSwitch");
+            go.SetActive(false);
+            var asset = CreateMinimalAsset1Splat();
+            var r = go.AddComponent<GsplatRenderer>();
+            r.EnableVisibilityAnimation = true;
+            r.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
+            r.PlayShowOnEnable = false;
+            r.ShowDuration = 0.2f;
+            r.HideDuration = 0.3f;
+            r.GsplatAsset = asset;
+
+            go.SetActive(true);
+            yield return null;
+
+            var warmStart = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - warmStart < 1.0f && GetSubmittedSplatCount(r) == 0)
+                yield return null;
+
+            Assert.Greater(GetSubmittedSplatCount(r), 0u,
+                "Precondition failed: expected Gaussian mode to submit splats before entering reverse dual-track switch.");
+            Assert.IsFalse(r.EnableLidarScan, "Precondition failed: expected reverse switch to start from Gaussian mode without radar.");
+            Assert.AreEqual(GsplatRenderStyle.Gaussian, r.RenderStyle,
+                "Precondition failed: expected reverse switch to start from Gaussian render style.");
+
+            r.PlayGaussianToRadarScanShowHideSwitch();
+
+            Assert.IsFalse(r.EnableLidarScan,
+                "Expected front half to keep RadarScan disabled before the shared trigger point.");
+            Assert.AreEqual(GsplatRenderStyle.Gaussian, r.RenderStyle,
+                "Expected front half to keep Gaussian as the main render style.");
+            Assert.AreEqual("Hiding", GetVisibilityStateName(r),
+                "Expected front half to reuse the visibility hide process from the Hide button.");
+            Assert.Greater(GetSubmittedSplatCount(r), 0u,
+                "Expected Gaussian splats to remain submitted during the front half before radar show starts.");
+
+            var switchStart = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - switchStart < 0.04f)
+            {
+                InvokeManualUpdate(r);
+                yield return null;
+            }
+
+            Assert.IsFalse(r.EnableLidarScan,
+                "Expected RadarScan to remain disabled before the shared overlap trigger.");
+            Assert.Less(GetVisibilityProgress01(r), kRadarToGaussianShowTriggerProgress01,
+                "Expected the front-half Gaussian hide progress to stay below the default overlap trigger before radar show starts.");
+
+            var overlapStarted = false;
+            while (Time.realtimeSinceStartup - switchStart < 4.0f)
+            {
+                InvokeManualUpdate(r);
+                if (r.EnableLidarScan && r.RenderStyle == GsplatRenderStyle.Gaussian && GetVisibilityStateName(r) == "Hiding")
+                {
+                    overlapStarted = true;
+                    break;
+                }
+
+                yield return null;
+            }
+
+            Assert.IsTrue(overlapStarted,
+                $"Expected reverse dual-track overlap to start after the shared trigger. Actual: EnableLidarScan={r.EnableLidarScan}, RenderStyle={r.RenderStyle}, VisibilityState={GetVisibilityStateName(r)}, VisibilityProgress01={GetVisibilityProgress01(r):F3}.");
+            var overlayDuringOverlap = BuildLidarShowHideOverlay(r, asset.Bounds);
+            Assert.AreEqual(1, overlayDuringOverlap.mode,
+                "Expected reverse overlap to use the dedicated LiDAR show overlay instead of the shared Gaussian hide mode.");
+            Assert.Greater(overlayDuringOverlap.gate, 0.99f,
+                "Expected reverse overlap to keep the LiDAR overlay gate open while radar show is entering.");
+            Assert.Greater(GetSubmittedSplatCount(r), 0u,
+                "Expected Gaussian splats to remain submitted during reverse overlap even after radar show starts.");
+
+            var stableRadarReached = false;
+            while (Time.realtimeSinceStartup - switchStart < 10.0f)
+            {
+                InvokeManualUpdate(r);
+                if (r.EnableLidarScan &&
+                    r.RenderStyle == GsplatRenderStyle.ParticleDots &&
+                    GetVisibilityStateName(r) == "Visible")
+                {
+                    stableRadarReached = true;
+                    break;
+                }
+
+                yield return null;
+            }
+
+            Assert.IsTrue(stableRadarReached, "Expected reverse switch to settle into stable RadarScan mode within timeout.");
+            Assert.AreEqual(0u, GetSubmittedSplatCount(r),
+                "Expected stable RadarScan mode to restore the normal hide-splats gate after reverse overlap completes.");
+            var overlayAfterStable = BuildLidarShowHideOverlay(r, asset.Bounds);
+            Assert.AreNotEqual(1, overlayAfterStable.mode,
+                "Expected dedicated LiDAR show overlay to be cleared once stable RadarScan mode is reached.");
+
+            Object.DestroyImmediate(go);
+            Object.DestroyImmediate(asset);
+        }
+
+        [UnityTest]
+        public IEnumerator PlayGaussianToRadarScanShowHideSwitch_DoesNotFlashRadarBetweenOverlapAndStableMode()
+        {
+            // 目的:
+            // - 锁定用户人工验收里提到的“雷达先出来,后面又整批消失一下”的后半段闪断.
+            // - 一旦 reverse overlap 已经启动,到稳定 RadarScan 落稳之前:
+            //   1) LiDAR gate 不能掉到 0.
+            //   2) overlay 不能回落到共享 hide mode.
+            var go = new GameObject("GsplatVisibilityAnimationTests_GaussianToRadar_NoFlash");
+            go.SetActive(false);
+            var asset = CreateMinimalAsset1Splat();
+            var r = go.AddComponent<GsplatRenderer>();
+            r.EnableVisibilityAnimation = true;
+            r.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
+            r.PlayShowOnEnable = false;
+            r.ShowDuration = 0.2f;
+            r.HideDuration = 0.3f;
+            r.GsplatAsset = asset;
+
+            go.SetActive(true);
+            yield return null;
+
+            var warmStart = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - warmStart < 1.0f && GetSubmittedSplatCount(r) == 0)
+                yield return null;
+
+            Assert.Greater(GetSubmittedSplatCount(r), 0u,
+                "Precondition failed: expected Gaussian mode to submit splats before checking reverse flash continuity.");
+
+            r.PlayGaussianToRadarScanShowHideSwitch();
+
+            var switchStart = Time.realtimeSinceStartup;
+            var overlapStarted = false;
+            while (Time.realtimeSinceStartup - switchStart < 1.0f)
+            {
+                InvokeManualUpdate(r);
+                if (r.EnableLidarScan &&
+                    r.RenderStyle == GsplatRenderStyle.Gaussian &&
+                    GetVisibilityStateName(r) == "Hiding")
+                {
+                    overlapStarted = true;
+                    break;
+                }
+
+                yield return null;
+            }
+
+            Assert.IsTrue(overlapStarted,
+                "Expected reverse dual-track overlap to start before checking the no-flash continuity window.");
+
+            var stableRadarReached = false;
+            while (Time.realtimeSinceStartup - switchStart < 10.0f)
+            {
+                InvokeManualUpdate(r);
+
+                var visibilityState = GetVisibilityStateName(r);
+                if (r.EnableLidarScan &&
+                    r.RenderStyle == GsplatRenderStyle.ParticleDots &&
+                    visibilityState == "Visible")
+                {
+                    stableRadarReached = true;
+                    break;
+                }
+
+                var overlay = BuildLidarShowHideOverlay(r, asset.Bounds);
+                Assert.Greater(overlay.gate, 0.99f,
+                    $"Expected reverse dual-track to keep the LiDAR gate open after overlap starts. Actual: gate={overlay.gate:F3}, mode={overlay.mode}, RenderStyle={r.RenderStyle}, VisibilityState={visibilityState}, VisibilityProgress01={GetVisibilityProgress01(r):F3}.");
+                Assert.AreNotEqual(2, overlay.mode,
+                    $"Expected reverse dual-track to avoid falling back to shared hide mode after radar show starts. Actual: gate={overlay.gate:F3}, mode={overlay.mode}, RenderStyle={r.RenderStyle}, VisibilityState={visibilityState}, VisibilityProgress01={GetVisibilityProgress01(r):F3}.");
+
+                yield return null;
+            }
+
+            Assert.IsTrue(stableRadarReached,
+                "Expected reverse dual-track switch to settle into stable RadarScan mode after keeping radar visible throughout the overlap tail.");
+
+            Object.DestroyImmediate(go);
+            Object.DestroyImmediate(asset);
+        }
+
+        [Test]
+        public void BuildLidarShowHideOverlay_GaussianToRadarFinalizeTail_DoesNotFallBackToHide()
+        {
+            // 目的:
+            // - 直接锁住 reverse finalize 尾段的最小不变量.
+            // - 当雷达已经进入 pending finalize,但专用 show overlay 刚播完时,
+            //   BuildLidarShowHideOverlay 不能回退到共享 hide/hidden 语义,否则现场就会看到“闪一下”.
+            var go = new GameObject("GsplatVisibilityAnimationTests_GaussianToRadar_FinalizeTail");
+            var asset = CreateMinimalAssetWithBounds(new Bounds(Vector3.zero, Vector3.one * 10.0f));
+            var r = go.AddComponent<GsplatRenderer>();
+            r.EnableVisibilityAnimation = true;
+            r.EnableLidarScan = true;
+            r.GsplatAsset = asset;
+
+            SetPendingGaussianToRadarFinalizeRadarMode(r, pending: true);
+            SetGaussianToRadarLidarShowOverlayActive(r, active: false);
+            SetVisibilityStateByName(r, "Hiding");
+            SetVisibilityProgress01(r, 0.92f);
+            SetVisibilitySourceMaskByName(r, "FullHidden", 0.0f);
+
+            var overlayWhileHiding = BuildLidarShowHideOverlay(r, asset.Bounds);
+            Assert.Greater(overlayWhileHiding.gate, 0.99f,
+                $"Expected pending reverse finalize to keep LiDAR gate open instead of dropping to shared hide. Actual: gate={overlayWhileHiding.gate:F3}, mode={overlayWhileHiding.mode}.");
+            Assert.AreNotEqual(2, overlayWhileHiding.mode,
+                $"Expected pending reverse finalize to avoid shared hide mode. Actual: gate={overlayWhileHiding.gate:F3}, mode={overlayWhileHiding.mode}.");
+
+            SetVisibilityStateByName(r, "Hidden");
+            SetVisibilityProgress01(r, 1.0f);
+            SetVisibilitySourceMaskByName(r, "FullHidden", 0.0f);
+
+            var overlayWhileHidden = BuildLidarShowHideOverlay(r, asset.Bounds);
+            Assert.Greater(overlayWhileHidden.gate, 0.99f,
+                $"Expected pending reverse finalize to keep LiDAR gate open even after Gaussian hide reaches Hidden. Actual: gate={overlayWhileHidden.gate:F3}, mode={overlayWhileHidden.mode}.");
+            Assert.AreNotEqual(2, overlayWhileHidden.mode,
+                $"Expected pending reverse finalize to avoid shared hide mode once Gaussian hide hits Hidden. Actual: gate={overlayWhileHidden.gate:F3}, mode={overlayWhileHidden.mode}.");
+
+            Object.DestroyImmediate(go);
+            Object.DestroyImmediate(asset);
+        }
+
+        [UnityTest]
+        public IEnumerator DualTrackSwitchTriggerProgress01_AffectsBothDirections()
+        {
+            // 目的:
+            // - 锁定共享阈值不是只对旧按钮生效.
+            // - 正反两个 dual-track 按钮都应读取同一条 `DualTrackSwitchTriggerProgress01`.
+            var forwardGo = new GameObject("GsplatVisibilityAnimationTests_DualTrackTrigger_Forward");
+            forwardGo.SetActive(false);
+            var forwardAsset = CreateMinimalAsset1Splat();
+            var forward = forwardGo.AddComponent<GsplatRenderer>();
+            forward.EnableVisibilityAnimation = true;
+            forward.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
+            forward.PlayShowOnEnable = false;
+            forward.ShowDuration = 0.2f;
+            forward.HideDuration = 0.3f;
+            forward.DualTrackSwitchTriggerProgress01 = kCustomDualTrackSwitchTriggerProgress01;
+            forward.GsplatAsset = forwardAsset;
+            forwardGo.SetActive(true);
+            yield return null;
+
+            var forwardWarmStart = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - forwardWarmStart < 1.0f && GetSubmittedSplatCount(forward) == 0)
+                yield return null;
+
+            forward.SetRenderStyleAndRadarScan(GsplatRenderStyle.Gaussian, enableRadarScan: true, animated: false);
+            forward.PlayRadarScanToGaussianShowHideSwitch();
+
+            var forwardStart = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - forwardStart < 0.12f)
+            {
+                InvokeManualUpdate(forward);
+                yield return null;
+            }
+
+            Assert.AreEqual(GsplatRenderStyle.ParticleDots, forward.RenderStyle,
+                "Expected forward dual-track switch to keep waiting before the later shared trigger point.");
+            Assert.IsTrue(forward.EnableLidarScan,
+                "Expected forward dual-track switch to keep RadarScan enabled before the later shared trigger point.");
+
+            var forwardTriggered = false;
+            while (Time.realtimeSinceStartup - forwardStart < 1.0f)
+            {
+                InvokeManualUpdate(forward);
+                if (forward.RenderStyle == GsplatRenderStyle.Gaussian && GetVisibilityStateName(forward) == "Showing")
+                {
+                    forwardTriggered = true;
+                    break;
+                }
+
+                yield return null;
+            }
+
+            Assert.IsTrue(forwardTriggered,
+                "Expected forward dual-track switch to eventually trigger Gaussian show using the custom shared threshold.");
+
+            var reverseGo = new GameObject("GsplatVisibilityAnimationTests_DualTrackTrigger_Reverse");
+            reverseGo.SetActive(false);
+            var reverseAsset = CreateMinimalAsset1Splat();
+            var reverse = reverseGo.AddComponent<GsplatRenderer>();
+            reverse.EnableVisibilityAnimation = true;
+            reverse.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
+            reverse.PlayShowOnEnable = false;
+            reverse.ShowDuration = 0.2f;
+            reverse.HideDuration = 0.3f;
+            reverse.DualTrackSwitchTriggerProgress01 = kCustomDualTrackSwitchTriggerProgress01;
+            reverse.GsplatAsset = reverseAsset;
+            reverseGo.SetActive(true);
+            yield return null;
+
+            var reverseWarmStart = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - reverseWarmStart < 1.0f && GetSubmittedSplatCount(reverse) == 0)
+                yield return null;
+
+            reverse.PlayGaussianToRadarScanShowHideSwitch();
+
+            var reverseStart = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - reverseStart < 0.12f)
+            {
+                InvokeManualUpdate(reverse);
+                yield return null;
+            }
+
+            Assert.IsFalse(reverse.EnableLidarScan,
+                "Expected reverse dual-track switch to keep waiting before the later shared trigger point.");
+
+            var reverseTriggered = false;
+            while (Time.realtimeSinceStartup - reverseStart < 1.0f)
+            {
+                InvokeManualUpdate(reverse);
+                if (reverse.EnableLidarScan &&
+                    reverse.RenderStyle == GsplatRenderStyle.Gaussian &&
+                    GetVisibilityStateName(reverse) == "Hiding")
+                {
+                    reverseTriggered = true;
+                    break;
+                }
+
+                yield return null;
+            }
+
+            Assert.IsTrue(reverseTriggered,
+                "Expected reverse dual-track switch to eventually start Radar show using the same custom shared threshold.");
+
+            Object.DestroyImmediate(forwardGo);
+            Object.DestroyImmediate(forwardAsset);
+            Object.DestroyImmediate(reverseGo);
+            Object.DestroyImmediate(reverseAsset);
         }
 
         [UnityTest]
