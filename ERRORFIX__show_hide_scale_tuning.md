@@ -180,3 +180,92 @@
   - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelayedFirstTick_DoesNotStartShowBeforeLidarHalfway`
   - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DisablesLidarOnlyAfterDedicatedHideOverlayCompletes`
 - 整个 `Gsplat.Tests.Editor` 程序集复跑后,与本次改动相关的 dual-track 用例未再失败。
+
+## [2026-03-18 20:41:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 问题: Gaussian -> RadarScan 时高斯 alpha 退场没做完就被提前掐断
+
+### 问题现象
+- 用户反馈:
+  - 从高斯粒子形态切到雷达粒子形态时
+  - 高斯粒子本来有一段 alpha 消失过程
+  - 但现在没有做完就不显示了
+  - 体感像瞬间消失
+
+### 原因分析
+- 这次不是 shader alpha 曲线本身坏了,而是 splat 提交门禁观察得不完整。
+- 修复前 `ShouldDelayHideSplatsForLidarFadeIn()` 只考虑:
+  - LiDAR fade-in 是否尚未完成
+- 但实际入雷达时还有另一条独立退场轨:
+  - `Gaussian -> ParticleDots` 的 render-style 动画
+- 当 LiDAR 更快完成、render-style 更慢完成时:
+  - 门禁会误判“已经可以停掉 splat 提交”
+  - 于是高斯 alpha 还没退完就先被掐掉
+
+### 动态证据
+- 新增红测:
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.SetRenderStyleAndRadarScan_Animated_KeepsSplatsUntilGaussianAlphaFadeFinishes`
+- 修复前失败:
+  - `Expected splats to remain submitted while Gaussian alpha fade is still finishing.`
+  - `Expected: greater than 0`
+  - `But was: 0`
+
+### 修复方法
+- 在 `GsplatRenderer` / `GsplatSequenceRenderer` 中统一调整:
+  - `ShouldDelayHideSplatsForLidarFadeIn()`
+- 新逻辑:
+  - 只要以下任一条件仍成立,就继续保留 splat 提交:
+    1. LiDAR fade-in 尚未完成
+    2. Gaussian -> ParticleDots 的 render-style 退场尚未完成
+
+### 验证
+- `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo` 通过
+- 定向 EditMode 测试通过:
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.SetRenderStyleAndRadarScan_Animated_KeepsSplatsUntilGaussianAlphaFadeFinishes`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.SetRenderStyleAndRadarScan_Animated_DelayHideSplatsUntilRadarVisible`
+
+## [2026-03-18 12:48:29 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 问题: 入雷达时 render-style 的 alpha handoff 本身过陡,导致旧高斯像“没演完就断电”
+
+### 问题现象
+- 用户继续反馈:
+  - 即使上一轮已经修过提交门禁
+  - 高斯 -> 雷达 方向里,旧高斯 alpha 还是显得像突然没掉
+- 说明:
+  - 这次不能再把问题简单归因到“又被提前 stop submit”
+
+### 原因分析
+- 静态证据:
+  1. `AdvanceRenderStyleStateIfNeeded()` 的几何 blend 继续使用 `EaseInOutQuart`
+  2. shader fragment 又直接用同一个 `styleBlend` 做:
+     - `alpha = lerp(alphaGauss, alphaDot, styleBlend)`
+- 动态数值证据:
+  - 按现有 quart 曲线计算
+  - `t=0.75` 时高斯权重只剩 `3.125%`
+  - `t=0.80` 时只剩 `1.28%`
+  - `t=0.90` 时只剩 `0.08%`
+- 结论:
+  - 即便动画标志位还在“播放中”,对人眼来说旧高斯其实已经快被压干净了
+  - 所以体感会是“形态好像还在切,但旧 alpha 已经突然断掉”
+
+### 修复方法
+- 不改 dual-track 时间线,只改 render-style 内部节奏:
+  1. 保留 `m_renderStyleBlend01` 作为几何 morph blend
+  2. 新增 `m_renderStyleAlphaBlend01` 作为 alpha handoff blend
+  3. 几何 morph 继续走 `EaseInOutQuart`
+  4. alpha handoff 改走 `EaseInOutSine`
+  5. shader 新增 `_RenderStyleAlphaBlend`,fragment alpha 不再直接跟随几何 blend
+- 这样可以做到:
+  - 轮廓仍保持原来的利落切换
+  - 但旧高斯 alpha 会更柔和地退下去
+
+### 验证
+- 编译通过:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo`
+  - 结果: `0 warning / 0 error`
+- 测试代码已补充断言:
+  - `SetRenderStyleAndRadarScan_Animated_KeepsSplatsUntilGaussianAlphaFadeFinishes`
+  - 现在会额外检查:
+    - `renderStyleAlphaBlend01 < renderStyleBlend01`
+    - 且二者差值要有可感知缓冲
+- 本轮 Unity 动态用例未能继续跑完的原因不是代码失败,而是环境阻塞:
+  - Unity MCP 无已连接 Editor
+  - Unity CLI 被现有项目锁阻塞:
+    - `似乎有另一个正在运行的 Unity 实例打开了此项目`

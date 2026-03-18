@@ -44,9 +44,13 @@ Shader "Gsplat/Standard"
             //   - 0: Gaussian(旧行为)
             //   - 1: ParticleDots(屏幕空间圆片/圆点)
             //   - (0,1): 单次 draw 的形态渐变(morph)
+            // - `_RenderStyleAlphaBlend`:
+            //   - 单独控制 alpha handoff
+            //   - 允许 alpha 比几何 morph 更柔和,避免旧形态像被突然掐断
             // - `_ParticleDotRadiusPixels`: dot 半径(px radius).
             // ----------------------------------------------------------------
             float _RenderStyleBlend;
+            float _RenderStyleAlphaBlend;
             float _ParticleDotRadiusPixels;
 
             // ----------------------------------------------------------------
@@ -947,6 +951,7 @@ Shader "Gsplat/Standard"
 		            float4 frag(v2f i) : SV_Target
 		            {
 		                float styleBlend = saturate(_RenderStyleBlend);
+		                float alphaBlend = saturate(_RenderStyleAlphaBlend);
 
 	                float A_gauss = dot(i.uvGauss, i.uvGauss);
 	                float A_dot = dot(i.uvDot, i.uvDot);
@@ -973,7 +978,11 @@ Shader "Gsplat/Standard"
 	                if (A_dot <= 1.0)
 	                    alphaDot = (1.0 - smoothstep(inner2, 1.0, A_dot)) * i.color.a;
 
-	                float alpha = lerp(alphaGauss, alphaDot, styleBlend);
+	                // alpha handoff 单独使用更柔和的 blend:
+	                // - 几何 morph 仍然跟随 `_RenderStyleBlend`
+	                // - 但 alpha 改走 `_RenderStyleAlphaBlend`
+	                // - 这样高斯 -> 雷达时,旧 alpha 不会在后半程掉得过快
+	                float alpha = lerp(alphaGauss, alphaDot, alphaBlend);
 	                if (alpha < 1.0 / 255.0) discard;
 	                if (_GammaToLinear)
 	                    return float4(GammaToLinearSpace(i.color.rgb) * alpha, alpha);

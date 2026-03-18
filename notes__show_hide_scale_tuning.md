@@ -219,6 +219,82 @@
 ### 下一步
 - 静态回读 `PlayShow_DuringHiding_RestartsShowFromZero` 与 `PlayShow()` 实现。
 
+## [2026-03-18 12:33:45 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 笔记: 高斯 -> 雷达 方向里“像突然消失”的第二层排查
+
+## 现象
+
+- 用户最新反馈:
+  - 进入雷达形态时,高斯粒子的 alpha 退场“像没有做完整”,视觉上仍然偏突然。
+- 已知前情:
+  - 上一轮已经修过一层运行时门禁问题:
+    - `ShouldDelayHideSplatsForLidarFadeIn()` 不再只看 LiDAR fade-in
+    - 也会等 `Gaussian -> ParticleDots` 的 render-style 动画结束
+  - 这意味着“splat 提交在 style 动画明显中途就被立刻切掉”这一层,已有测试和代码证据兜住。
+
+## 当前主假设
+
+- 主假设:
+  - 现在残留的不自然感,更像是 render-style 自身的 alpha 交接曲线太陡。
+  - 也就是:
+    1. 几何 morph 还在继续
+    2. 但高斯 alpha 的主观可见度在后半段掉得太快
+    3. 肉眼会把它感知成“还没演完就没了”
+
+## 最强备选解释
+
+- 备选解释:
+  - 运行时仍存在另一条没有覆盖到的提前关断链路。
+  - 比如某处不是靠 `ShouldSubmitSplatsThisFrame()` 门禁,而是别的提交条件或 shader 早退导致观感被提前掐掉。
+
+## 静态证据
+
+1. `Runtime/GsplatRenderer.cs`
+   - `AdvanceRenderStyleStateIfNeeded()` 里,几何/风格的主 blend 仍然使用:
+     - `GsplatUtils.EaseInOutQuart(m_renderStyleAnimProgress01)`
+2. `Runtime/Shaders/Gsplat.shader`
+   - fragment 最终 alpha 交接目前仍是:
+     - `alpha = lerp(alphaGauss, alphaDot, styleBlend);`
+   - 也就是说,alpha 交接直接跟着 quart 曲线走,没有单独的“更柔和 alpha 过渡”。
+3. 这套结构意味着:
+   - 后半段只要 `styleBlend` 很快逼近 1,高斯权重 `1 - styleBlend` 就会非常快地掉光。
+
+## 动态证据
+
+- 用当前 `EaseInOutQuart` 曲线直接计算:
+  - 当动画时间走到 `t=0.70` 时:
+    - `blend=0.935200`
+    - `gaussian_weight=0.064800`
+  - 当动画时间走到 `t=0.75` 时:
+    - `blend=0.968750`
+    - `gaussian_weight=0.031250`
+  - 当动画时间走到 `t=0.80` 时:
+    - `blend=0.987200`
+    - `gaussian_weight=0.012800`
+  - 当动画时间走到 `t=0.90` 时:
+    - `blend=0.999200`
+    - `gaussian_weight=0.000800`
+- 解释:
+  - 虽然“动画标志位”还显示 render-style 在继续播放,
+  - 但对肉眼来说,高斯分量在后半程已经衰减得非常狠了。
+  - 这和用户口中的“像没做完就不显示了”是吻合的。
+
+## 当前结论
+
+- 已验证结论:
+  - 上一轮修掉的“提交门禁过早关闭”不是这轮唯一问题。
+  - 当前还存在一层更细的观感问题:
+    - render-style 的 alpha 交接曲线本身过于前倾
+- 仍待验证的部分:
+  - 是否只放缓 alpha handoff 就足够自然
+  - 还是还需要再补额外的关断保护
+
+## 下一步验证计划
+
+1. 保持几何 morph 仍使用现有 quart 节奏
+2. 单独给 render-style 的 alpha 交接引入更柔和的曲线
+3. 补一个定向测试,锁定“alpha handoff 比几何 blend 更慢”的语义
+4. 再编译并跑定向 EditMode 测试,确认没有把既有切换语义打坏
+
 ## [2026-03-18 19:30:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 笔记: dual-track overlap 被 `SetRenderStyle` 意外清空
 
 ## 来源
@@ -331,6 +407,51 @@
   - delayed first tick 不抢跑
   - overlap 期间专用 hide overlay 继续存在
   - `EnableLidarScan` 延后到 hide 轨结束后再关闭
+
+## [2026-03-18 20:38:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 笔记: Gaussian -> RadarScan 的高斯 alpha 退场要与 splat 提交门禁对齐
+
+## 来源
+
+### 来源1: 用户现场反馈
+
+- 用户反馈:
+  - 从高斯粒子形态切到雷达粒子形态时
+  - 高斯本来应该有一段 alpha 消失过程
+  - 但现在像没做完就突然消失
+
+### 来源2: 新增最小红测
+
+- 用例:
+  - `SetRenderStyleAndRadarScan_Animated_KeepsSplatsUntilGaussianAlphaFadeFinishes`
+- 构造:
+  - `LidarShowDuration = 0.05`
+  - `RenderStyleSwitchDurationSeconds = 0.2`
+- 修复前失败:
+  - `Expected splats to remain submitted while Gaussian alpha fade is still finishing.`
+  - `Expected: greater than 0`
+  - `But was: 0`
+
+## 综合发现
+
+### 现象
+
+- 入雷达时,高斯 alpha 退场与 LiDAR 淡入不是同一条动画轨。
+- 当 LiDAR 淡入更快时,旧门禁会误以为“已经可以停掉 splat 提交”。
+
+### 已验证根因
+
+- `ShouldDelayHideSplatsForLidarFadeIn()` 修复前只考虑:
+  - LiDAR fade-in 是否还没完成
+- 没考虑:
+  - `m_renderStyleAnimating && m_renderStyleAnimTargetBlend01 >= 0.999f`
+  - 也就是 Gaussian -> ParticleDots 的 render-style 退场是否还没结束
+
+### 修复结论
+
+- 入雷达阶段延迟隐藏 splats 的条件必须是“任一退场轨未完成”:
+  1. LiDAR fade-in 还没完成
+  2. Gaussian alpha / render-style 退场还没完成
+- 两条条件都结束后,才允许真正停掉 splat 提交。
 
 ## [2026-03-18 00:31:11 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 笔记: RadarScan -> Gaussian 新按钮的时序分析
 

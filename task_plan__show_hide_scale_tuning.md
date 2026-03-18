@@ -391,6 +391,62 @@
 
 **目前进入反向切换 bug 的根因调查阶段**
 - 下一步先回读进入 RadarScan 的 runtime 路径和现有测试口径。
+
+## [2026-03-18 20:36:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] [记录类型]: 已修复 Gaussian -> RadarScan 时高斯 alpha 退场被提前掐断
+
+### 阶段进展
+
+- [x] 根因调查
+  - 已用最小红测确认: splat 提交门禁会在 Gaussian alpha 退场完成前提前关闭。
+- [x] runtime 修复
+  - 已让 `ShouldDelayHideSplatsForLidarFadeIn()` 同时考虑:
+    1. LiDAR fade-in 是否完成
+    2. Gaussian -> ParticleDots render-style 动画是否完成
+- [x] 验证
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo` 通过
+  - 相关定向 EditMode 测试通过
+
+### 已验证结论
+
+- 现象:
+  - 高斯 -> 雷达时,高斯 alpha 退场还没做完就突然不显示
+- 根因:
+  - `HideSplatsWhenLidarEnabled` 的 splat 提交门禁之前只看 LiDAR 淡入完成与否
+  - 没看 Gaussian -> ParticleDots 的 render-style 退场是否仍在进行
+  - 所以会出现“雷达已经亮起来了,但高斯 alpha 还没退完,提交却先被停掉”
+
+## 状态
+
+**目前这条反向切换 bug 已完成修复与验证**
+- 下一步可直接交付结果,或继续做现场观感微调。
+
+## [2026-03-18 20:46:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] [记录类型]: 用户确认现场仍有“突然消失”,上一轮修复不足以覆盖真实路径
+
+### 现象
+
+- 用户刚刚再次确认:
+  - 高斯 -> 雷达时
+  - 现场看起来还是会突然消失
+
+### 当前判断
+
+- 上一轮“提交门禁过早关闭”的修复和定向测试是成立的。
+- 但这说明真实现场里至少还有第二个截断点:
+  1. 可能是 shader 内 render-style 的实际 alpha/morph 退场轨和测试假设不一致
+  2. 也可能是 runtime 还有别的 gate 在更早时机把 Gaussian 观感切没了
+
+### 新验证计划
+
+1. 读取 render-style 相关 shader 路径,确认高斯 alpha 实际是如何随 blend 退场的
+2. 检查 `PushRenderStyleUniformsForThisFrame(...)` 与 `ShouldSubmitSplatsThisFrame()` 之外是否还有别的早退路径
+3. 补一个更贴近现场的红测:
+   - 不只测“是否还在提交”
+   - 还要测“render-style 动画未完成时,运行态是否已经进入纯雷达 gate”
+
+## 状态
+
+**目前回到根因调查阶段**
+- 下一步先读 shader 和 render-style 提交链路,不先继续补丁。
 3. 当前系统里是否已经有可复用的延迟 show / 串行动画机制,避免再额外堆一个并行协程分支?
 
 ### 当前决策
@@ -819,3 +875,55 @@
 
 **目前进入 apply 实施阶段**
 - 下一步开始逐段阅读 `Runtime/*`、`Editor/*`、`Tests/*` 的相关实现
+
+## [2026-03-18 12:33:45 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] [记录类型]: 继续排查“高斯 -> 雷达”方向仍有突然消失
+
+### 行动目的
+
+- 用户最新反馈是: 高斯退场 alpha 还没自然做完,现场看起来仍像瞬间消失。
+- 上一轮已经修过“splat 提交门禁过早关闭”这一层,本轮不能重复拍脑袋继续改同一处。
+- 需要重新区分:
+  1. 运行时是否还有别的提前关断
+  2. 还是 shader 里的高斯退场曲线本身过陡
+
+### 当前计划
+
+1. 回读支线上下文,把上一轮已验证结论和本轮待验证范围对齐
+2. 聚焦 `GsplatRenderer` / `GsplatSequenceRenderer` / `Gsplat.shader`
+3. 先建立新的现象 -> 假设 -> 验证计划
+4. 只有在证据指向明确后才落代码和测试
+
+### 状态
+
+**目前进入新一轮根因排查阶段**
+- 已确认当前 Session ID,后续记录沿用本链路
+- 下一步重点查看 render-style alpha 退场与 dual-track 切换衔接
+
+## [2026-03-18 12:48:29 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] [记录类型]: 高斯 -> 雷达 的 alpha handoff 放缓改造已落地
+
+### 已完成事项
+
+1. 已在 `GsplatRenderer` / `GsplatSequenceRenderer` 中把 render-style 的几何 blend 和 alpha blend 拆开
+2. 几何 morph 继续沿用 `EaseInOutQuart`
+3. alpha handoff 改为 `EaseInOutSine`
+4. shader 已新增 `_RenderStyleAlphaBlend`,不再让 fragment alpha 直接跟着几何 blend 走
+5. `GsplatVisibilityAnimationTests` 已补充断言:
+   - 入雷达时 alpha handoff 必须慢于几何 morph
+
+### 验证状态
+
+- 已完成:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo`
+  - 结果: `0 warning / 0 error`
+- 动态验证阻塞:
+  - Unity MCP 当前没有连接到 Editor 实例
+  - 直接用 Unity CLI 跑定向测试时,项目被另一份 Unity 实例锁住:
+    - `似乎有另一个正在运行的 Unity 实例打开了此项目`
+- 已清理:
+  - 临时加入 `manifest.json` 的 `testables` 已恢复干净
+
+### 状态
+
+**目前本轮代码修复已完成,编译验证已完成**
+- 动态 EditMode 测试尚缺一轮可运行的 Unity 实例环境
+- 若后续 Unity Editor 可连接 MCP 或释放项目锁,下一步优先补跑这两个定向用例

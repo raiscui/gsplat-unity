@@ -71,9 +71,11 @@ namespace Gsplat
         // ----------------------------------------------------------------
         // Render style: Gaussian <-> ParticleDots
         // - 通过 `_RenderStyleBlend` 做单次 draw 的 shader morph.
+        // - 通过 `_RenderStyleAlphaBlend` 单独控制 alpha handoff,避免旧形态 alpha 掉得太快.
         // - `_ParticleDotRadiusPixels` 仅在 ParticleDots 或过渡期生效.
         // ----------------------------------------------------------------
         static readonly int k_renderStyleBlend = Shader.PropertyToID("_RenderStyleBlend");
+        static readonly int k_renderStyleAlphaBlend = Shader.PropertyToID("_RenderStyleAlphaBlend");
         static readonly int k_particleDotRadiusPixels = Shader.PropertyToID("_ParticleDotRadiusPixels");
 
         // ----------------------------------------------------------------
@@ -291,9 +293,9 @@ namespace Gsplat
         // - 该方法只负责写入 MPB(uniform),不参与排序与资源管理.
         // - 由上层组件负责:
         //   1) 选择 RenderStyle(Gaussian/ParticleDots)
-        //   2) 动画曲线与时长(easeInOutQuart,1.5s)
+        //   2) 几何 morph / alpha handoff 的动画曲线与时长
         // ----------------------------------------------------------------
-        public void SetRenderStyleUniforms(float blend01, float dotRadiusPixels)
+        public void SetRenderStyleUniforms(float blend01, float alphaBlend01, float dotRadiusPixels)
         {
             m_propertyBlock ??= new MaterialPropertyBlock();
 
@@ -301,10 +303,15 @@ namespace Gsplat
                 blend01 = 0.0f;
             blend01 = Mathf.Clamp01(blend01);
 
+            if (float.IsNaN(alphaBlend01) || float.IsInfinity(alphaBlend01))
+                alphaBlend01 = blend01;
+            alphaBlend01 = Mathf.Clamp01(alphaBlend01);
+
             if (float.IsNaN(dotRadiusPixels) || float.IsInfinity(dotRadiusPixels) || dotRadiusPixels < 0.0f)
                 dotRadiusPixels = 0.0f;
 
             m_propertyBlock.SetFloat(k_renderStyleBlend, blend01);
+            m_propertyBlock.SetFloat(k_renderStyleAlphaBlend, alphaBlend01);
             m_propertyBlock.SetFloat(k_particleDotRadiusPixels, dotRadiusPixels);
         }
 

@@ -308,6 +308,35 @@
 ### 总结感悟
 - 现在这条按钮的 show 接入会更早、更贴近 hide 前沿。
 - 但从测试证据看,它仍然保持在“更早衔接”而不是“高斯抢跑”的范围内。
+
+## [2026-03-18 20:40:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 任务名称: 修复 Gaussian -> RadarScan 时高斯 alpha 退场被提前掐断
+
+### 任务内容
+- 修复“高斯粒子切到雷达粒子时,高斯 alpha 还没退完就突然不显示”的问题。
+
+### 完成过程
+- 先按 systematic-debugging 补了一个最小红测:
+  - `SetRenderStyleAndRadarScan_Animated_KeepsSplatsUntilGaussianAlphaFadeFinishes`
+  - 用 `LidarShowDuration = 0.05`、`RenderStyleSwitchDurationSeconds = 0.2` 明确制造“两条动画时长不一致”的场景
+- 红测证明:
+  - 旧实现会在 Gaussian alpha 退场尚未完成时就把 splat 提交停掉
+- 在 `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs` 中修正门禁:
+  - `ShouldDelayHideSplatsForLidarFadeIn()` 不再只看 LiDAR fade-in
+  - 还会看 `Gaussian -> ParticleDots` 的 render-style 动画是否仍在进行
+- 同步修正旧测试 `SetRenderStyleAndRadarScan_Animated_DelayHideSplatsUntilRadarVisible` 的口径:
+  - 现在会同时推进 LiDAR 动画和 render-style 动画
+  - 并在两者都结束后再断言 splat 提交归零
+
+### 验证结果
+- 编译通过:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo`
+- 定向 EditMode 测试通过:
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.SetRenderStyleAndRadarScan_Animated_KeepsSplatsUntilGaussianAlphaFadeFinishes`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.SetRenderStyleAndRadarScan_Animated_DelayHideSplatsUntilRadarVisible`
+
+### 总结感悟
+- 这次问题的本质不是 shader alpha 曲线坏了,而是提交门禁的观察对象太单一。
+- 只要一个视觉退场由两条动画共同完成,门禁就不能只盯其中一条。
 - 逐段检查了:
   - `Runtime/GsplatRenderer.cs`
   - `Runtime/GsplatSequenceRenderer.cs`
@@ -350,3 +379,40 @@
 ### 总结感悟
 - 这一步最大的价值不是“多写了几份 md”,而是把用户反复纠正的真实语义固定成了可执行契约。
 - 后面实现时如果再偏向“半程切过去”的老思路,测试和 spec 都会第一时间把它拦下来。
+
+## [2026-03-18 12:48:29 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 任务名称: 放缓高斯 -> 雷达切换时的 render-style alpha handoff
+
+### 任务内容
+- 修复“高斯粒子切到雷达粒子时,旧高斯 alpha 像没演完就突然消失”的观感问题。
+- 保持既有 dual-track 时间线不变,只调整 render-style 内部的 alpha 交接节奏。
+
+### 完成过程
+- 先重新回读 `GsplatRenderer.cs`、`GsplatSequenceRenderer.cs`、`Gsplat.shader`,确认上一轮门禁修复已经覆盖“提交过早关闭”这一层。
+- 再用当前 `EaseInOutQuart` 做了数值复核,确认它在后半段把高斯权重压得非常快:
+  - `t=0.75` 时仅剩 `3.125%`
+  - `t=0.80` 时仅剩 `1.28%`
+- 在此基础上把 render-style 切换拆成两条节奏:
+  - 几何 morph 继续使用 `EaseInOutQuart`
+  - alpha handoff 单独新增 `m_renderStyleAlphaBlend01`,改用 `EaseInOutSine`
+- 同步修改:
+  - `Runtime/GsplatRendererImpl.cs`
+  - `Runtime/Shaders/Gsplat.shader`
+  - `Tests/Editor/GsplatVisibilityAnimationTests.cs`
+- 测试侧新增了更贴近观感的断言:
+  - 在入雷达过程中,`alphaBlend` 必须落后于 `geometryBlend`
+  - 这样才能保证“形态在切,旧 alpha 还没有被突然掐空”
+
+### 验证结果
+- 编译通过:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo`
+  - 结果: `0 warning / 0 error`
+- 动态测试尝试结果:
+  - Unity MCP: 当前无可连接 Editor 实例
+  - Unity CLI: 被现有项目锁阻塞,日志提示:
+    - `似乎有另一个正在运行的 Unity 实例打开了此项目`
+- 验证期间临时为包测试加入的 `manifest.json -> testables`,已在结束前恢复
+
+### 总结感悟
+- 这次更像是“动画语言层”的问题,不是时间线又写错了。
+- 当几何 morph 和 alpha handoff 共用同一条很陡的 easing 时,肉眼很容易把后半段感知成“突然断电”。
+- 把几何和 alpha 节奏拆开,通常比继续延长总时长更稳,也更不容易破坏原来的切换手感。

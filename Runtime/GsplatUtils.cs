@@ -407,6 +407,22 @@ namespace Gsplat
             return 1.0f - 0.5f * a4;
         }
 
+        // --------------------------------------------------------------------
+        // Easing: easeInOutSine
+        // - 用于 render-style 的 alpha handoff.
+        // - 目的:
+        //   1) 保持几何 morph 仍然沿用 quart 的利落节奏
+        //   2) 让 alpha 交接更柔和,避免用户看到“形态还在切,但旧 alpha 已经像断电一样没了”
+        // --------------------------------------------------------------------
+        public static float EaseInOutSine(float t)
+        {
+            if (float.IsNaN(t) || float.IsInfinity(t))
+                t = 0.0f;
+
+            t = Mathf.Clamp01(t);
+            return 0.5f - 0.5f * Mathf.Cos(Mathf.PI * t);
+        }
+
         public const int k_PlyPropertyCountNoSH = 17;
 
         public static byte CalcSHBandsFromPropertyCount(int propertyCount)

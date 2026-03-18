@@ -37,6 +37,9 @@ namespace Gsplat.Tests
         static readonly FieldInfo s_renderStyleBlend01Field =
             typeof(GsplatRenderer).GetField("m_renderStyleBlend01", BindingFlags.Instance | BindingFlags.NonPublic);
 
+        static readonly FieldInfo s_renderStyleAlphaBlend01Field =
+            typeof(GsplatRenderer).GetField("m_renderStyleAlphaBlend01", BindingFlags.Instance | BindingFlags.NonPublic);
+
         static readonly FieldInfo s_renderStyleAnimatingField =
             typeof(GsplatRenderer).GetField("m_renderStyleAnimating", BindingFlags.Instance | BindingFlags.NonPublic);
 
@@ -134,6 +137,13 @@ namespace Gsplat.Tests
             // 说明: 该值是 shader morph 的核心 uniform,需要锁定其收敛到目标值的语义.
             Assert.IsNotNull(s_renderStyleBlend01Field, "Expected private field 'm_renderStyleBlend01' to exist on GsplatRenderer.");
             return (float)s_renderStyleBlend01Field.GetValue(renderer);
+        }
+
+        static float GetRenderStyleAlphaBlend01(GsplatRenderer renderer)
+        {
+            Assert.IsNotNull(s_renderStyleAlphaBlend01Field,
+                "Expected private field 'm_renderStyleAlphaBlend01' to exist on GsplatRenderer.");
+            return (float)s_renderStyleAlphaBlend01Field.GetValue(renderer);
         }
 
         static bool GetRenderStyleAnimating(GsplatRenderer renderer)
@@ -605,7 +615,8 @@ namespace Gsplat.Tests
             // 目的:
             // - 锁定“入雷达不黑场”的语义.
             // - 开启 RadarScan 动画后,起始阶段应继续提交 splats;
-            //   待雷达可见性淡入完成后,才因 HideSplatsWhenLidarEnabled 停掉 splat 提交.
+            //   待雷达可见性淡入完成,并且 Gaussian -> ParticleDots 的 alpha 退场也完成后,
+            //   才因 HideSplatsWhenLidarEnabled 停掉 splat 提交.
             var go = new GameObject("GsplatVisibilityAnimationTests_RadarEnterNoBlackFrame");
             go.SetActive(false);
             var asset = CreateMinimalAsset1Splat();
@@ -634,14 +645,82 @@ namespace Gsplat.Tests
             while (Time.realtimeSinceStartup - t0 < 1.0f)
             {
                 AdvanceLidarAnimationState(r);
-                if (!GetLidarVisibilityAnimating(r))
+                AdvanceRenderStyleState(r);
+                if (!GetLidarVisibilityAnimating(r) && !GetRenderStyleAnimating(r))
                     break;
                 yield return null;
             }
 
             Assert.IsFalse(GetLidarVisibilityAnimating(r), "Expected radar fade-in animation to finish within timeout.");
+            Assert.IsFalse(GetRenderStyleAnimating(r),
+                "Expected Gaussian -> ParticleDots render-style animation to finish within timeout.");
             Assert.AreEqual(0u, GetSubmittedSplatCount(r),
-                "Expected splat submission to stop after radar fade-in completes when HideSplatsWhenLidarEnabled=true.");
+                "Expected splat submission to stop only after radar fade-in and Gaussian alpha fade both complete.");
+
+            Object.DestroyImmediate(go);
+            Object.DestroyImmediate(asset);
+        }
+
+        [UnityTest]
+        public IEnumerator SetRenderStyleAndRadarScan_Animated_KeepsSplatsUntilGaussianAlphaFadeFinishes()
+        {
+            // 目的:
+            // - 复现用户反馈的“高斯 alpha 退场没做完就突然消失”。
+            // - 构造一个最小场景:
+            //   1) LiDAR 淡入很快完成
+            //   2) RenderStyle 的 Gaussian -> ParticleDots 动画更慢
+            // - 期望: 只要 render-style 动画还没结束,splat 仍应继续提交,否则体感会像高斯被瞬间掐掉.
+            var go = new GameObject("GsplatVisibilityAnimationTests_RadarEnter_KeepSplatsUntilAlphaFadeFinishes");
+            go.SetActive(false);
+            var asset = CreateMinimalAsset1Splat();
+            var r = go.AddComponent<GsplatRenderer>();
+            r.GsplatAsset = asset;
+            r.RenderStyleSwitchDurationSeconds = 0.2f;
+            r.LidarShowDuration = 0.05f;
+
+            go.SetActive(true);
+            yield return null;
+
+            var warmStart = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - warmStart < 1.0f && GetSubmittedSplatCount(r) == 0)
+                yield return null;
+
+            Assert.Greater(GetSubmittedSplatCount(r), 0u,
+                "Precondition failed: expected Gaussian mode to submit splats before entering radar mode.");
+
+            r.SetRenderStyleAndRadarScan(GsplatRenderStyle.Gaussian, enableRadarScan: true, animated: true, durationSeconds: -1.0f);
+
+            Assert.IsTrue(r.EnableLidarScan, "Expected radar mode to enable LiDAR.");
+            Assert.IsTrue(r.HideSplatsWhenLidarEnabled, "Expected radar mode to request pure radar view.");
+            Assert.IsTrue(GetRenderStyleAnimating(r),
+                "Precondition failed: expected Gaussian -> ParticleDots render-style animation to start.");
+
+            var t0 = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - t0 < 1.0f)
+            {
+                AdvanceLidarAnimationState(r);
+                AdvanceRenderStyleState(r);
+
+                if (!GetLidarVisibilityAnimating(r) && GetRenderStyleAnimating(r))
+                {
+                    var geometryBlend = GetRenderStyleBlend01(r);
+                    var alphaBlend = GetRenderStyleAlphaBlend01(r);
+                    Assert.Less(alphaBlend, geometryBlend,
+                        "Expected render-style alpha handoff to stay behind geometry morph so Gaussian fade does not feel abruptly cut.");
+                    Assert.Greater(geometryBlend - alphaBlend, 0.05f,
+                        "Expected the softened alpha handoff to create a visible buffer between geometry morph and alpha fade.");
+                    Assert.Greater(GetSubmittedSplatCount(r), 0u,
+                        "Expected splats to remain submitted while Gaussian alpha fade is still finishing.");
+                    break;
+                }
+
+                yield return null;
+            }
+
+            Assert.IsFalse(GetLidarVisibilityAnimating(r),
+                "Expected LiDAR fade-in animation to finish within timeout.");
+            Assert.IsTrue(GetRenderStyleAnimating(r),
+                "Expected render-style animation to still be in progress when the slower Gaussian alpha fade is under test.");
 
             Object.DestroyImmediate(go);
             Object.DestroyImmediate(asset);

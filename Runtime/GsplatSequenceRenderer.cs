@@ -76,7 +76,8 @@ namespace Gsplat
         // Render Style: Gaussian <-> Particle Dots
         // - 目标: 提供一个“更像粒子/点云”的圆片/圆点显示效果,并支持与高斯常规显示效果动画切换.
         // - 切换动画:
-        //   - easing 固定为 easeInOutQuart
+        //   - 几何 morph 使用 easeInOutQuart
+        //   - alpha handoff 使用更柔和的 easeInOutSine
         //   - 默认时长 1.5 秒(可改)
         // --------------------------------------------------------------------
         [Header("Render Style (Gaussian / Particle Dots)")]
@@ -632,14 +633,18 @@ namespace Gsplat
 
         // --------------------------------------------------------------------
         // Render style 切换 runtime 状态(非序列化):
-        // - blend01=0: Gaussian
-        // - blend01=1: ParticleDots
-        // - 中间值: shader morph 过渡期(单次 draw).
+        // - m_renderStyleBlend01:
+        //   - 控制几何/轮廓 morph
+        // - m_renderStyleAlphaBlend01:
+        //   - 控制 alpha handoff
+        //   - 允许比几何 morph 更柔和,降低“旧形态突然断电”的体感
         // --------------------------------------------------------------------
         float m_renderStyleBlend01;
+        float m_renderStyleAlphaBlend01;
         bool m_renderStyleAnimating;
         float m_renderStyleAnimProgress01;
         float m_renderStyleAnimStartBlend01;
+        float m_renderStyleAnimStartAlphaBlend01;
         float m_renderStyleAnimTargetBlend01;
         float m_renderStyleAnimDurationSeconds = 1.5f;
         float m_renderStyleLastAdvanceRealtime = -1.0f;
@@ -750,17 +755,23 @@ namespace Gsplat
         {
             // 入雷达时避免黑场:
             // - `HideSplatsWhenLidarEnabled` 不能在雷达可见性还是 0 的瞬间就停掉 splat.
-            // - 这里与静态后端保持一致: 在雷达 fade-in 期间先保留 splat,到接近完成再隐藏.
+            // - 这里与静态后端保持一致:
+            //   1) 雷达 fade-in 未完成时,继续保留 splat
+            //   2) Gaussian -> ParticleDots 的 render-style 退场未完成时,也继续保留 splat
+            // - 否则高斯 alpha 还没退完就会像被瞬间掐掉.
             if (!EnableLidarScan || !HideSplatsWhenLidarEnabled)
                 return false;
 
-            if (!m_lidarVisibilityAnimating)
-                return false;
+            var lidarFadeInStillRunning =
+                m_lidarVisibilityAnimating &&
+                m_lidarVisibilityAnimTarget01 >= 0.999f &&
+                m_lidarVisibility01 < k_lidarHideSplatsAfterVisibility01;
 
-            if (m_lidarVisibilityAnimTarget01 < 0.999f)
-                return false;
+            var gaussianAlphaFadeStillRunning =
+                m_renderStyleAnimating &&
+                m_renderStyleAnimTargetBlend01 >= 0.999f;
 
-            return m_lidarVisibility01 < k_lidarHideSplatsAfterVisibility01;
+            return lidarFadeInStillRunning || gaussianAlphaFadeStillRunning;
         }
 
         static void EnsureVisibilityEditorUpdateHooked()
@@ -1426,9 +1437,11 @@ namespace Gsplat
             if (!animated || d <= 0.0f)
             {
                 m_renderStyleBlend01 = target;
+                m_renderStyleAlphaBlend01 = target;
                 m_renderStyleAnimating = false;
                 m_renderStyleAnimProgress01 = 1.0f;
                 m_renderStyleAnimStartBlend01 = target;
+                m_renderStyleAnimStartAlphaBlend01 = target;
                 m_renderStyleAnimTargetBlend01 = target;
                 m_renderStyleLastAdvanceRealtime = -1.0f;
 
@@ -1443,6 +1456,7 @@ namespace Gsplat
             m_renderStyleAnimating = true;
             m_renderStyleAnimProgress01 = 0.0f;
             m_renderStyleAnimStartBlend01 = m_renderStyleBlend01;
+            m_renderStyleAnimStartAlphaBlend01 = m_renderStyleAlphaBlend01;
             m_renderStyleAnimTargetBlend01 = target;
             m_renderStyleAnimDurationSeconds = d;
             m_renderStyleLastAdvanceRealtime = -1.0f;
@@ -1647,6 +1661,8 @@ namespace Gsplat
             m_renderStyleAnimStartBlend01 = 0.0f;
             m_renderStyleAnimTargetBlend01 = RenderStyle == GsplatRenderStyle.ParticleDots ? 1.0f : 0.0f;
             m_renderStyleBlend01 = m_renderStyleAnimTargetBlend01;
+            m_renderStyleAnimStartAlphaBlend01 = m_renderStyleAnimTargetBlend01;
+            m_renderStyleAlphaBlend01 = m_renderStyleAnimTargetBlend01;
 
             m_renderStyleAnimDurationSeconds = RenderStyleSwitchDurationSeconds;
             if (float.IsNaN(m_renderStyleAnimDurationSeconds) || float.IsInfinity(m_renderStyleAnimDurationSeconds) ||
@@ -1912,18 +1928,24 @@ namespace Gsplat
             if (d <= 0.0f)
             {
                 m_renderStyleBlend01 = m_renderStyleAnimTargetBlend01;
+                m_renderStyleAlphaBlend01 = m_renderStyleAnimTargetBlend01;
                 m_renderStyleAnimating = false;
                 m_renderStyleAnimProgress01 = 1.0f;
             }
             else
             {
                 m_renderStyleAnimProgress01 = Mathf.Clamp01(m_renderStyleAnimProgress01 + dt / d);
-                var eased = GsplatUtils.EaseInOutQuart(m_renderStyleAnimProgress01);
-                m_renderStyleBlend01 = Mathf.Lerp(m_renderStyleAnimStartBlend01, m_renderStyleAnimTargetBlend01, eased);
+                var morphEased = GsplatUtils.EaseInOutQuart(m_renderStyleAnimProgress01);
+                var alphaEased = GsplatUtils.EaseInOutSine(m_renderStyleAnimProgress01);
+                m_renderStyleBlend01 =
+                    Mathf.Lerp(m_renderStyleAnimStartBlend01, m_renderStyleAnimTargetBlend01, morphEased);
+                m_renderStyleAlphaBlend01 =
+                    Mathf.Lerp(m_renderStyleAnimStartAlphaBlend01, m_renderStyleAnimTargetBlend01, alphaEased);
 
                 if (m_renderStyleAnimProgress01 >= 1.0f)
                 {
                     m_renderStyleBlend01 = m_renderStyleAnimTargetBlend01;
+                    m_renderStyleAlphaBlend01 = m_renderStyleAnimTargetBlend01;
                     m_renderStyleAnimating = false;
                 }
             }
@@ -1954,7 +1976,12 @@ namespace Gsplat
                 blend = 0.0f;
             blend = Mathf.Clamp01(blend);
 
-            m_renderer.SetRenderStyleUniforms(blend, dotRadius);
+            var alphaBlend = m_renderStyleAlphaBlend01;
+            if (float.IsNaN(alphaBlend) || float.IsInfinity(alphaBlend))
+                alphaBlend = blend;
+            alphaBlend = Mathf.Clamp01(alphaBlend);
+
+            m_renderer.SetRenderStyleUniforms(blend, alphaBlend, dotRadius);
         }
 
         void PushVisibilityUniformsForThisFrame(Bounds localBounds)
@@ -2550,7 +2577,10 @@ namespace Gsplat
                 RenderStyleSwitchDurationSeconds = 1.5f;
 
             if (!m_renderStyleAnimating)
+            {
                 m_renderStyleBlend01 = RenderStyle == GsplatRenderStyle.ParticleDots ? 1.0f : 0.0f;
+                m_renderStyleAlphaBlend01 = m_renderStyleBlend01;
+            }
 
             // LiDAR(编辑态参数同步):
             ValidateLidarSerializedFields();
