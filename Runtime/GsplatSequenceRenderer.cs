@@ -674,6 +674,11 @@ namespace Gsplat
         // 关闭雷达时,为了播放淡出动画,会暂时保持 runtime draw 链路在线.
         bool m_lidarKeepAliveDuringFadeOut;
 
+        // --------------------------------------------------------------------
+        // RadarScan -> Gaussian 的 show/hide 编排状态(非序列化)
+        // --------------------------------------------------------------------
+        bool m_pendingRadarToGaussianShowSwitch;
+
 #if UNITY_EDITOR
         // --------------------------------------------------------------------
         // Editor 体验修复: 让 show/hide 动画在“鼠标不动”时也能连续播放.
@@ -711,6 +716,9 @@ namespace Gsplat
                 return true;
 
             if (m_lidarColorAnimating || m_lidarVisibilityAnimating)
+                return true;
+
+            if (m_pendingRadarToGaussianShowSwitch)
                 return true;
 
             // LiDAR 扫描前沿(亮度余辉)是纯时间驱动:
@@ -982,6 +990,7 @@ namespace Gsplat
             if (Application.isPlaying)
                 return;
 
+            AdvancePendingRadarToGaussianShowSwitchIfNeeded();
             AdvanceVisibilityStateIfNeeded();
             AdvanceRenderStyleStateIfNeeded();
             AdvanceLidarAnimationStateIfNeeded();
@@ -1053,9 +1062,178 @@ namespace Gsplat
             return v;
         }
 
+        bool HasRadarVisibilityToExit()
+        {
+            if (EnableLidarScan || m_lidarKeepAliveDuringFadeOut)
+                return true;
+
+            if (m_lidarVisibilityAnimating)
+                return true;
+
+            return m_lidarVisibility01 > 1.0e-4f;
+        }
+
+        void CancelPendingRadarToGaussianShowSwitch()
+        {
+            m_pendingRadarToGaussianShowSwitch = false;
+        }
+
+        void ArmRadarToGaussianShowSwitch()
+        {
+            m_pendingRadarToGaussianShowSwitch = true;
+
+#if UNITY_EDITOR
+            if (!Application.isPlaying)
+            {
+                RequestEditorRepaintForVisibilityAnimation(force: true, reason: "RadarToGaussian.Arm");
+                RegisterVisibilityEditorTickerIfAnimating();
+            }
+#endif
+        }
+
+        void BeginGaussianShowFromHiddenForRadarSwitch()
+        {
+            // ----------------------------------------------------------------
+            // Radar -> Gaussian 专用 show 起点:
+            // - 按钮点击起点不能直接把共享显隐状态压成 Hidden,
+            //   否则 LiDAR 也会被同一套 overlay 一起裁没.
+            // - 因此这里把 Gaussian 的 show 启动延后到“半程触发”这一刻.
+            // ----------------------------------------------------------------
+            if (!EnableVisibilityAnimation)
+            {
+                m_visibilityState = VisibilityAnimState.Visible;
+                m_visibilityProgress01 = 1.0f;
+                SetVisibilitySourceMask(VisibilitySourceMaskMode.FullVisible);
+                return;
+            }
+
+            SetVisibilitySourceMask(VisibilitySourceMaskMode.FullHidden);
+            m_visibilityState = VisibilityAnimState.Showing;
+            m_visibilityProgress01 = 0.0f;
+            m_visibilityLastAdvanceRealtime = -1.0f;
+
+#if UNITY_EDITOR
+            RequestEditorRepaintForVisibilityAnimation(force: true, reason: "RadarToGaussian.ShowStart");
+            RegisterVisibilityEditorTickerIfAnimating();
+#endif
+        }
+
+        bool BeginRadarHideForRadarToGaussianShowSwitch(float durationSeconds)
+        {
+            // ----------------------------------------------------------------
+            // 关键语义:
+            // - 起点只让雷达开始 hide.
+            // - 不在按钮点击瞬间关闭 `EnableLidarScan`,避免 LiDAR runtime 被过早掐掉.
+            // ----------------------------------------------------------------
+            var d = ResolveRadarScanVisibilityDurationSeconds(enableRadarScan: false, durationSeconds);
+            if (m_lidarVisibility01 <= 1.0e-4f || d <= 0.0f)
+            {
+                m_lidarKeepAliveDuringFadeOut = false;
+                BeginLidarVisibilityTransition(target01: 0.0f, animated: false, durationSeconds: 0.0f);
+                return false;
+            }
+
+            m_lidarKeepAliveDuringFadeOut = false;
+            BeginLidarVisibilityTransition(target01: 0.0f, animated: true, durationSeconds: d);
+            return m_lidarVisibilityAnimating || m_lidarVisibility01 > 1.0e-4f;
+        }
+
+        void BeginVisibilityHideForRadarToGaussianShowSwitch()
+        {
+            // ----------------------------------------------------------------
+            // 前半段视觉语言:
+            // - 序列后端也要与静态后端一致,复用 `visibility hide` 按钮的 hide 过程.
+            // - 这样 LiDAR overlay 才会真正进入 hide 的 noise / glow 处理.
+            // ----------------------------------------------------------------
+            if (!EnableVisibilityAnimation)
+                return;
+
+            PlayHide();
+        }
+
+        bool ShouldBypassVisibilityOverlayForRadarToGaussianOverlap()
+        {
+            // ----------------------------------------------------------------
+            // Radar -> Gaussian 重叠阶段:
+            // - 高斯已经开始 show.
+            // - LiDAR 仍需靠自己的 fade-out 继续退场.
+            // - 因此这段时间 LiDAR 不能再吃共享显隐 overlay.
+            // ----------------------------------------------------------------
+            if (EnableLidarScan)
+                return false;
+
+            if (!m_lidarKeepAliveDuringFadeOut)
+                return false;
+
+            if (!m_lidarVisibilityAnimating)
+                return false;
+
+            if (m_lidarVisibilityAnimTarget01 > 1.0e-4f)
+                return false;
+
+            return m_lidarVisibility01 > 1.0e-4f;
+        }
+
+        void TriggerRadarToGaussianShowSwitchNow()
+        {
+            CancelPendingRadarToGaussianShowSwitch();
+            EnableLidarScan = false;
+            m_lidarKeepAliveDuringFadeOut = m_lidarVisibilityAnimating || m_lidarVisibility01 > 1.0e-4f;
+            SetRenderStyle(GsplatRenderStyle.Gaussian, animated: false, durationSeconds: 0.0f);
+            BeginGaussianShowFromHiddenForRadarSwitch();
+        }
+
+        void AdvancePendingRadarToGaussianShowSwitchIfNeeded()
+        {
+            if (!m_pendingRadarToGaussianShowSwitch)
+                return;
+
+            if (m_lidarVisibilityAnimating)
+            {
+                if (m_lidarVisibilityAnimTarget01 > 1.0e-4f)
+                    return;
+
+                if (m_lidarVisibilityAnimProgress01 < 0.5f)
+                    return;
+
+                TriggerRadarToGaussianShowSwitchNow();
+                return;
+            }
+
+            if (!HasRadarVisibilityToExit())
+                TriggerRadarToGaussianShowSwitchNow();
+        }
+
+        public void PlayRadarScanToGaussianShowHideSwitch(float durationSeconds = -1.0f)
+        {
+            CancelPendingRadarToGaussianShowSwitch();
+
+            if (!HasRadarVisibilityToExit())
+            {
+                SetRenderStyle(GsplatRenderStyle.Gaussian, animated: false, durationSeconds: 0.0f);
+                SetVisible(true, animated: true);
+                return;
+            }
+
+            var radarHideStarted = BeginRadarHideForRadarToGaussianShowSwitch(durationSeconds);
+
+            if (radarHideStarted)
+                BeginVisibilityHideForRadarToGaussianShowSwitch();
+
+            if (!radarHideStarted)
+            {
+                TriggerRadarToGaussianShowSwitchNow();
+                return;
+            }
+
+            ArmRadarToGaussianShowSwitch();
+        }
+
         public void SetRenderStyleAndRadarScan(GsplatRenderStyle style, bool enableRadarScan, bool animated = true,
             float durationSeconds = -1.0f)
         {
+            CancelPendingRadarToGaussianShowSwitch();
+
             // ----------------------------------------------------------------
             // 组合切换 API:
             // - 目标: 让序列后端与静态后端拥有一致的“风格 + 雷达模式”切换语义.
@@ -1083,6 +1261,8 @@ namespace Gsplat
 
         public void SetRadarScanEnabled(bool enableRadarScan, bool animated = true, float durationSeconds = -1.0f)
         {
+            CancelPendingRadarToGaussianShowSwitch();
+
             var d = ResolveRadarScanVisibilityDurationSeconds(enableRadarScan, durationSeconds);
 
             EnableLidarScan = enableRadarScan;
@@ -1139,6 +1319,8 @@ namespace Gsplat
 
         public void SetRenderStyle(GsplatRenderStyle style, bool animated = true, float durationSeconds = -1.0f)
         {
+            CancelPendingRadarToGaussianShowSwitch();
+
             RenderStyle = style;
 
             var target = style == GsplatRenderStyle.ParticleDots ? 1.0f : 0.0f;
@@ -1268,6 +1450,8 @@ namespace Gsplat
 
         public void SetVisible(bool visible, bool animated = true)
         {
+            CancelPendingRadarToGaussianShowSwitch();
+
             if (!animated || !EnableVisibilityAnimation)
             {
                 m_visibilityState = visible ? VisibilityAnimState.Visible : VisibilityAnimState.Hidden;
@@ -1286,6 +1470,8 @@ namespace Gsplat
 
         public void PlayShow()
         {
+            CancelPendingRadarToGaussianShowSwitch();
+
             if (!EnableVisibilityAnimation)
             {
                 m_visibilityState = VisibilityAnimState.Visible;
@@ -1311,6 +1497,8 @@ namespace Gsplat
 
         public void PlayHide()
         {
+            CancelPendingRadarToGaussianShowSwitch();
+
             if (!EnableVisibilityAnimation)
             {
                 m_visibilityState = VisibilityAnimState.Hidden;
@@ -1392,6 +1580,7 @@ namespace Gsplat
             m_lidarVisibilityAnimDurationSeconds = RenderStyleSwitchDurationSeconds;
             m_lidarVisibilityLastAdvanceRealtime = -1.0f;
             m_lidarKeepAliveDuringFadeOut = false;
+            CancelPendingRadarToGaussianShowSwitch();
         }
 
         void SyncLidarColorBlendTargetFromSerializedMode(bool animated)
@@ -1763,6 +1952,9 @@ namespace Gsplat
             maxRadius = CalcVisibilityEffectiveMaxRadius(localBounds, centerModel);
             ringWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ShowRingWidthNormalized);
             trailWidth = GsplatVisibilityAnimationUtil.CalcRadialWidth(maxRadius, ShowTrailWidthNormalized);
+
+            if (ShouldBypassVisibilityOverlayForRadarToGaussianOverlap())
+                return;
 
             if (!EnableVisibilityAnimation)
             {
@@ -2275,6 +2467,7 @@ namespace Gsplat
         {
             ValidateVisibilitySerializedFields();
 
+            AdvancePendingRadarToGaussianShowSwitchIfNeeded();
             AdvanceVisibilityStateIfNeeded();
             AdvanceRenderStyleStateIfNeeded();
             AdvanceLidarAnimationStateIfNeeded();
@@ -2842,7 +3035,7 @@ namespace Gsplat
             // 说明:
             // - v1 采用方案 X: UpdateHz 门禁下,每次全量重建一次 360 range image.
             // - 序列后端的 PositionBuffer 是每帧 decode 生成的,因此该函数必须在 TryDecodeThisFrame 之后调用.
-            if (!EnableLidarScan || m_lidarScan == null || m_renderer == null || !m_renderer.Valid)
+            if (!IsLidarRuntimeActive() || m_lidarScan == null || m_renderer == null || !m_renderer.Valid)
                 return false;
 
             if (!TryGetEffectiveLidarRuntimeContext(out var layout, out _, out var worldToLidar, out _,

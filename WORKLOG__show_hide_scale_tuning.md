@@ -88,3 +88,121 @@
 ### 总结感悟
 - 现在 hide 的前后两段缩放不再是“前半段一种 ease,后半段另一种 ease”的拼接感。
 - 观感上会更统一,更像同一股收缩趋势逐渐接管整个 hide 过程。
+
+## [2026-03-18 00:51:48 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 任务名称: 新增 RadarScan -> Gaussian 的 show-hide-switch-高斯 按钮
+
+### 任务内容
+- 新增一个独立于现有 `Gaussian(动画)` 的新按钮 `show-hide-switch-高斯`。
+- 目标语义不是并行渐变,而是分段切换:
+  - 雷达粒子先 hide
+  - 到 hide 过程过半
+  - 高斯基元再开始 show
+
+### 完成过程
+- 先回读 `GsplatRendererEditor` / `GsplatSequenceRendererEditor` / `GsplatRenderer` / `GsplatSequenceRenderer`,确认现有 `Gaussian(动画)` 是 LiDAR fade-out 与 RenderStyle morph 并行执行。
+- 静态验证后确认: 只调用现有 API 会让高斯过早重新提交,无法满足“半程后再 show”的时序。
+- 在两个 renderer 内新增 `PlayRadarScanToGaussianShowHideSwitch(...)`:
+  - 前半段先 `SetVisible(false, animated:false)` 压住 splat
+  - 同时 `SetRadarScanEnabled(false, animated:true, ...)` 让雷达先淡出
+  - 到 radar hide 时长一半时,硬切到 `Gaussian` 并触发 `SetVisible(true, animated:true)`
+- 在两个 Inspector 中新增同名按钮,并补充帮助文案。
+- 增加 `GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelaysGaussianShowUntilHalfway` 回归测试,锁定“半程前不抢跑,半程后才开始高斯 show”的语义。
+
+### 验证结果
+- 编译通过:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo`
+- Unity 定向测试通过:
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelaysGaussianShowUntilHalfway`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.SetRenderStyleAndRadarScan_Animated_DelayHideSplatsUntilRadarVisible`
+- 验证过程中为收集包测试,临时把 `wu.yize.gsplat` 加到工程 `testables`,跑完后已恢复 `manifest.json` 原状。
+
+### 总结感悟
+- 这次的关键不是“换一个更花的 easing”,而是把并行切换改造成分段编排。
+- 对这类 Unity Inspector 按钮功能,如果只把延迟写在 Editor 层,后续很难复用和测试;把编排下沉到 runtime API,明显更稳。
+
+## [2026-03-18 01:07:19 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 任务名称: 修正 show-hide-switch-高斯 的高斯抢跑问题
+
+### 任务内容
+- 修正新按钮 `show-hide-switch-高斯` 的实际观感与预期不一致的问题。
+- 目标是保证:
+  - 雷达 hide 真的过半后
+  - 高斯才开始 show
+
+### 完成过程
+- 先不直接补丁,而是补了一个最小复现实验:
+  - `PlayRadarScanToGaussianShowHideSwitch_DelayedFirstTick_DoesNotStartShowBeforeLidarHalfway`
+- 该实验故意让第一次 `Update` 晚到,成功复现旧实现的抢跑:
+  - 旧逻辑会在第一帧直接变成 `Gaussian`
+- 在此基础上把运行时判定从“墙钟时间过半”改成“LiDAR hide 动画进度过半”:
+  - `m_lidarVisibilityAnimProgress01 >= 0.5f`
+- 同步修正了脆弱测试断言,避免把“刚触发时 show 进度必须极小”这种依赖 Unity 自动 Update 时序的条件继续锁死。
+
+### 验证结果
+- `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo` 通过。
+- Unity 定向测试通过:
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelayedFirstTick_DoesNotStartShowBeforeLidarHalfway`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelaysGaussianShowUntilHalfway`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.SetRenderStyleAndRadarScan_Animated_DelayHideSplatsUntilRadarVisible`
+
+### 总结感悟
+- 对这类编辑器动画编排,真正可靠的“过半”应该绑定状态机进度,不能绑定按钮按下后的墙钟时间。
+- 这次新增的红测价值很高,它正好卡住了“第一次 tick 来晚”这种肉眼最容易看到、但普通逐帧测试不容易覆盖的真实场景。
+
+## [2026-03-18 01:26:10 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 任务名称: 修正 show-hide-switch-高斯 一按即杀雷达的问题
+
+### 任务内容
+- 修正 `show-hide-switch-高斯` 仍然会在按钮点击瞬间把雷达粒子直接干掉的问题。
+- 目标语义改成:
+  - 按钮起点只启动雷达 hide
+  - 半程后才启动 Gaussian show
+  - 重叠阶段 LiDAR 继续按自己的 fade-out 退场
+
+### 完成过程
+- 静态复核确认了两个直接问题:
+  1. `SetVisible(false, animated: false)` 会把共享显隐状态直接打成 `Hidden`,LiDAR overlay 也跟着归零
+  2. `EnableLidarScan=false` 写得太早,会让 RadarScan runtime 链路提前退场
+- 在 `GsplatRenderer` 和 `GsplatSequenceRenderer` 中把这条按钮编排改成真正的两阶段:
+  - 起点只调用 LiDAR hide 的内部过渡,不再立刻关总开关
+  - 半程触发时才关闭 `EnableLidarScan`,切到 `Gaussian`,并从 `FullHidden` 起点启动高斯 show
+  - 重叠阶段给 LiDAR render 增加 bypass,避免它被 Gaussian 的共享 show overlay 一起裁掉
+  - `TickLidarRangeImageIfNeeded()` 也同步改成认 `IsLidarRuntimeActive()`,让 keepalive fade-out 期间继续更新
+- 同步修改回归测试:
+  - 把“立即关闭 `EnableLidarScan`”这种错误断言去掉
+  - 改成验证“前半段雷达仍启用,半程才切 Gaussian,重叠期 LiDAR gate 仍打开”
+
+### 验证结果
+- 编译通过:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo`
+- Unity MCP `run_tests` 本轮未形成有效动态证据:
+  - 返回 `summary.total = 0`
+  - 当前工程 `manifest.json` 中 `wu.yize.gsplat` 指向外部 `file:` 包路径,因此 Test Runner 很可能没有真正加载当前工作区代码
+  - 临时 `testables` 改动已在验证后恢复
+
+### 总结感悟
+- 这次不是单纯调阈值,而是把“状态机语义”纠正回来了。
+- 对共享 show/hide 系统来说,最危险的不是 easing 不对,而是把本该分阶段的编排提前硬写进一个起点动作里。
+
+## [2026-03-18 01:43:55 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 任务名称: 补回 show-hide-switch-高斯 前半段的 noise 燃烧 hide 过程
+
+### 任务内容
+- 根据用户新补充的目标,修正 `show-hide-switch-高斯` 前半段缺少 `visibility hide` 燃烧效果的问题。
+- 目标是让雷达粒子前半段真正复用 `Hide` 按钮那套处理过程。
+
+### 完成过程
+- 先重新比对 `PlayRadarScanToGaussianShowHideSwitch(...)` 与 `PlayHide()`:
+  - 确认上一轮前半段只做了 LiDAR visibility fade-out
+  - 没进入共享 `Hiding` 状态机
+- 在两个 renderer 中补了 `BeginVisibilityHideForRadarToGaussianShowSwitch()`:
+  - 仅在雷达 hide 真正启动成功后才调用
+  - 调用顺序放在 `ArmRadarToGaussianShowSwitch()` 之前
+  - 避免 `PlayHide()` 内部的 `CancelPending...` 把半程切换计划清掉
+- 同步修改回归测试:
+  - 前半段从校验 `Visible` 改为校验 `Hiding`
+  - 补充 `BuildLidarShowHideOverlay(...).mode == 2` 的证据
+
+### 验证结果
+- `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo` 通过
+
+### 总结感悟
+- 这次真正缺的不是参数,而是状态机入口。
+- 当用户说“要执行某个按钮的处理过程”时,最稳的做法通常不是手工模仿结果,而是把调用链真正接回那个过程本身。

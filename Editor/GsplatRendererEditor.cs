@@ -352,7 +352,8 @@ namespace Gsplat.Editor
                 "说明: 直接修改 RenderStyle 枚举是硬切(不会播放切换动画).\n" +
                 "使用下方按钮可播放动画切换:\n" +
                 "- Gaussian/ParticleDots: 时长=RenderStyleSwitchDurationSeconds(默认 easeInOutQuart).\n" +
-                "- RadarScan: RenderStyle 仍用 RenderStyleSwitchDurationSeconds,但雷达淡入/淡出优先用 LidarShowDuration/LidarHideDuration(>=0),否则复用 RenderStyleSwitchDurationSeconds.",
+                "- RadarScan: RenderStyle 仍用 RenderStyleSwitchDurationSeconds,但雷达淡入/淡出优先用 LidarShowDuration/LidarHideDuration(>=0),否则复用 RenderStyleSwitchDurationSeconds.\n" +
+                "- show-hide-switch-高斯: 先让 RadarScan hide,到 hide 过程过半再触发高斯 show.",
                 MessageType.Info);
 
             var anyDurationZero = false;
@@ -422,6 +423,21 @@ namespace Gsplat.Editor
                             continue;
                         r.SetRenderStyleAndRadarScan(GsplatRenderStyle.ParticleDots, enableRadarScan: true,
                             animated: true, durationSeconds: -1.0f);
+                        EditorUtility.SetDirty(r);
+                    }
+
+                    EditorApplication.QueuePlayerLoopUpdate();
+                    UnityEditorInternal.InternalEditorUtility.RepaintAllViews();
+                }
+
+                if (GUILayout.Button("show-hide-switch-高斯"))
+                {
+                    foreach (var obj in targets)
+                    {
+                        var r = obj as GsplatRenderer;
+                        if (!r)
+                            continue;
+                        r.PlayRadarScanToGaussianShowHideSwitch(durationSeconds: -1.0f);
                         EditorUtility.SetDirty(r);
                     }
 
