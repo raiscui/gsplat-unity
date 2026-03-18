@@ -11,6 +11,8 @@ namespace Gsplat.Tests
 {
     public sealed class GsplatVisibilityAnimationTests
     {
+        const float kRadarToGaussianShowTriggerProgress01 = 0.35f;
+
         static readonly MethodInfo s_advanceVisibilityStateIfNeeded =
             typeof(GsplatRenderer).GetMethod("AdvanceVisibilityStateIfNeeded", BindingFlags.Instance | BindingFlags.NonPublic);
 
@@ -655,28 +657,46 @@ namespace Gsplat.Tests
             //   3) 到半程后才切到 Gaussian 并启动 show.
             var go = new GameObject("GsplatVisibilityAnimationTests_RadarToGaussian_ShowHideSwitch");
             go.SetActive(false);
+            var asset = CreateMinimalAsset1Splat();
             var r = go.AddComponent<GsplatRenderer>();
             r.EnableVisibilityAnimation = true;
+            r.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
+            r.PlayShowOnEnable = false;
             r.ShowDuration = 0.2f;
-            r.LidarHideDuration = 0.12f;
-            r.SetRenderStyleAndRadarScan(GsplatRenderStyle.Gaussian, enableRadarScan: true, animated: false);
+            r.HideDuration = 0.3f;
+            r.GsplatAsset = asset;
 
             go.SetActive(true);
             yield return null;
 
+            // 预热:
+            // - 先让最小资产进入“可提交 splat”的稳定状态.
+            // - 后面 overlap 阶段才能用 `IGsplat.SplatCount` 直接证明门禁已放开.
+            var warmStart = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - warmStart < 1.0f && GetSubmittedSplatCount(r) == 0)
+                yield return null;
+
+            Assert.Greater(GetSubmittedSplatCount(r), 0u,
+                "Precondition failed: expected Gaussian mode to submit splats before entering RadarScan.");
+
+            r.SetRenderStyleAndRadarScan(GsplatRenderStyle.Gaussian, enableRadarScan: true, animated: false);
+
             Assert.IsTrue(r.EnableLidarScan, "Precondition failed: expected radar mode enabled.");
             Assert.AreEqual(GsplatRenderStyle.ParticleDots, r.RenderStyle,
                 "Precondition failed: expected radar mode to force ParticleDots.");
+            Assert.AreEqual(0u, GetSubmittedSplatCount(r),
+                "Precondition failed: expected radar-only mode to block splat submission when HideSplatsWhenLidarEnabled=true.");
 
             r.PlayRadarScanToGaussianShowHideSwitch();
 
             Assert.IsTrue(r.EnableLidarScan, "Expected RadarScan to stay enabled during the front half of radar hide.");
-            Assert.IsTrue(GetLidarVisibilityAnimating(r), "Expected LiDAR fade-out to start immediately.");
             Assert.AreEqual("Hiding", GetVisibilityStateName(r),
                 "Expected front half to enter the same visibility hide process as the Hide button.");
             Assert.AreEqual(GsplatRenderStyle.ParticleDots, r.RenderStyle,
                 "Expected render style to remain ParticleDots before half delay elapses.");
-            var overlayBeforeHalf = BuildLidarShowHideOverlay(r, new Bounds(Vector3.zero, Vector3.one));
+            Assert.AreEqual(0u, GetSubmittedSplatCount(r),
+                "Expected splat submission to remain blocked during the radar-only front half.");
+            var overlayBeforeHalf = BuildLidarShowHideOverlay(r, asset.Bounds);
             Assert.Greater(overlayBeforeHalf.gate, 0.99f,
                 "Expected LiDAR overlay gate to stay open during radar hide front half.");
             Assert.AreEqual(2, overlayBeforeHalf.mode,
@@ -689,11 +709,13 @@ namespace Gsplat.Tests
                 yield return null;
             }
 
-            Assert.IsTrue(r.EnableLidarScan, "Expected RadarScan to remain enabled before the halfway trigger.");
+            Assert.IsTrue(r.EnableLidarScan, "Expected RadarScan to remain enabled before the early overlap trigger.");
             Assert.AreEqual("Hiding", GetVisibilityStateName(r),
-                "Expected front half to keep running the visibility hide process before the halfway trigger.");
+                "Expected front phase to keep running the visibility hide process before the overlap trigger.");
             Assert.AreEqual(GsplatRenderStyle.ParticleDots, r.RenderStyle,
-                "Expected render style to stay ParticleDots before the halfway trigger.");
+                "Expected render style to stay ParticleDots before the overlap trigger.");
+            Assert.Less(GetVisibilityProgress01(r), kRadarToGaussianShowTriggerProgress01,
+                "Expected the shared visibility hide progress to stay below the early trigger point before Gaussian show starts.");
 
             var triggered = false;
             while (Time.realtimeSinceStartup - switchStart < 1.0f)
@@ -708,22 +730,23 @@ namespace Gsplat.Tests
                 yield return null;
             }
 
-            Assert.IsTrue(triggered, "Expected Gaussian show to start after the halfway delay.");
+            Assert.IsTrue(triggered, "Expected Gaussian show to start after the early overlap trigger.");
             Assert.AreEqual(GsplatRenderStyle.Gaussian, r.RenderStyle,
                 "Expected second phase to switch render style to Gaussian.");
             Assert.AreEqual("Showing", GetVisibilityStateName(r),
                 "Expected second phase to enter Gaussian show animation.");
-            Assert.IsFalse(r.EnableLidarScan, "Expected RadarScan to release its main enable flag only when Gaussian show actually starts.");
-            Assert.IsTrue(GetLidarVisibilityAnimating(r), "Expected LiDAR fade-out to keep running during the overlap phase.");
-            Assert.Greater(GetLidarVisibility01(r), 1.0e-3f,
-                "Expected LiDAR to still retain non-zero visibility when Gaussian show has just started.");
-            var overlayDuringOverlap = BuildLidarShowHideOverlay(r, new Bounds(Vector3.zero, Vector3.one));
+            Assert.IsTrue(r.EnableLidarScan,
+                "Expected overlap phase to keep the LiDAR main enable flag alive until the dedicated hide overlay finishes.");
+            var overlayDuringOverlap = BuildLidarShowHideOverlay(r, asset.Bounds);
             Assert.Greater(overlayDuringOverlap.gate, 0.99f,
                 "Expected LiDAR overlay gate to remain open during the overlap phase.");
-            Assert.AreEqual(0, overlayDuringOverlap.mode,
-                "Expected LiDAR to ignore Gaussian show overlay during the overlap phase.");
+            Assert.AreEqual(2, overlayDuringOverlap.mode,
+                "Expected overlap phase to keep using the dedicated LiDAR hide overlay instead of Gaussian show overlay.");
+            Assert.Greater(GetSubmittedSplatCount(r), 0u,
+                "Expected Gaussian splats to be submitted during overlap even though LiDAR is still enabled.");
 
             Object.DestroyImmediate(go);
+            Object.DestroyImmediate(asset);
         }
 
         [Test]
@@ -737,8 +760,9 @@ namespace Gsplat.Tests
             go.SetActive(false);
             var r = go.AddComponent<GsplatRenderer>();
             r.EnableVisibilityAnimation = true;
+            r.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
             r.ShowDuration = 0.2f;
-            r.LidarHideDuration = 0.12f;
+            r.HideDuration = 0.3f;
             r.SetRenderStyleAndRadarScan(GsplatRenderStyle.Gaussian, enableRadarScan: true, animated: false);
 
             r.PlayRadarScanToGaussianShowHideSwitch();
@@ -754,15 +778,89 @@ namespace Gsplat.Tests
             InvokeManualUpdate(r);
 
             Assert.AreEqual(GsplatRenderStyle.ParticleDots, r.RenderStyle,
-                "Expected delayed first tick to keep ParticleDots until LiDAR hide really reaches halfway.");
+                "Expected delayed first tick to keep ParticleDots until LiDAR hide really reaches the overlap trigger.");
             Assert.AreEqual("Hiding", GetVisibilityStateName(r),
                 "Expected switch button to enter the visibility hide process immediately, even before the first tick advances time.");
             Assert.IsTrue(r.EnableLidarScan,
-                "Expected delayed first tick to keep RadarScan enabled before the halfway trigger.");
-            Assert.Greater(GetLidarVisibility01(r), 0.95f,
-                "Expected LiDAR visibility to remain near its start value on the first delayed tick.");
+                "Expected delayed first tick to keep RadarScan enabled before the overlap trigger.");
+            Assert.Less(GetVisibilityProgress01(r), kRadarToGaussianShowTriggerProgress01,
+                "Expected delayed first tick to keep the visibility hide progress below the early trigger point.");
+            var overlay = BuildLidarShowHideOverlay(r, new Bounds(Vector3.zero, Vector3.one));
+            Assert.AreEqual(2, overlay.mode,
+                "Expected delayed first tick to remain on the hide overlay rather than jumping to Gaussian show.");
 
             Object.DestroyImmediate(go);
+        }
+
+        [UnityTest]
+        public IEnumerator PlayRadarScanToGaussianShowHideSwitch_DisablesLidarOnlyAfterDedicatedHideOverlayCompletes()
+        {
+            // 目的:
+            // - 锁定 dual-track 的最终关门时机.
+            // - Gaussian show 可以在 hide 过半前一点开始,但 `EnableLidarScan` 必须等专用 hide overlay 跑完才关闭.
+            var go = new GameObject("GsplatVisibilityAnimationTests_RadarToGaussian_HideCompletesBeforeDisable");
+            go.SetActive(false);
+            var asset = CreateMinimalAsset1Splat();
+            var r = go.AddComponent<GsplatRenderer>();
+            r.EnableVisibilityAnimation = true;
+            r.VisibilityProgressMode = GsplatVisibilityProgressMode.LegacyDuration;
+            r.PlayShowOnEnable = false;
+            r.ShowDuration = 0.2f;
+            r.HideDuration = 0.25f;
+            r.GsplatAsset = asset;
+
+            go.SetActive(true);
+            yield return null;
+
+            var warmStart = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - warmStart < 1.0f && GetSubmittedSplatCount(r) == 0)
+                yield return null;
+
+            Assert.Greater(GetSubmittedSplatCount(r), 0u,
+                "Precondition failed: expected Gaussian mode to submit splats before entering RadarScan.");
+
+            r.SetRenderStyleAndRadarScan(GsplatRenderStyle.Gaussian, enableRadarScan: true, animated: false);
+            r.PlayRadarScanToGaussianShowHideSwitch();
+
+            var overlapStarted = false;
+            var t0 = Time.realtimeSinceStartup;
+            while (Time.realtimeSinceStartup - t0 < 1.5f)
+            {
+                InvokeManualUpdate(r);
+
+                if (!overlapStarted &&
+                    r.RenderStyle == GsplatRenderStyle.Gaussian &&
+                    GetVisibilityStateName(r) == "Showing")
+                {
+                    overlapStarted = true;
+                    Assert.IsTrue(r.EnableLidarScan,
+                        "Expected LiDAR main enable flag to remain true when overlap just starts.");
+                }
+
+                if (overlapStarted && r.EnableLidarScan)
+                {
+                    var overlay = BuildLidarShowHideOverlay(r, asset.Bounds);
+                    Assert.AreEqual(2, overlay.mode,
+                        "Expected dedicated LiDAR hide overlay to remain active for the whole overlap phase.");
+                    Assert.Greater(overlay.gate, 0.99f,
+                        "Expected LiDAR overlay gate to stay open until the dedicated hide overlay completes.");
+                }
+
+                if (overlapStarted && !r.EnableLidarScan)
+                    break;
+
+                yield return null;
+            }
+
+            Assert.IsTrue(overlapStarted, "Expected Gaussian overlap phase to start within timeout.");
+            Assert.IsFalse(r.EnableLidarScan,
+                "Expected LiDAR main enable flag to turn off only after the dedicated hide overlay finishes.");
+            var overlayAfterDisable = BuildLidarShowHideOverlay(r, asset.Bounds);
+            Assert.AreNotEqual(2, overlayAfterDisable.mode,
+                "Expected dedicated LiDAR hide overlay to be gone once LiDAR main enable flag is released.");
+
+            Object.DestroyImmediate(go);
+            Object.DestroyImmediate(asset);
         }
 
         [UnityTest]

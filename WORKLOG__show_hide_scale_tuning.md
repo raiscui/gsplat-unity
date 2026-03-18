@@ -206,3 +206,147 @@
 ### 总结感悟
 - 这次真正缺的不是参数,而是状态机入口。
 - 当用户说“要执行某个按钮的处理过程”时,最稳的做法通常不是手工模仿结果,而是把调用链真正接回那个过程本身。
+
+## [2026-03-18 09:37:07 +0800] [Session ID: unknown] 任务名称: 重新诊断 Radar->Gaussian 切换需求并整理双轨实施方案
+
+### 任务内容
+- 根据用户最新补充,重新校正 `show-hide-switch-高斯` 的目标语义。
+- 重点确认当前实现为什么无法做到:
+  - 雷达 hide 完整执行
+  - Gaussian 在中段开始 show
+  - overlap 阶段两者同屏
+
+### 完成过程
+- 重新回读了支线 `task_plan__show_hide_scale_tuning.md`、`notes__show_hide_scale_tuning.md`、`WORKLOG__show_hide_scale_tuning.md`、`ERRORFIX__show_hide_scale_tuning.md`。
+
+## [2026-03-18 19:32:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 任务名称: 完成 RadarScan -> Gaussian 的 dual-track overlap 切换
+
+### 任务内容
+- 按 OpenSpec change `radarscan-gaussian-dual-track-switch` 完成 runtime、editor 文案、测试与验证。
+- 让 `show-hide-switch-高斯` 满足:
+  - 雷达 `visibility hide` 完整执行
+  - Gaussian 在 hide 过半时开始 show
+  - overlap 阶段两者同屏
+  - hide 结束后才关闭 `EnableLidarScan`
+
+### 完成过程
+- 在 `Runtime/GsplatSequenceRenderer.cs` 镜像补齐 dual-track 状态:
+  - `m_pendingRadarToGaussianDisableLidar`
+  - 专用 LiDAR hide overlay 的 active/progress/source-mask/lastAdvance
+  - overlay 构建优先级、overlap splat 提交门禁、cancel/reset 逻辑
+- 在 `Runtime/GsplatRenderer.cs` 和 `Runtime/GsplatSequenceRenderer.cs` 都补了 `ApplyRenderStyleTransition(...)` 内部 helper:
+  - 避免 overlap 触发点调用公开 `SetRenderStyle(...)` 时,把刚抓到的专用 hide overlay 一起 cancel 掉
+- 更新两个 Inspector help box,把按钮语义写成“双轨 overlap 切换”
+- 重写 `Tests/Editor/GsplatVisibilityAnimationTests.cs` 的 switch 相关断言:
+  - 半程前只在 hide
+  - overlap 阶段 `overlay.mode == 2`
+  - overlap 阶段 splat 提交重新放开
+  - `EnableLidarScan` 只在专用 hide overlay 完整结束后才关闭
+
+### 验证结果
+- 编译通过:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo`
+- 定向 EditMode 测试通过:
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelaysGaussianShowUntilHalfway`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelayedFirstTick_DoesNotStartShowBeforeLidarHalfway`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DisablesLidarOnlyAfterDedicatedHideOverlayCompletes`
+- 额外回归:
+  - 整个 `Gsplat.Tests.Editor` 程序集复跑后,本轮只剩一个与本次改动无关的既有失败:
+    - `GsplatSplat4DImporterDeltaV1Tests.ImportV1_StaticSingleFrame4D_RealFixturePlyThroughExporterAndImporter`
+    - 失败原因是 Python 环境缺少 `numpy`
+
+### 总结感悟
+- overlap 功能最容易踩坑的,不是 easing 本身,而是“公共 API 里的副作用”会不会把中间态清掉。
+- 对这类“旧轨未结束,新轨已开始”的功能,最好把“用户入口 API”与“编排内部 helper”拆开,避免互相打架。
+
+## [2026-03-18 20:13:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 任务名称: 将 Gaussian show 触发点微调为更紧的衔接
+
+### 任务内容
+- 根据用户反馈,把 `show-hide-switch-高斯` 的 Gaussian show 起点再提前一点。
+- 保持 dual-track 的其它核心语义不变。
+
+### 完成过程
+- 在 `GsplatRenderer` / `GsplatSequenceRenderer` 中把固定 `0.5f` 改成常量:
+  - `k_radarToGaussianShowTriggerProgress01 = 0.42f`
+- 同步更新了:
+  - 注释描述
+  - Inspector help box 文案
+  - 定向测试里的断言口径
+
+### 验证结果
+- 编译通过:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo`
+- 定向 EditMode 测试逐个通过:
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelaysGaussianShowUntilHalfway`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelayedFirstTick_DoesNotStartShowBeforeLidarHalfway`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DisablesLidarOnlyAfterDedicatedHideOverlayCompletes`
+
+### 总结感悟
+- 这次不是“修错”,更像体验微调。
+- 把触发点收敛成单一常量后,后续继续试 `0.40`、`0.44` 这类小步调校会轻松很多。
+
+## [2026-03-18 20:22:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 任务名称: 将 dual-track 触发点继续收紧到 0.35
+
+### 任务内容
+- 按用户指定值,把 `show-hide-switch-高斯` 的 Gaussian show 触发点继续提前到 `0.35`。
+
+### 完成过程
+- 将以下常量统一改成 `0.35f`:
+  - `Runtime/GsplatRenderer.cs`
+  - `Runtime/GsplatSequenceRenderer.cs`
+  - `Tests/Editor/GsplatVisibilityAnimationTests.cs`
+- 重新编译并逐个复跑 3 个 dual-track 定向 EditMode 用例。
+
+### 验证结果
+- 编译通过:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo`
+- 定向 EditMode 测试通过:
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelaysGaussianShowUntilHalfway`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelayedFirstTick_DoesNotStartShowBeforeLidarHalfway`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DisablesLidarOnlyAfterDedicatedHideOverlayCompletes`
+
+### 总结感悟
+- 现在这条按钮的 show 接入会更早、更贴近 hide 前沿。
+- 但从测试证据看,它仍然保持在“更早衔接”而不是“高斯抢跑”的范围内。
+- 逐段检查了:
+  - `Runtime/GsplatRenderer.cs`
+  - `Runtime/GsplatSequenceRenderer.cs`
+  - `Tests/Editor/GsplatVisibilityAnimationTests.cs`
+- 静态证据确认了 3 个关键门槛:
+  1. `TriggerRadarToGaussianShowSwitchNow()` 一旦启动 Gaussian show,共享显隐状态就不再保留雷达 hide 轨。
+  2. `BuildLidarShowHideOverlayForThisFrame(...)` 只消费共享 `m_visibilityState` / `m_visibilityProgress01`,无法让 hide 与 show 并行存在。
+  3. `ShouldSubmitSplatsThisFrame()` 会在 `EnableLidarScan && HideSplatsWhenLidarEnabled` 时直接挡掉 Gaussian splat 提交,不适合 overlap 阶段。
+- 在此基础上形成了推荐方案:
+  - 共享显隐轨继续给 Gaussian show 用
+  - 单独补一条 Radar->Gaussian 专用 LiDAR hide overlay 轨
+  - 只有在这条独立 hide 轨完成后才关闭 `EnableLidarScan`
+
+### 总结感悟
+- 这轮真正被用户纠正的不是参数,而是状态表达模型。
+- 当需求变成“出场动画和退场动画要在一段时间里同时成立”时,单一显隐状态机往往天然不够用,应该优先考虑拆轨,而不是继续堆 bypass。
+
+## [2026-03-18 09:49:26 +0800] [Session ID: unknown] 任务名称: 为方案A 建立 OpenSpec change
+
+### 任务内容
+- 将 `show-hide-switch-高斯` 的双轨切换方案固化成 OpenSpec change.
+- 输出 proposal / design / tasks / spec delta,为后续实现提供约束。
+
+### 完成过程
+- 先回读了 `burn-reveal-visibility`、`particle-dots-lidar-scan` 等现有 change 的 proposal / design / tasks / spec 风格。
+- 新建 change:
+  - `openspec/changes/radarscan-gaussian-dual-track-switch/`
+- 产出了以下 artifacts:
+  - `proposal.md`
+  - `design.md`
+  - `tasks.md`
+  - `specs/gsplat-radarscan-gaussian-switch/spec.md`
+- 其中核心设计口径固定为:
+  - 共享 `show` 轨继续给 Gaussian 用
+  - 单独补一条 LiDAR hide overlay 轨
+  - overlap 阶段放开 Gaussian splat 提交
+  - hide 完成后才关闭 LiDAR
+- 最后执行 OpenSpec 校验并确认通过。
+
+### 总结感悟
+- 这一步最大的价值不是“多写了几份 md”,而是把用户反复纠正的真实语义固定成了可执行契约。
+- 后面实现时如果再偏向“半程切过去”的老思路,测试和 spec 都会第一时间把它拦下来。

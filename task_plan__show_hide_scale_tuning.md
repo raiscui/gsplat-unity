@@ -258,6 +258,139 @@
 
 1. 现有“雷达扫描 -> 高斯”按钮是在 UI 层直接切材质/开关,还是通过统一的 show/hide 播放接口触发?
 2. “过半”应该绑定总切换时长的一半,还是绑定雷达 hide 动画进度到 50% 时再开始高斯 show?
+
+## [2026-03-18 13:58:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] [记录类型]: 按 OpenSpec change 继续落地 dual-track 切换
+
+### 当前目标
+
+- 使用 `openspec-apply-change` 继续实现 `radarscan-gaussian-dual-track-switch`。
+- 本轮不再重做方案讨论,直接补完缺失实现与验证。
+
+### 当前阶段拆分
+
+- [x] 阶段A: 定位按钮、模式切换入口与现有渐变逻辑
+- [x] 阶段B: 设计新的分段时序与状态保护
+- [ ] 阶段C: 落地 `GsplatSequenceRenderer` 对称 dual-track runtime
+- [ ] 阶段D: 更新 editor 文案与测试口径
+- [ ] 阶段E: 编译验证并回写 OpenSpec 任务状态
+
+### 本轮执行顺序
+
+1. 先复读 `GsplatRenderer.cs` 已改区域与 `GsplatSequenceRenderer.cs` 对应区域。
+2. 以 `GsplatRenderer` 为参照,补齐 `GsplatSequenceRenderer` 的独立 LiDAR hide overlay 轨。
+3. 再更新 `GsplatRendererEditor.cs`、`GsplatSequenceRendererEditor.cs` 与 `GsplatVisibilityAnimationTests.cs`。
+4. 最后执行 `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo`,根据结果再勾选 `openspec/.../tasks.md`。
+
+## 状态
+
+**目前在阶段C**
+- 已确认前一轮 `GsplatRenderer` 已有首轮 dual-track patch,但尚未编译验证。
+- 下一步先逐段核对两个 runtime 的差异,避免把未验证的逻辑直接复制扩散。
+
+## [2026-03-18 19:28:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] [记录类型]: OpenSpec dual-track change 已完成实现与验证
+
+### 阶段进展
+
+- [x] 阶段C: 落地 `GsplatSequenceRenderer` 对称 dual-track runtime
+  - 已补齐专用 LiDAR hide overlay 状态、halfway 判定、overlap 门禁与 cancel/reset 逻辑。
+- [x] 阶段D: 更新 editor 文案与测试口径
+  - 已把两个 Inspector 的按钮说明改成“双轨 overlap 切换”。
+  - 已把 `GsplatVisibilityAnimationTests` 改为锁定真正的 dual-track 语义。
+- [x] 阶段E: 编译验证并回写 OpenSpec 任务状态
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo` 通过。
+  - 定向 EditMode 测试通过:
+    1. `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelaysGaussianShowUntilHalfway`
+    2. `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelayedFirstTick_DoesNotStartShowBeforeLidarHalfway`
+    3. `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DisablesLidarOnlyAfterDedicatedHideOverlayCompletes`
+
+### 新验证结论
+
+- 已验证:
+  1. 序列版 runtime 之前确实停留在单轨旧语义,现在已与静态版对齐。
+  2. overlap 阶段专用 hide overlay 曾被 `SetRenderStyle(...)` 内部的 `CancelPendingRadarToGaussianShowSwitch()` 清空。
+  3. 将 render-style 硬切拆成“不自动 cancel 的内部 helper”后,专用 hide overlay 可以持续到真正结束。
+- 额外说明:
+  - 整个 `Gsplat.Tests.Editor` 程序集复跑后,当前只剩一个与本次改动无关的既有失败:
+    - `GsplatSplat4DImporterDeltaV1Tests.ImportV1_StaticSingleFrame4D_RealFixturePlyThroughExporterAndImporter`
+    - 原因是本机 Python 环境缺 `numpy`
+
+## 状态
+
+**目前本轮 OpenSpec apply 已完成**
+- `radarscan-gaussian-dual-track-switch` 的实现、说明文案和定向验证都已完成。
+- 下一步只剩整理交付说明与后续建议。
+
+## [2026-03-18 19:42:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] [记录类型]: 用户要求把 Gaussian show 触发点再提前一点
+
+### 当前目标
+
+- 在不破坏 dual-track 语义的前提下,让高斯 show 再更早一点接上。
+- 保持:
+  1. 雷达 `visibility hide` 仍然完整跑完
+  2. overlap 阶段仍然是 `Gaussian + 雷达粒子` 同屏
+  3. `EnableLidarScan` 仍然只在专用 hide overlay 结束后关闭
+
+### 当前处理策略
+
+- 不做大改,只把触发阈值从固定 `0.5` 调成“略早于过半”的常量。
+- 同步更新注释、Inspector 文案和定向测试口径。
+- 改完后重新做编译与 3 个 dual-track 定向测试验证。
+
+## 状态
+
+**目前进入 dual-track 触发点微调阶段**
+- 下一步直接改 `GsplatRenderer` / `GsplatSequenceRenderer` 的触发阈值常量,然后重新验证。
+
+## [2026-03-18 20:18:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] [记录类型]: 用户把 dual-track 触发点继续收紧到 0.35
+
+### 当前目标
+
+- 将 `show-hide-switch-高斯` 的 Gaussian show 触发点从 `0.42` 调整到 `0.35`。
+- 保持其它语义不变:
+  1. 雷达 hide 仍然完整执行
+  2. overlap 期间两者仍可同屏
+  3. `EnableLidarScan` 仍然只在专用 hide overlay 结束后关闭
+
+### 当前执行步骤
+
+1. 同步修改 `GsplatRenderer` / `GsplatSequenceRenderer` 的触发阈值常量
+2. 同步修改 `GsplatVisibilityAnimationTests` 的阈值常量
+3. 重新编译
+4. 重新跑 3 个 dual-track 定向 EditMode 测试
+
+## 状态
+
+**目前正在执行 0.35 微调**
+- 下一步直接修改常量并开始验证。
+
+## [2026-03-18 20:28:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] [记录类型]: 用户反馈 Gaussian -> RadarScan 方向的高斯 alpha 退场被提前掐断
+
+### 现象
+
+- 用户观察到:
+  - 从高斯粒子形态切到雷达粒子形态时
+  - 高斯粒子原本有一段 alpha 消失过程
+  - 但现在这段过程没有做完就不显示了
+  - 体感像瞬间消失,不自然
+
+### 当前主假设
+
+- `HideSplatsWhenLidarEnabled` 的 splat 提交门禁,可能在 render-style / alpha 退场动画完成前就把 Gaussian 提交停掉了。
+
+### 备选解释
+
+- 也不排除是 shader 内部 alpha/morph 曲线仍在走,但某个 runtime uniform 或 render-style blend 被更早收敛,导致看起来像瞬间消失。
+
+### 当前验证计划
+
+1. 回读 `SetRenderStyleAndRadarScan(...)`、`ShouldDelayHideSplatsForLidarFadeIn()`、`ShouldSubmitSplatsThisFrame()`
+2. 找出现有测试是否只锁了“避免黑帧”,但没锁“Gaussian alpha 退场要跑完”
+3. 先补一个最小回归测试,用动态证据确认究竟是哪条门禁提前掐掉了高斯提交
+
+## 状态
+
+**目前进入反向切换 bug 的根因调查阶段**
+- 下一步先回读进入 RadarScan 的 runtime 路径和现有测试口径。
 3. 当前系统里是否已经有可复用的延迟 show / 串行动画机制,避免再额外堆一个并行协程分支?
 
 ### 当前决策
@@ -611,3 +744,78 @@
 **目前进入重新设计阶段**
 - 本轮先不继续盲改代码
 - 先输出一份针对“双轨并行”语义的周密实施计划
+
+## [2026-03-18 09:41:12 +0800] [Session ID: unknown] [记录类型]: 用户要求先按方案A产出 OpenSpec change
+
+### 行动目的
+
+- 用户已经确认按方案A推进。
+- 本轮先不落 runtime 补丁,改为先把 OpenSpec change 方案建立完整。
+
+### 当前计划
+
+1. 选定 change 名称,优先体现 RadarScan -> Gaussian overlap switch 的核心语义
+2. 回读已有相近 OpenSpec change,复用本仓库 proposal / design / tasks / spec delta 的风格
+3. 用 OpenSpec CLI 创建新 change 骨架
+4. 产出 proposal / design / tasks 与必要 spec delta
+
+### 状态
+
+**目前进入 OpenSpec 建模阶段**
+- 下一步开始读取现有 change 模板与相关 specs
+
+## [2026-03-18 09:49:26 +0800] [Session ID: unknown] [记录类型]: 方案A 的 OpenSpec change 已建立并校验通过
+
+### 已完成事项
+
+- 已新建 change:
+  - `openspec/changes/radarscan-gaussian-dual-track-switch/`
+- 已完成 artifacts:
+  1. `proposal.md`
+  2. `design.md`
+  3. `tasks.md`
+  4. `specs/gsplat-radarscan-gaussian-switch/spec.md`
+- 已执行校验:
+  - `openspec validate radarscan-gaussian-dual-track-switch`
+  - 结果: valid
+
+### 本轮结论
+
+- 这次 change 已把方案A 的核心口径固定下来:
+  - Radar hide 轨完整执行
+  - Gaussian show 在 hide 过半时启动
+  - overlap 阶段 `高斯 + 雷达粒子` 同屏
+  - hide 完成后才关闭 LiDAR
+- 现在已经具备进入 apply / implementation 的前置规格条件
+
+### 状态
+
+**当前 OpenSpec 方案阶段已完成**
+- 下一步可以按该 change 进入实现
+
+## [2026-03-18 10:01:12 +0800] [Session ID: unknown] [记录类型]: 按 openspec-apply-change 开始实现 `radarscan-gaussian-dual-track-switch`
+
+### 行动目的
+
+- 用户已明确要求进入 apply 阶段。
+- 本轮目标不是继续讨论方案,而是按 OpenSpec tasks 落代码并逐项勾选。
+
+### 当前上下文
+
+- Using change: `radarscan-gaussian-dual-track-switch`
+- Schema: `spec-driven`
+- 当前 apply 进度:
+  - `0/12 tasks complete`
+- OpenSpec apply 指令已确认 state=`ready`
+
+### 实施顺序
+
+1. 先回读 contextFiles 与当前相关代码,确认现有半成品状态
+2. 先做 runtime 双轨状态与 overlap 门禁
+3. 再更新 editor 文案
+4. 最后补 tests 与编译验证,并同步勾选 tasks
+
+### 状态
+
+**目前进入 apply 实施阶段**
+- 下一步开始逐段阅读 `Runtime/*`、`Editor/*`、`Tests/*` 的相关实现

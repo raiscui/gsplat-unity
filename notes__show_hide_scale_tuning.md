@@ -219,6 +219,119 @@
 ### 下一步
 - 静态回读 `PlayShow_DuringHiding_RestartsShowFromZero` 与 `PlayShow()` 实现。
 
+## [2026-03-18 19:30:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 笔记: dual-track overlap 被 `SetRenderStyle` 意外清空
+
+## 来源
+
+### 来源1: `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+
+- 要点:
+  - `TriggerRadarToGaussianShowSwitchNow()` 先 `CaptureRadarToGaussianLidarHideOverlayFromCurrentHideState()`
+  - 紧接着又调用公开 API `SetRenderStyle(...)`
+  - 而 `SetRenderStyle(...)` 的第一句是 `CancelPendingRadarToGaussianShowSwitch()`
+
+### 来源2: Unity EditMode 动态测试
+
+- 用例:
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelaysGaussianShowUntilHalfway`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DisablesLidarOnlyAfterDedicatedHideOverlayCompletes`
+- 失败现象:
+  - overlap 阶段预期 `overlay.mode == 2`
+  - 实际却得到 `overlay.mode == 1`
+
+## 综合发现
+
+### 现象
+
+- overlap 阶段一旦开始 Gaussian show,LiDAR overlay 立即退回共享 `Showing` 轨。
+- 这会让用户看到:
+  - hide burn/noise 语义丢失
+  - 专用 hide 轨像没存在过
+
+### 当前假设
+
+- 专用 hide overlay 不是“没抓到”,而是“抓到后立刻又被公共 API 的 cancel 逻辑抹掉”。
+
+### 验证
+
+- 静态证据:
+  - `TriggerRadarToGaussianShowSwitchNow()` 的调用顺序就是 `Capture -> SetRenderStyle`
+  - `SetRenderStyle(...)` 内部固定先 cancel
+- 动态证据:
+  - 修复前,2 个 dual-track 用例都稳定报 `overlay.mode == 1`
+  - 修复后,3 个 dual-track 相关用例单独运行均通过
+
+### 结论
+
+- overlap 这种“先抓一段中间态,再继续编排”的逻辑,不能直接复用会自动 cancel 当前 switch 的公开 API。
+- 更稳的做法是:
+  - 保留公开 API 继续承担普通用户入口
+  - 但在 overlap 编排内部,拆一个不带 cancel 副作用的内部 helper
+
+## [2026-03-18 20:11:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 笔记: 把 Gaussian show 触发点从 0.5 微调到 0.42
+
+## 来源
+
+### 来源1: 用户最新体验反馈
+
+- 用户反馈:
+  - 当前 dual-track 已经对了
+  - 但希望“衔接再紧密一点”
+  - 也就是 Gaussian show 希望再稍微提前
+
+### 来源2: 当前 dual-track 触发实现
+
+- `GsplatRenderer` / `GsplatSequenceRenderer` 当前触发条件都是:
+  - `m_visibilityProgress01 >= 0.5f`
+
+## 综合发现
+
+### 处理策略
+
+- 这轮不改整体编排,只改触发阈值。
+- 为了避免继续散落魔法数字,把阈值提成常量:
+  - `k_radarToGaussianShowTriggerProgress01 = 0.42f`
+
+### 结论
+
+- `0.42` 属于“比过半稍早一点”的档位:
+  - 足够让衔接更紧
+  - 又不会提前到破坏“先 hide 再 overlap”的体感
+- 后续如果还要继续往前或往后调,现在只需要改一处常量即可。
+
+## [2026-03-18 20:21:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 笔记: 触发点继续从 0.42 收紧到 0.35
+
+## 来源
+
+### 来源1: 用户最新指定值
+
+- 用户直接给出目标值:
+  - `0.35`
+
+## 综合发现
+
+### 处理
+
+- 将以下常量统一从 `0.42f` 改为 `0.35f`:
+  - `Runtime/GsplatRenderer.cs`
+  - `Runtime/GsplatSequenceRenderer.cs`
+  - `Tests/Editor/GsplatVisibilityAnimationTests.cs`
+
+### 动态验证
+
+- 以下 3 个定向 EditMode 用例逐个通过:
+  1. `PlayRadarScanToGaussianShowHideSwitch_DelaysGaussianShowUntilHalfway`
+  2. `PlayRadarScanToGaussianShowHideSwitch_DelayedFirstTick_DoesNotStartShowBeforeLidarHalfway`
+  3. `PlayRadarScanToGaussianShowHideSwitch_DisablesLidarOnlyAfterDedicatedHideOverlayCompletes`
+
+### 当前结论
+
+- `0.35` 这档已经明显比 `0.42` 更早接入。
+- 但从现有动态证据看,它还没有破坏:
+  - delayed first tick 不抢跑
+  - overlap 期间专用 hide overlay 继续存在
+  - `EnableLidarScan` 延后到 hide 轨结束后再关闭
+
 ## [2026-03-18 00:31:11 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 笔记: RadarScan -> Gaussian 新按钮的时序分析
 
 ## 来源
@@ -676,3 +789,42 @@
 - 还缺的动态证据是:
   - 新测试去锁定“hide 完整跑完前,`EnableLidarScan` 不得关闭”
   - 新测试去锁定 overlap 阶段 `Gaussian + 雷达粒子` 的并存门禁
+
+## [2026-03-18 09:49:26 +0800] [Session ID: unknown] 笔记: 方案A 对应的 OpenSpec change 已成型
+
+## 来源
+
+### 来源1: 新建 change `radarscan-gaussian-dual-track-switch`
+
+- 要点:
+  - change 名称没有直接绑定 Inspector 中文按钮名
+  - 采用语义化命名,便于后续把实现从单个按钮推广到同类切换机制
+
+### 来源2: proposal / design / tasks / spec delta
+
+- 要点:
+  - proposal 把问题固定为“单轨状态机表达不了 overlap 切换”
+  - design 明确采用“共享 show 轨 + 独立 LiDAR hide overlay 轨”的最小双轨方案
+  - spec 新增 capability:
+    - `gsplat-radarscan-gaussian-switch`
+  - tasks 把实施拆成:
+    - runtime 状态
+    - orchestration / gating
+    - editor 文案
+    - tests / verification
+
+### 来源3: OpenSpec 校验
+
+- 要点:
+  - `openspec validate radarscan-gaussian-dual-track-switch`
+  - 结果为 valid
+  - `openspec status --change ...` 显示 4/4 artifacts complete
+
+## 综合发现
+
+### 已验证结论
+
+- 方案A 现在不再只是口头计划,已经被固化成可执行的 OpenSpec change
+- 后续实现时,最重要的约束已经写死:
+  - 不是“半程切过去”
+  - 而是“hide 完整跑完,show 中段启动,中间同屏”

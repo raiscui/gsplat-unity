@@ -147,3 +147,36 @@
 - 回归测试语义已同步改为:
   - 前半段 `VisibilityState == Hiding`
   - 前半段 `BuildLidarShowHideOverlay(...).mode == 2`
+
+## [2026-03-18 19:34:00 +0800] [Session ID: 019cfc9f-fe46-7e83-89ae-e49289473ee6] 问题: dual-track overlap 刚启动就丢失专用 hide overlay
+
+### 问题现象
+- 新增 dual-track 逻辑后,定向 EditMode 测试暴露出 overlap 阶段仍然不对:
+  - `PlayRadarScanToGaussianShowHideSwitch_DelaysGaussianShowUntilHalfway`
+  - `PlayRadarScanToGaussianShowHideSwitch_DisablesLidarOnlyAfterDedicatedHideOverlayCompletes`
+- 两个用例都报告:
+  - 期望 `overlay.mode == 2`
+  - 实际却是 `overlay.mode == 1`
+
+### 原因分析
+- 这不是“专用 hide overlay 没抓到”,而是“抓到后立刻又被清掉”:
+  1. `TriggerRadarToGaussianShowSwitchNow()` 先 `CaptureRadarToGaussianLidarHideOverlayFromCurrentHideState()`
+  2. 接着调用公开 API `SetRenderStyle(...)`
+  3. 而 `SetRenderStyle(...)` 的第一句就是 `CancelPendingRadarToGaussianShowSwitch()`
+  4. 于是专用 hide overlay 状态被马上 reset,现场又退回共享 `Showing` 轨
+
+### 修复方法
+- 在 `GsplatRenderer` / `GsplatSequenceRenderer` 都新增内部 helper:
+  - `ApplyRenderStyleTransition(...)`
+- 语义拆分为:
+  - 公开 `SetRenderStyle(...)`: 仍保留原有 cancel 语义,服务普通入口
+  - overlap 编排内部: 直接调用 `ApplyRenderStyleTransition(...)`,避免误清专用 hide overlay
+
+### 验证
+- 编译通过:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -nologo`
+- 定向 EditMode 测试通过:
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelaysGaussianShowUntilHalfway`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DelayedFirstTick_DoesNotStartShowBeforeLidarHalfway`
+  - `Gsplat.Tests.GsplatVisibilityAnimationTests.PlayRadarScanToGaussianShowHideSwitch_DisablesLidarOnlyAfterDedicatedHideOverlayCompletes`
+- 整个 `Gsplat.Tests.Editor` 程序集复跑后,与本次改动相关的 dual-track 用例未再失败。

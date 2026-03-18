@@ -353,7 +353,7 @@ namespace Gsplat.Editor
                 "使用下方按钮可播放动画切换:\n" +
                 "- Gaussian/ParticleDots: 时长=RenderStyleSwitchDurationSeconds(默认 easeInOutQuart).\n" +
                 "- RadarScan: RenderStyle 仍用 RenderStyleSwitchDurationSeconds,但雷达淡入/淡出优先用 LidarShowDuration/LidarHideDuration(>=0),否则复用 RenderStyleSwitchDurationSeconds.\n" +
-                "- show-hide-switch-高斯: 先让 RadarScan hide,到 hide 过程过半再触发高斯 show.",
+                "- show-hide-switch-高斯: 走双轨 overlap 切换. 雷达先完整执行 visibility hide,高斯在 hide 过半前一点开始 show,中段允许两者同屏,hide 结束后才关闭 LiDAR.",
                 MessageType.Info);
 
             var anyDurationZero = false;
