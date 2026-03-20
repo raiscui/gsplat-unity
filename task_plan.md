@@ -113,3 +113,26 @@
   - `LATER_PLANS__lidar_scaled_surface_offset.md`
   - `EPIPHANY_LOG__lidar_scaled_surface_offset.md`
   - `ERRORFIX__lidar_scaled_surface_offset.md`
+## [2026-03-18 14:00:00 +0800] [Session ID: a5122445-83f8-4367-a55f-188f1411a83d] 支线索引: __radar_scan_toggle
+
+- 启用原因: 用户希望增加一个开关,可以关闭 RadarScan 的扫描动作效果,但继续保留雷达粒子显示。该需求与当前主线历史任务不同,为了避免混写,启用独立支线上下文集。
+- 支线主题: 追踪 RadarScan 中“扫描动作效果”和“粒子呈现”的职责边界,实现一个只关闭扫描动作、但不影响粒子可见性的配置开关,并完成必要验证。
+- 对应上下文集:
+  - `task_plan__radar_scan_toggle.md`
+  - `notes__radar_scan_toggle.md`
+  - `WORKLOG__radar_scan_toggle.md`
+  - `LATER_PLANS__radar_scan_toggle.md`
+  - `EPIPHANY_LOG__radar_scan_toggle.md`
+  - `ERRORFIX__radar_scan_toggle.md`
+
+## [2026-03-18 15:41:23 +0800] [Session ID: 019cffe2-155b-7932-8e5a-744b6ecdc177] 支线索引: __gaussian_radarscan_dual_track_switch
+
+- 启用原因: 用户要求为现有 `show-hide-switch-高斯` 增加一个反向按钮 `show-hide-switch-雷达`,语义是“高斯先 hide 到 0.35,同时开始雷达 show”。该任务属于新的 OpenSpec 建档工作,和当前主线/其它支线不是同一条任务链,需要独立记录。
+- 支线主题: 为 Gaussian -> RadarScan 的反向 dual-track 切换创建独立 OpenSpec change,明确命名、流程、首个 artifact 模板,并避免与既有 `radarscan-gaussian-dual-track-switch` 混淆。
+- 对应上下文集:
+  - `task_plan__gaussian_radarscan_dual_track_switch.md`
+  - `notes__gaussian_radarscan_dual_track_switch.md`
+  - `WORKLOG__gaussian_radarscan_dual_track_switch.md`
+  - `LATER_PLANS__gaussian_radarscan_dual_track_switch.md`
+  - `EPIPHANY_LOG__gaussian_radarscan_dual_track_switch.md`
+  - `ERRORFIX__gaussian_radarscan_dual_track_switch.md`

@@ -444,6 +444,38 @@ namespace Gsplat.Tests
         }
 
         [Test]
+        public void NewGsplatRenderer_DefaultsLidarEnableScanMotionToTrue()
+        {
+            var go = new GameObject("GsplatRenderer_DefaultScanMotion");
+            try
+            {
+                go.SetActive(false);
+                var renderer = go.AddComponent<GsplatRenderer>();
+                Assert.IsTrue(renderer.LidarEnableScanMotion);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        [Test]
+        public void NewGsplatSequenceRenderer_DefaultsLidarEnableScanMotionToTrue()
+        {
+            var go = new GameObject("GsplatSequenceRenderer_DefaultScanMotion");
+            try
+            {
+                go.SetActive(false);
+                var renderer = go.AddComponent<GsplatSequenceRenderer>();
+                Assert.IsTrue(renderer.LidarEnableScanMotion);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        [Test]
         public void NewGsplatRenderer_DefaultsExternalTargetVisibilityModeToForceRenderingOff()
         {
             var go = new GameObject("GsplatRenderer_DefaultVisibilityMode");

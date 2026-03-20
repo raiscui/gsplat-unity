@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Refined RadarScan AA semantics after visual validation: non-legacy AA modes now reserve a small outer edge fringe so coverage can grow outside the original footprint, `AnalyticCoverage` evaluates edge coverage in pixel-space for clearer small-point differences, and the A2C shell now uses a coverage-first pass instead of reusing the ordinary alpha-blended LiDAR shell.
 - Added `LidarParticleAAFringePixels` so the outward AA fringe width is now user-adjustable instead of fixed in shader code.
 - Added `LidarExternalHitBiasMeters` so external RadarScan hits can be pushed slightly forward along the sensor ray at render time without changing first-return competition or depth-color semantics.
+- Added `LidarEnableScanMotion` to `GsplatRenderer` and `GsplatSequenceRenderer`, allowing RadarScan to keep rendering LiDAR particles while disabling the rotating scan-head / trail animation.
 
 ### Changed
 

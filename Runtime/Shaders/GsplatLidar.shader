@@ -27,6 +27,7 @@ Shader "Gsplat/LiDAR"
         [HideInInspector] _LidarIntensityDistanceDecay("_LidarIntensityDistanceDecay", Float) = 0
         [HideInInspector] _LidarUnscannedIntensityDistanceDecay("_LidarUnscannedIntensityDistanceDecay", Float) = 0
         [HideInInspector] _LidarIntensityDistanceDecayMode("_LidarIntensityDistanceDecayMode", Float) = 0
+        [HideInInspector] _LidarEnableScanMotion("_LidarEnableScanMotion", Float) = 1
     }
     SubShader
     {

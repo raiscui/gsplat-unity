@@ -189,6 +189,7 @@ Default scanning setup (as discussed in the spec):
 - Grid: `LidarBeamCount = 128` beams x `2048 azimuth bins`
 - Update strategy: `LidarUpdateHz = 10` (full 360 range image rebuild every 0.1s)
 - Scan head visualization: `LidarRotationHz = 5` (brightness front + 1-revolution afterglow)
+- Optional sweep-motion switch: `LidarEnableScanMotion = true` by default; set it to `false` when you want a static LiDAR point cloud without the rotating scan head / trail effect
 - Color modes:
   - `Depth` with `LidarDepthNear = 1m`, `LidarDepthFar = 200m` (cyan -> blue -> purple -> red depth gradient)
   - `SplatColorSH0` (samples the hit splat base color from SH0)
@@ -208,6 +209,7 @@ Default scanning setup (as discussed in the spec):
   - `LegacySoftEdge` / `AnalyticCoverage` use the original alpha-blended LiDAR pass
   - A2C modes use a coverage-first pass on MSAA targets
   - Scan head + trail: `LidarTrailGamma`, `LidarIntensity`
+  - Optional sweep-motion bypass: `LidarEnableScanMotion = false` disables scan-head motion and renders the LiDAR particles as a stable full point cloud
   - Optional base intensity (prevents "black after sweep"): `LidarKeepUnscannedPoints`, `LidarUnscannedIntensity`
   - Optional distance attenuation (near stronger, far weaker):
     - `LidarIntensityDistanceDecayMode` (`Reciprocal` / `Exponential`)
@@ -235,6 +237,7 @@ r.LidarDepthOpacity = 1.0f;
 r.LidarPointRadiusPixels = 2.0f;
 r.LidarParticleAntialiasingMode = GsplatLidarParticleAntialiasingMode.AnalyticCoverage;
 r.LidarParticleAAFringePixels = 1.0f;
+r.LidarEnableScanMotion = false; // optional: keep LiDAR particles visible, but stop the rotating scan-head effect
 r.LidarKeepUnscannedPoints = true;
 r.LidarUnscannedIntensity = 0.2f;
 r.LidarIntensityDistanceDecayMode = GsplatLidarDistanceDecayMode.Exponential;
@@ -246,6 +249,7 @@ Manual verification checklist:
 
 - In `Surround360` mode, the 360-degree scan head rotates at ~`LidarRotationHz` (default 5Hz)
 - Scan head rotates and leaves a 1-revolution trail (`LidarTrailGamma`, `LidarIntensity`)
+- When `LidarEnableScanMotion=false`, the rotating scan head / trail disappears and the LiDAR particles stay steadily visible
 - In `CameraFrustum` mode, the scan aperture follows `LidarFrustumCamera` instead of `LidarOrigin`
 - When `LidarKeepUnscannedPoints=true`, points do not fade to black before the next sweep (uses `LidarUnscannedIntensity`)
 - When `Lidar*DistanceDecay > 0`, intensity attenuates with distance (near stronger, far weaker)

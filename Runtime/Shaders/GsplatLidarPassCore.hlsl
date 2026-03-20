@@ -93,6 +93,7 @@
 
             // 扫描前沿/余辉:
             float _LidarRotationHz;
+            float _LidarEnableScanMotion;
             float _LidarTrailGamma;
             float _LidarIntensity;
             float _LidarUnscannedIntensity;
@@ -772,20 +773,24 @@
                 //   1) 先求 360 全局扫描头角度 headAz.
                 //   2) 再求当前 cell 的真实 azimuth center.
                 //   3) 用 wrap 后的 360 角差决定 age.
-                const float kLidarPi = 3.14159265;
-                const float kLidarTwoPi = 6.28318531;
-                float headAz = frac(_LidarTime * _LidarRotationHz) * kLidarTwoPi - kLidarPi;
-                float azimuthSpanRad = max(_LidarAzimuthMaxRad - _LidarAzimuthMinRad, 1.0e-6);
-                float azimuthCenter01 = ((float)azBin + 0.5) / max((float)_LidarAzimuthBins, 1.0);
-                float cellAz = _LidarAzimuthMinRad + azimuthCenter01 * azimuthSpanRad;
-                float deltaAz = headAz - cellAz;
-                if (deltaAz < 0.0)
-                    deltaAz += kLidarTwoPi;
+                float trail01 = 1.0;
+                if (_LidarEnableScanMotion > 0.5)
+                {
+                    const float kLidarPi = 3.14159265;
+                    const float kLidarTwoPi = 6.28318531;
+                    float headAz = frac(_LidarTime * _LidarRotationHz) * kLidarTwoPi - kLidarPi;
+                    float azimuthSpanRad = max(_LidarAzimuthMaxRad - _LidarAzimuthMinRad, 1.0e-6);
+                    float azimuthCenter01 = ((float)azBin + 0.5) / max((float)_LidarAzimuthBins, 1.0);
+                    float cellAz = _LidarAzimuthMinRad + azimuthCenter01 * azimuthSpanRad;
+                    float deltaAz = headAz - cellAz;
+                    if (deltaAz < 0.0)
+                        deltaAz += kLidarTwoPi;
 
-                float age01 = deltaAz / kLidarTwoPi;
-                float t = saturate(1.0 - age01);
-                float trail01 = (_LidarTrailGamma <= 0.0) ? 1.0 : pow(max(t, 1e-6), _LidarTrailGamma);
-                trail01 = saturate(trail01);
+                    float age01 = deltaAz / kLidarTwoPi;
+                    float t = saturate(1.0 - age01);
+                    trail01 = (_LidarTrailGamma <= 0.0) ? 1.0 : pow(max(t, 1e-6), _LidarTrailGamma);
+                    trail01 = saturate(trail01);
+                }
 
                 // 点大小(px radius):
                 // - LegacySoftEdge 仍保持原 footprint.

@@ -415,6 +415,7 @@ namespace Gsplat
         static readonly int k_lidarDepthNear = Shader.PropertyToID("_LidarDepthNear");
         static readonly int k_lidarDepthFar = Shader.PropertyToID("_LidarDepthFar");
         static readonly int k_lidarRotationHz = Shader.PropertyToID("_LidarRotationHz");
+        static readonly int k_lidarEnableScanMotion = Shader.PropertyToID("_LidarEnableScanMotion");
         static readonly int k_lidarTrailGamma = Shader.PropertyToID("_LidarTrailGamma");
         static readonly int k_lidarIntensity = Shader.PropertyToID("_LidarIntensity");
         static readonly int k_lidarUnscannedIntensity = Shader.PropertyToID("_LidarUnscannedIntensity");
@@ -787,7 +788,7 @@ namespace Gsplat
         // --------------------------------------------------------------------
         public bool RenderPointCloud(GsplatSettings settings, Camera camera, int layer, bool gammaToLinear,
             in GsplatLidarLayout layout,
-            Matrix4x4 lidarLocalToWorld, float lidarTime, float rotationHz,
+            Matrix4x4 lidarLocalToWorld, float lidarTime, float rotationHz, bool enableScanMotion,
             float depthNear, float depthFar, float pointRadiusPixels, float particleAaFringePixels,
             GsplatLidarParticleAntialiasingMode requestedParticleAntialiasingMode,
             GsplatLidarParticleAntialiasingMode effectiveParticleAntialiasingMode,
@@ -936,6 +937,7 @@ namespace Gsplat
             m_propertyBlock.SetFloat(k_lidarDepthNear, depthNear);
             m_propertyBlock.SetFloat(k_lidarDepthFar, depthFar);
             m_propertyBlock.SetFloat(k_lidarRotationHz, rotationHz);
+            m_propertyBlock.SetFloat(k_lidarEnableScanMotion, enableScanMotion ? 1.0f : 0.0f);
             m_propertyBlock.SetFloat(k_lidarTrailGamma, Mathf.Max(trailGamma, 0.0f));
             m_propertyBlock.SetFloat(k_lidarIntensity, Mathf.Max(intensity, 0.0f));
             m_propertyBlock.SetFloat(k_lidarUnscannedIntensity,
