@@ -261,6 +261,15 @@ namespace Gsplat
                  "默认 2px,可调.")]
         public float LidarPointRadiusPixels = 2.0f;
 
+        [Range(0.0f, 1.0f)]
+        [Tooltip("LiDAR 点位在每个采样 cell 内的稳定抖动比例(0..1).\n" +
+                 "说明:\n" +
+                 "- 目的: 打散过于规则的 beam x azimuth 栅格,减轻高密度时的摩尔纹.\n" +
+                 "- 0: 完全关闭,保持严格落在 bin center.\n" +
+                 "- 1: 最多抖到半个 cell 的角域范围.\n" +
+                 "- 默认 0.35,在保留传感器结构感的同时减少规则拍频.")]
+        public float LidarPointJitterCellFraction = 0.35f;
+
         [Min(0.0f)]
         [Tooltip("external mesh 命中的 RadarScan 粒子前推距离(米).\n" +
                  "说明:\n" +
@@ -3356,6 +3365,10 @@ namespace Gsplat
                 LidarPointRadiusPixels = 2.0f;
             if (LidarPointRadiusPixels < 0.0f)
                 LidarPointRadiusPixels = 0.0f;
+            if (float.IsNaN(LidarPointJitterCellFraction) || float.IsInfinity(LidarPointJitterCellFraction))
+                LidarPointJitterCellFraction = 0.35f;
+            else
+                LidarPointJitterCellFraction = Mathf.Clamp01(LidarPointJitterCellFraction);
             if (float.IsNaN(LidarExternalHitBiasMeters) || float.IsInfinity(LidarExternalHitBiasMeters))
                 LidarExternalHitBiasMeters = 0.0f;
             if (LidarExternalHitBiasMeters < 0.0f)
@@ -3578,7 +3591,7 @@ namespace Gsplat
             m_lidarScan.RenderPointCloud(settings, targetCam, gameObject.layer, GammaToLinear,
                 layout,
                 lidarLocalToWorld, Time.realtimeSinceStartup, LidarRotationHz, LidarEnableScanMotion,
-                LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels, LidarParticleAAFringePixels,
+                LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels, LidarPointJitterCellFraction, LidarParticleAAFringePixels,
                 LidarParticleAntialiasingMode, effectiveLidarParticleAaMode,
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
                 LidarTrailGamma, LidarIntensity, lidarUnscannedIntensity,
@@ -3638,7 +3651,7 @@ namespace Gsplat
             m_lidarScan.RenderPointCloud(settings, camera, gameObject.layer, GammaToLinear,
                 layout,
                 lidarLocalToWorld, Time.realtimeSinceStartup, LidarRotationHz, LidarEnableScanMotion,
-                LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels, LidarParticleAAFringePixels,
+                LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels, LidarPointJitterCellFraction, LidarParticleAAFringePixels,
                 LidarParticleAntialiasingMode, effectiveLidarParticleAaMode,
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
                 LidarTrailGamma, LidarIntensity, lidarUnscannedIntensity,

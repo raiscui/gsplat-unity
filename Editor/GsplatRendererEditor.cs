@@ -37,6 +37,7 @@ namespace Gsplat.Editor
                 nameof(GsplatRenderer.LidarDepthNear),
                 nameof(GsplatRenderer.LidarDepthFar),
                 nameof(GsplatRenderer.LidarPointRadiusPixels),
+                nameof(GsplatRenderer.LidarPointJitterCellFraction),
                 nameof(GsplatRenderer.LidarExternalHitBiasMeters),
                 nameof(GsplatRenderer.LidarParticleAntialiasingMode),
                 nameof(GsplatRenderer.LidarParticleAAFringePixels),
@@ -285,7 +286,15 @@ namespace Gsplat.Editor
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthFar)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarMinSplatOpacity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarPointRadiusPixels)));
+                EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarPointJitterCellFraction)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarExternalHitBiasMeters)));
+                EditorGUILayout.HelpBox(
+                    "点位分布说明:\n" +
+                    "- `LidarPointJitterCellFraction` 是每个 LiDAR cell 内部的稳定角域微抖动,不是 show/hide 动画的 warp.\n" +
+                    "- 目的: 打散过于均匀的 beam x azimuth 规则栅格,减轻高密度时的摩尔纹.\n" +
+                    "- 0 表示完全关闭,1 表示最多抖到半个 cell.\n" +
+                    "- 这个抖动只影响最终点位显示,不会改变 first return 竞争语义,也不会随时间闪烁.",
+                    MessageType.Info);
                 EditorGUILayout.PropertyField(
                     serializedObject.FindProperty(nameof(GsplatRenderer.LidarParticleAntialiasingMode)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarParticleAAFringePixels)));

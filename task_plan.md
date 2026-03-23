@@ -136,3 +136,15 @@
   - `LATER_PLANS__gaussian_radarscan_dual_track_switch.md`
   - `EPIPHANY_LOG__gaussian_radarscan_dual_track_switch.md`
   - `ERRORFIX__gaussian_radarscan_dual_track_switch.md`
+
+## [2026-03-23 16:37:02 +0800] [Session ID: 20260323_6] 支线索引: __radar_scan_jitter_size
+
+- 启用原因: 用户反馈 RadarScan 粒子在增加位置抖动后,密度调高时出现波纹,并且粒子大小小于 `1` 时显示异常。该问题与既有按钮切换、扫描开关支线不同,需要独立追踪点位扰动、屏幕空间粒径和 shader 覆盖率之间的关系。
+- 支线主题: 按“现象 -> 假设 -> 验证计划 -> 结论”追踪 RadarScan 粒子抖动与小粒径渲染异常,修复高密度波纹和 `size < 1` 的显示问题,并补齐必要验证。
+- 对应上下文集:
+  - `task_plan__radar_scan_jitter_size.md`
+  - `notes__radar_scan_jitter_size.md`
+  - `WORKLOG__radar_scan_jitter_size.md`
+  - `LATER_PLANS__radar_scan_jitter_size.md`
+  - `EPIPHANY_LOG__radar_scan_jitter_size.md`
+  - `ERRORFIX__radar_scan_jitter_size.md`

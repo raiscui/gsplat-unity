@@ -386,9 +386,12 @@ namespace Gsplat
         static readonly int k_gammaToLinear = Shader.PropertyToID("_GammaToLinear");
         static readonly int k_splatInstanceSize = Shader.PropertyToID("_SplatInstanceSize");
         static readonly int k_lidarBeamCount = Shader.PropertyToID("_LidarBeamCount");
+        static readonly int k_lidarBeamMinRad = Shader.PropertyToID("_LidarBeamMinRad");
+        static readonly int k_lidarBeamMaxRad = Shader.PropertyToID("_LidarBeamMaxRad");
         static readonly int k_lidarMatrixL2W = Shader.PropertyToID("_LidarMatrixL2W");
         static readonly int k_lidarMatrixW2M = Shader.PropertyToID("_LidarMatrixW2M");
         static readonly int k_lidarPointRadiusPixels = Shader.PropertyToID("_LidarPointRadiusPixels");
+        static readonly int k_lidarPointJitterCellFraction = Shader.PropertyToID("_LidarPointJitterCellFraction");
         static readonly int k_lidarParticleAaAnalyticCoverage = Shader.PropertyToID("_LidarParticleAAAnalyticCoverage");
         static readonly int k_lidarParticleAaFringePixels = Shader.PropertyToID("_LidarParticleAAFringePixels");
         static readonly int k_lidarExternalHitBiasMeters = Shader.PropertyToID("_LidarExternalHitBiasMeters");
@@ -789,7 +792,7 @@ namespace Gsplat
         public bool RenderPointCloud(GsplatSettings settings, Camera camera, int layer, bool gammaToLinear,
             in GsplatLidarLayout layout,
             Matrix4x4 lidarLocalToWorld, float lidarTime, float rotationHz, bool enableScanMotion,
-            float depthNear, float depthFar, float pointRadiusPixels, float particleAaFringePixels,
+            float depthNear, float depthFar, float pointRadiusPixels, float pointJitterCellFraction, float particleAaFringePixels,
             GsplatLidarParticleAntialiasingMode requestedParticleAntialiasingMode,
             GsplatLidarParticleAntialiasingMode effectiveParticleAntialiasingMode,
             GsplatLidarColorMode colorMode, float colorBlend01, float visibility01,
@@ -870,9 +873,15 @@ namespace Gsplat
             m_propertyBlock.SetInt(k_lidarBeamCount, beamCount);
             m_propertyBlock.SetFloat(k_lidarAzimuthMinRad, layout.AzimuthMinRad);
             m_propertyBlock.SetFloat(k_lidarAzimuthMaxRad, layout.AzimuthMaxRad);
+            m_propertyBlock.SetFloat(k_lidarBeamMinRad, layout.BeamMinRad);
+            m_propertyBlock.SetFloat(k_lidarBeamMaxRad, layout.BeamMaxRad);
             m_propertyBlock.SetMatrix(k_lidarMatrixL2W, lidarLocalToWorld);
             m_propertyBlock.SetMatrix(k_lidarMatrixW2M, worldToModel);
             m_propertyBlock.SetFloat(k_lidarPointRadiusPixels, Mathf.Max(pointRadiusPixels, 0.0f));
+            m_propertyBlock.SetFloat(k_lidarPointJitterCellFraction,
+                (float.IsNaN(pointJitterCellFraction) || float.IsInfinity(pointJitterCellFraction))
+                    ? 0.35f
+                    : Mathf.Clamp01(pointJitterCellFraction));
             m_propertyBlock.SetFloat(k_lidarParticleAaAnalyticCoverage,
                 GsplatUtils.UsesLidarParticleAnalyticCoverage(effectiveParticleAntialiasingMode) ? 1.0f : 0.0f);
             m_propertyBlock.SetFloat(k_lidarParticleAaFringePixels, Mathf.Max(particleAaFringePixels, 0.0f));

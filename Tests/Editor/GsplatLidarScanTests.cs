@@ -340,6 +340,7 @@ namespace Gsplat.Tests
             r.LidarDepthFar = 0.5f;
 
             r.LidarPointRadiusPixels = float.NegativeInfinity;
+            r.LidarPointJitterCellFraction = float.NaN;
             r.LidarParticleAntialiasingMode = (GsplatLidarParticleAntialiasingMode)123;
             r.LidarParticleAAFringePixels = float.NaN;
             r.LidarExternalHitBiasMeters = float.PositiveInfinity;
@@ -386,6 +387,7 @@ namespace Gsplat.Tests
             r.LidarDepthFar = 0.5f;
 
             r.LidarPointRadiusPixels = float.NegativeInfinity;
+            r.LidarPointJitterCellFraction = float.NaN;
             r.LidarParticleAntialiasingMode = (GsplatLidarParticleAntialiasingMode)123;
             r.LidarParticleAAFringePixels = float.NaN;
             r.LidarExternalHitBiasMeters = float.PositiveInfinity;
@@ -946,6 +948,7 @@ namespace Gsplat.Tests
             Assert.AreEqual(2.0f, r.LidarDepthFar);
 
             Assert.AreEqual(2.0f, r.LidarPointRadiusPixels);
+            Assert.AreEqual(0.35f, r.LidarPointJitterCellFraction, 1e-6f);
             Assert.AreEqual(GsplatLidarParticleAntialiasingMode.LegacySoftEdge, r.LidarParticleAntialiasingMode);
             Assert.AreEqual(1.0f, r.LidarParticleAAFringePixels);
             Assert.AreEqual(0.0f, r.LidarExternalHitBiasMeters);
@@ -989,6 +992,7 @@ namespace Gsplat.Tests
             Assert.AreEqual(2048, r.LidarAzimuthBins);
             Assert.AreEqual(GsplatUtils.k_LidarDefaultBeamCount, r.LidarBeamCount);
             Assert.AreEqual(2.0f, r.LidarDepthFar);
+            Assert.AreEqual(0.35f, r.LidarPointJitterCellFraction, 1e-6f);
             Assert.AreEqual(GsplatLidarParticleAntialiasingMode.LegacySoftEdge, r.LidarParticleAntialiasingMode);
             Assert.AreEqual(1.0f, r.LidarParticleAAFringePixels);
             Assert.AreEqual(0.0f, r.LidarExternalHitBiasMeters);
@@ -1086,6 +1090,53 @@ namespace Gsplat.Tests
 
             InvokeValidateLidarSerializedFields(r, nameof(GsplatSequenceRenderer));
             Assert.AreEqual(1234.5f, r.LidarShowHideWarpPixels, 1e-6f);
+        }
+
+        [Test]
+        public void ValidateLidarSerializedFields_PreservesSubpixelPointRadius_GsplatRenderer()
+        {
+            // 说明:
+            // - 本轮用户反馈的是“<1px 显示异常”,不是“Inspector 不允许输入 <1”.
+            // - 因此先锁定 C# 侧语义: 合法的 subpixel 值必须原样保留,不要在 validate 阶段被偷偷抬回 1.
+            var r = (GsplatRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatRenderer));
+            r.EnableLidarScan = true;
+            r.LidarPointRadiusPixels = 0.35f;
+
+            InvokeValidateLidarSerializedFields(r, nameof(GsplatRenderer));
+            Assert.AreEqual(0.35f, r.LidarPointRadiusPixels, 1e-6f);
+        }
+
+        [Test]
+        public void ValidateLidarSerializedFields_PreservesSubpixelPointRadius_GsplatSequenceRenderer()
+        {
+            var r = (GsplatSequenceRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatSequenceRenderer));
+            r.EnableLidarScan = true;
+            r.LidarPointRadiusPixels = 0.35f;
+
+            InvokeValidateLidarSerializedFields(r, nameof(GsplatSequenceRenderer));
+            Assert.AreEqual(0.35f, r.LidarPointRadiusPixels, 1e-6f);
+        }
+
+        [Test]
+        public void ValidateLidarSerializedFields_ClampsPointJitterCellFractionToUnitInterval_GsplatRenderer()
+        {
+            var r = (GsplatRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatRenderer));
+            r.EnableLidarScan = true;
+            r.LidarPointJitterCellFraction = 1.7f;
+
+            InvokeValidateLidarSerializedFields(r, nameof(GsplatRenderer));
+            Assert.AreEqual(1.0f, r.LidarPointJitterCellFraction, 1e-6f);
+        }
+
+        [Test]
+        public void ValidateLidarSerializedFields_ClampsPointJitterCellFractionToUnitInterval_GsplatSequenceRenderer()
+        {
+            var r = (GsplatSequenceRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatSequenceRenderer));
+            r.EnableLidarScan = true;
+            r.LidarPointJitterCellFraction = 1.7f;
+
+            InvokeValidateLidarSerializedFields(r, nameof(GsplatSequenceRenderer));
+            Assert.AreEqual(1.0f, r.LidarPointJitterCellFraction, 1e-6f);
         }
 
         [Test]

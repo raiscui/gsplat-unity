@@ -24,6 +24,8 @@
             float _LidarAzimuthMinRad;
             float _LidarAzimuthMaxRad;
             int _LidarBeamCount;
+            float _LidarBeamMinRad;
+            float _LidarBeamMaxRad;
 
             // LiDAR 位姿:
             // - local->world
@@ -34,6 +36,10 @@
 
             // 点大小(px radius)
             float _LidarPointRadiusPixels;
+            // 每个 LiDAR cell 内的稳定点位抖动比例(0..1):
+            // - 0: 关闭,严格落在 bin center.
+            // - 1: 最多抖到半个 cell 的角域范围.
+            float _LidarPointJitterCellFraction;
             // LiDAR 粒子本地 AA:
             // - 0: LegacySoftEdge
             // - 1: AnalyticCoverage
@@ -400,6 +406,28 @@
                 return HsvToRgb(float3(h, 1.0, 1.0));
             }
 
+            float ResolveLidarSubpixelCoverageSupportPx(float pointRadiusPxRaw)
+            {
+                // 子像素支撑半径:
+                // - 当真实点半径已经小于 1px 时,如果仍让 billboard 几何和 coverage 过渡都严格贴着真实半径,
+                //   标准像素中心采样就可能完全打不到 fragment,用户看到的结果就会像“粒子消失”.
+                // - 因此这里额外保留 1px 的 screen-space support,但只用于 raster / coverage,
+                //   不改变真实点半径本身的视觉语义.
+                return (pointRadiusPxRaw > 1.0e-4 && pointRadiusPxRaw < 1.0) ? 1.0 : 0.0;
+            }
+
+            float ResolveLidarCoveragePadPx(float pointRadiusPxRaw, float coverageAaEnabled)
+            {
+                // coverage 支撑宽度:
+                // - 非 Legacy 的 AA 模式继续沿用可调 fringe.
+                // - 对 <1px 的 subpixel 点,即使还在 Legacy 路径,也要至少保留 1px 支撑空间,
+                //   否则几何和 coverage 都可能退化到“完全没有可见片元”.
+                float aaFringePadPx =
+                    (coverageAaEnabled > 0.5 && pointRadiusPxRaw > 1.0e-4) ? max(_LidarParticleAAFringePixels, 0.0) : 0.0;
+                float subpixelCoverageSupportPx = ResolveLidarSubpixelCoverageSupportPx(pointRadiusPxRaw);
+                return max(aaFringePadPx, subpixelCoverageSupportPx);
+            }
+
             bool InitLidarSource(appdata v, out uint cellId, out uint beamIndex, out uint azBin)
             {
                 cellId = 0;
@@ -469,6 +497,31 @@
                 float2 azSC = _LidarAzSinCos[azBin]; // (sin,cos)
                 float2 beSC = _LidarBeamSinCos[beamIndex]; // (sin,cos)
                 float3 dirLocal = float3(azSC.x * beSC.y, beSC.x, azSC.y * beSC.y);
+
+                // 稳定 in-cell jitter:
+                // - 当前 LiDAR 点默认落在每个 cell 的中心,密度一高就容易形成规则栅格拍频/摩尔纹.
+                // - 这里在“当前 cell 的角域范围内”加入稳定小抖动,打散规则分布,但不改变 first return 竞争结果.
+                // - 抖动只依赖 cellId,不会随时间闪烁.
+                float pointJitterCellFraction = saturate(_LidarPointJitterCellFraction);
+                if (pointJitterCellFraction > 1.0e-4)
+                {
+                    float azimuthSpanRad = max(_LidarAzimuthMaxRad - _LidarAzimuthMinRad, 1.0e-6);
+                    float beamSpanRad = max(_LidarBeamMaxRad - _LidarBeamMinRad, 1.0e-6);
+                    float azimuthStepRad = azimuthSpanRad / max((float)_LidarAzimuthBins, 1.0);
+                    float beamStepRad = beamSpanRad / max((float)_LidarBeamCount, 1.0);
+
+                    float2 cellJitter01 = float2(
+                        Hash13(float3((float)cellId, 17.13, 31.77)),
+                        Hash13(float3((float)cellId, 53.11, 12.77)));
+                    float2 cellJitterSigned = cellJitter01 * 2.0 - 1.0;
+                    float jitterScale = 0.5 * pointJitterCellFraction;
+                    float jitterAzRad = cellJitterSigned.x * jitterScale * azimuthStepRad;
+                    float jitterBeamRad = cellJitterSigned.y * jitterScale * beamStepRad;
+
+                    float3 azimuthTangent = float3(azSC.y * beSC.y, 0.0, -azSC.x * beSC.y);
+                    float3 beamTangent = float3(-azSC.x * beSC.x, beSC.y, -azSC.y * beSC.x);
+                    dirLocal = normalize(dirLocal + azimuthTangent * jitterAzRad + beamTangent * jitterBeamRad);
+                }
 
                 float3 worldPos = mul(_LidarMatrixL2W, float4(dirLocal * renderRange, 1.0)).xyz;
 
@@ -799,8 +852,8 @@
                 float rPx = max(_LidarPointRadiusPixels, 0.0);
                 float analyticCoverageWeight = saturate(_LidarParticleAAAnalyticCoverage);
                 float coverageAaEnabled = max(analyticCoverageWeight, (float)GSPLAT_LIDAR_A2C_PASS);
-                float aaFringePadPx = (coverageAaEnabled > 0.5 && rPx > 1.0e-4) ? max(_LidarParticleAAFringePixels, 0.0) : 0.0;
-                float paddedRadiusPx = rPx + aaFringePadPx;
+                float coveragePadPx = ResolveLidarCoveragePadPx(rPx, coverageAaEnabled);
+                float paddedRadiusPx = rPx + coveragePadPx;
                 float uvScale = (rPx > 1.0e-4) ? (paddedRadiusPx / rPx) : 1.0;
                 float2 c = proj.ww / _ScreenParams.xy;
                 float2 offset = float2(v.vertex.x, v.vertex.y) * paddedRadiusPx * c;
@@ -832,19 +885,25 @@
                 // - 另外,非 Legacy 路线会给原始边界外多留 1px fringe 几何空间,
                 //   这样 AA 才不是只在原 footprint 里“往里软”.
                 const float kSquareFeather = 0.10;
-                float pointRadiusPx = max(_LidarPointRadiusPixels, 1.0);
-                float aaFringePadPx = (coverageAaEnabled > 0.5 && _LidarPointRadiusPixels > 1.0e-4) ? max(_LidarParticleAAFringePixels, 0.0) : 0.0;
-                float outerLimit = 1.0 + aaFringePadPx / pointRadiusPx;
+                // 子像素点保护:
+                // - 之前这里把 pointRadius 直接抬到 >=1px,导致 0..1px 区间被折叠成同一套 coverage 语义.
+                // - 结果就是用户把粒径调到 0.25/0.5/0.75 时,视觉变化不连续,看起来像“<1 就不正常”.
+                // - 这里保留真实半径,只在除零保护时使用极小 epsilon.
+                float pointRadiusPxRaw = max(_LidarPointRadiusPixels, 0.0);
+                float pointRadiusPx = max(pointRadiusPxRaw, 1.0e-4);
+                float subpixelCoverageSupportPx = ResolveLidarSubpixelCoverageSupportPx(pointRadiusPxRaw);
+                float coveragePadPx = ResolveLidarCoveragePadPx(pointRadiusPxRaw, coverageAaEnabled);
+                float outerLimit = 1.0 + coveragePadPx / pointRadiusPx;
                 if (d > outerLimit) discard;
                 float inner = 1.0 - kSquareFeather;
                 float legacyAlphaShape = 1.0 - smoothstep(inner, 1.0, d);
                 float signedEdge = 1.0 - d;
                 float signedEdgePx = signedEdge * pointRadiusPx;
-                float fixedCoverageAlphaShape = saturate(signedEdgePx / max(aaFringePadPx, 1.0e-4) + 0.5);
+                float fixedCoverageAlphaShape = saturate(signedEdgePx / max(coveragePadPx, 1.0e-4) + 0.5);
                 float analyticWidthPx = max(fwidth(signedEdgePx), 1.0e-4);
                 float analyticAlphaShape = saturate(signedEdgePx / analyticWidthPx + 0.5);
                 float alphaShape = legacyAlphaShape;
-                if (coverageAaEnabled > 0.5)
+                if (coverageAaEnabled > 0.5 || subpixelCoverageSupportPx > 0.0)
                 {
                     // A2C-only:
                     // - 使用固定 1px fringe 的 coverage ramp.
