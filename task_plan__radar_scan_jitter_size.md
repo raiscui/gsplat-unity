@@ -160,3 +160,48 @@
 
 **目前在阶段1(已完成 change 创建)**
 - 正在读取 proposal 的官方模板与说明。
+
+## [2026-03-23 21:02:50 +0800] [Session ID: 20260323_9] 阶段进展: 继续执行 openspec-ff-change
+
+- [x] 阶段1: 计划和设置
+  - 已确认本轮继续沿用已创建的 OpenSpec change: `lidar-external-capture-supersampling`。
+  - 已确认当前 artifact 状态:
+    - `proposal = done`
+    - `design = ready`
+    - `specs = ready`
+    - `tasks = blocked by design/specs`
+- [ ] 阶段2: 研究/收集信息
+  - 已读取 `openspec instructions design/specs` 的官方约束。
+  - 已读取相近 change:
+    - `lidar-camera-frustum-external-gpu-scan`
+    - `lidar-external-targets`
+  - 下一步先把 research 结论落到 `notes__radar_scan_jitter_size.md`,再一次性生成 `design.md` 与 `spec.md`。
+- [ ] 阶段3: 执行/构建
+  - 在 `design/specs` 完成后,继续生成 `tasks.md`。
+- [ ] 阶段4: 审查和交付
+  - 最后重新跑 `openspec status`,确认该 change 进入 apply-ready。
+
+## 状态
+
+**目前在阶段2**
+- 正在把方案1的 OpenSpec 研究结论写入支线上下文。
+- 下一步是正式落 `design.md` 和 capability `spec.md`。
+
+## [2026-03-23 21:14:02 +0800] [Session ID: 20260323_9] 阶段完成: OpenSpec change 已快进到 apply-ready
+
+- [x] 阶段2: 研究/收集信息
+  - 已完成 `design/specs/tasks` 的官方模板与相近 change 参考阅读。
+  - 已把 external capture supersampling 的静态证据和设计边界追加到 `notes__radar_scan_jitter_size.md`。
+- [x] 阶段3: 执行/构建
+  - 已创建 `openspec/changes/lidar-external-capture-supersampling/design.md`。
+  - 已创建 `openspec/changes/lidar-external-capture-supersampling/specs/gsplat-lidar-external-capture-quality/spec.md`。
+  - 已创建 `openspec/changes/lidar-external-capture-supersampling/tasks.md`。
+- [x] 阶段4: 审查和交付
+  - 已执行 `openspec status --change "lidar-external-capture-supersampling"`。
+  - 结果为 `4/4 artifacts complete`, change 已进入 apply-ready。
+
+## 状态
+
+**目前在阶段4(本轮 openspec-ff-change 已完成)**
+- 方案1对应的 OpenSpec change 已经具备 `proposal/design/specs/tasks` 全套 artifact。
+- 下一步如继续,就可以直接进入实现阶段,例如 `/opsx:apply` 或继续让我按 tasks 落代码。

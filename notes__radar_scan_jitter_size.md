@@ -258,6 +258,62 @@ PY
 ### `Tests/Editor/GsplatLidarShaderPropertyTests.cs`
 
 - 把 shader 契约测试同步到新语义:
+
+## [2026-03-23 21:02:50 +0800] [Session ID: 20260323_9] 笔记: external capture supersampling 方案1的 OpenSpec 设计依据
+
+## 现象
+
+- 用户希望继续推进“方案1”,即通过 external capture supersampling 缓解 frustum external GPU capture 的 depth 台阶。
+- 当前目标不是直接改实现代码,而是先把 OpenSpec change 快进到可实施状态。
+
+## 已确认的静态证据
+
+### 来源1: `Runtime/Lidar/GsplatLidarExternalGpuCapture.cs`
+
+- external capture 创建的 RT 当前使用:
+  - `filterMode = FilterMode.Point`
+  - `antiAliasing = 1`
+- 这说明 capture 结果本身没有依赖硬件 MSAA 做平滑。
+
+### 来源2: `Runtime/Shaders/Gsplat.compute`
+
+- `ResolveExternalFrustumHits` 当前会把 `uv` 直接映射成整数像素:
+  - `int2 staticPixel = int2(...)`
+- 然后使用:
+  - `_LidarExternalStaticLinearDepthTex.Load(int3(staticPixel, 0)).x`
+- dynamic external 路径也是同样模式。
+- 这说明当前 resolve 是典型的 point texel read,不是 bilinear,也不是 neighborhood-aware resolve。
+
+### 来源3: `Runtime/Shaders/GsplatLidarExternalCapture.shader`
+
+- external capture 写入的是最近表面的线性 view depth。
+- 这是一张离散屏幕空间 depth 图,不是连续几何求交结果。
+
+## 当前结论
+
+- 对于 frustum external GPU capture 这条链路来说,“depth 基于像素采样而产生台阶感”已经有代码证据支撑。
+- 但这不能外推成“高密度波纹细缝全部都由 depth 台阶单独造成”。
+- 当前更稳妥的 OpenSpec 方案1应该是:
+  - 先提高 external capture 的离屏分辨率
+  - 继续保留 point resolve 与 nearest-surface / nearest-hit 语义
+  - 暂不引入 blur、naive bilinear 深度混合、edge-aware resolve
+
+## 最强备选解释
+
+- 备选解释A: 轮廓台阶确实能被 supersampling 缓解,但规则 LiDAR 栅格自身的 moire 仍会残留。
+- 备选解释B: 如果直接做 blur 或 bilinear 深度混合,虽然边缘看起来更“顺”,但前后表面可能被错误混合,反而破坏 first-hit 语义。
+
+## 对 OpenSpec artifact 的影响
+
+- `design.md` 需要明确:
+  - 方案1是“提高 capture fidelity”,不是“改变 depth resolve 语义”
+  - `Scale` 模式是首选质量入口
+  - 风险主要是显存/带宽/性能开销,不是语义变化
+- capability spec 需要锁定:
+  - supersampling 是正式支持的质量路径
+  - `Scale` 模式下分辨率推导必须可预测
+  - supersampling 不得改变最近表面选择语义
+  - 文档/Inspector 要把它作为台阶问题的推荐缓解手段
   - 锁定 `ResolveLidarSubpixelCoverageSupportPx`
   - 锁定 `ResolveLidarCoveragePadPx`
   - 锁定 `<1px` 时会启用额外 coverage support,而不是回到旧的 `max(..., 1.0)` 语义
@@ -421,3 +477,12 @@ dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal
 - 为“external capture 超采样降低 depth 台阶”创建独立 OpenSpec change。
 - change 名称采用: `lidar-external-capture-supersampling`
 - 这样后续可以单独跟踪 proposal / design / tasks,避免把实现意图散落在临时对话里。
+
+## [2026-03-23 17:24:59] [Session ID: 20260323_8] 笔记: 已创建 supersampling change 的 proposal
+
+- artifact: `openspec/changes/lidar-external-capture-supersampling/proposal.md`
+- capability 命名: `gsplat-lidar-external-capture-quality`
+- proposal 重点:
+  - external depth 的 texel 阶梯问题
+  - supersampling 作为低风险优先方案
+  - 不先引入更重的 edge-aware resolve
