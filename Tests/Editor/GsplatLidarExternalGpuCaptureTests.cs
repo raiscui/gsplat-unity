@@ -315,6 +315,56 @@ namespace Gsplat.Tests
         }
 
         [Test]
+        public void ExternalGpuCapture_DebugResolveCaptureSizeForInputs_SanitizesInvalidScaleAndSupportsDownsample()
+        {
+            var cameraGo = new GameObject("ExternalGpuCapture_CaptureSizeScaleSanitizeCamera");
+
+            try
+            {
+                var camera = cameraGo.AddComponent<Camera>();
+                camera.orthographic = false;
+                camera.fieldOfView = 60.0f;
+                camera.aspect = 16.0f / 9.0f;
+                camera.pixelRect = new Rect(0.0f, 0.0f, 640.0f, 360.0f);
+
+                var layout = InvokeCreateCameraFrustumLayout(camera, 2048, 128, 10.0f, -30.0f);
+                var autoSize = InvokeDebugResolveCaptureSizeForInputs(camera,
+                    layout,
+                    GsplatLidarExternalCaptureResolutionMode.Auto,
+                    1.0f,
+                    new Vector2Int(1920, 1080));
+
+                Assert.AreEqual(autoSize,
+                    InvokeDebugResolveCaptureSizeForInputs(camera,
+                        layout,
+                        GsplatLidarExternalCaptureResolutionMode.Scale,
+                        float.NaN,
+                        new Vector2Int(1920, 1080)),
+                    "非法 scale 应回退到 Auto 基准尺寸,而不是生成未定义 capture size.");
+
+                Assert.AreEqual(autoSize,
+                    InvokeDebugResolveCaptureSizeForInputs(camera,
+                        layout,
+                        GsplatLidarExternalCaptureResolutionMode.Scale,
+                        -2.0f,
+                        new Vector2Int(1920, 1080)),
+                    "负数 scale 应回退到 Auto 基准尺寸.");
+
+                Assert.AreEqual(new Vector2Int(320, 180),
+                    InvokeDebugResolveCaptureSizeForInputs(camera,
+                        layout,
+                        GsplatLidarExternalCaptureResolutionMode.Scale,
+                        0.5f,
+                        new Vector2Int(1920, 1080)),
+                    "合法的 `Scale < 1` 应继续作为 downsample 工作,而不是被强行钳回 Auto.");
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(cameraGo);
+            }
+        }
+
+        [Test]
         public void ExternalGpuCaptureShader_UsesCullOffAndHardwareDepthToPreferNearestVisibleSurface()
         {
             const string kShaderAssetPath = "Packages/wu.yize.gsplat/Runtime/Shaders/GsplatLidarExternalCapture.shader";
@@ -366,6 +416,14 @@ namespace Gsplat.Tests
                 computeText);
             StringAssert.Contains("float linearDepth = _LidarExternalDynamicLinearDepthTex.Load(int3(dynamicPixel, 0)).x;",
                 computeText);
+            Assert.IsFalse(computeText.Contains("_LidarExternalStaticLinearDepthTex.Sample("),
+                "external static depth resolve 应保持 point texel read,不要偷偷切成 bilinear Sample.");
+            Assert.IsFalse(computeText.Contains("_LidarExternalDynamicLinearDepthTex.Sample("),
+                "external dynamic depth resolve 应保持 point texel read,不要偷偷切成 bilinear Sample.");
+            Assert.IsFalse(computeText.Contains("_LidarExternalStaticLinearDepthTex.SampleLevel("),
+                "static depth resolve 不应通过 SampleLevel 做额外纹理过滤.");
+            Assert.IsFalse(computeText.Contains("_LidarExternalDynamicLinearDepthTex.SampleLevel("),
+                "dynamic depth resolve 不应通过 SampleLevel 做额外纹理过滤.");
             Assert.IsFalse(computeText.Contains("float linearDepth = rcp(encodedDepth);"),
                 "Resolve 不应再把 capture texture 当作 encoded depth 解码.");
         }
@@ -388,6 +446,32 @@ namespace Gsplat.Tests
                 "depth pass 必须按平台使用正确的 clearDepth,否则 reversed-Z 平台会稳定留下 far side.");
             StringAssert.Contains("m_cmd.ClearRenderTarget(false, true, Color.clear);", sourceText,
                 "Surface color pass 必须保留上一 pass 的 depth buffer,否则无法稳定锁定最近表面颜色.");
+        }
+
+        [Test]
+        public void ExternalGpuCaptureSource_KeepsDepthAndSurfaceColorCaptureDimensionsAligned()
+        {
+            const string kSourceAssetPath = "Packages/wu.yize.gsplat/Runtime/Lidar/GsplatLidarExternalGpuCapture.cs";
+
+            var projectRoot = Directory.GetParent(Application.dataPath);
+            Assert.IsNotNull(projectRoot, "Failed to resolve Unity project root from Application.dataPath.");
+
+            var sourceFullPath = Path.Combine(projectRoot.FullName, kSourceAssetPath);
+            Assert.IsTrue(File.Exists(sourceFullPath), $"Expected source file to exist: {sourceFullPath}");
+
+            var sourceText = File.ReadAllText(sourceFullPath);
+            StringAssert.Contains(
+                "buffers.LinearDepthTexture = CreateColorTexture(\"GsplatLiDARExternalLinearDepth\", captureWidth, captureHeight,",
+                sourceText,
+                "linearDepth capture 必须与 supersampled capture 宽高保持一致.");
+            StringAssert.Contains(
+                "buffers.SurfaceColorTexture = CreateColorTexture(\"GsplatLiDARExternalSurfaceColor\", captureWidth, captureHeight,",
+                sourceText,
+                "surfaceColor capture 必须与 supersampled capture 宽高保持一致.");
+            StringAssert.Contains(
+                "buffers.DepthStencilTexture = new RenderTexture(captureWidth, captureHeight, 24, RenderTextureFormat.Depth)",
+                sourceText,
+                "depth/stencil 也必须与 depth/color capture 使用同一套 capture 尺寸.");
         }
 
         [Test]

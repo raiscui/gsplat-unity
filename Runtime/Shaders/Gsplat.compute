@@ -290,6 +290,9 @@ void ResolveExternalFrustumHits(uint3 id : SV_DispatchThreadID)
     int staticCaptureHeight = (int)_LidarExternalStaticCaptureSize.y;
     if (staticCaptureWidth > 0 && staticCaptureHeight > 0)
     {
+        // 方案1的质量策略:
+        // - supersampling 只提高 capture RT 分辨率,降低 texel 量化台阶.
+        // - resolve 仍然保持 point texel read,不做 bilinear / blur,避免跨边界混合前后表面.
         int2 staticPixel = int2(
             min((int)(uv.x * (float)staticCaptureWidth), staticCaptureWidth - 1),
             min((int)(uv.y * (float)staticCaptureHeight), staticCaptureHeight - 1));
@@ -314,6 +317,9 @@ void ResolveExternalFrustumHits(uint3 id : SV_DispatchThreadID)
     int dynamicCaptureHeight = (int)_LidarExternalDynamicCaptureSize.y;
     if (dynamicCaptureWidth > 0 && dynamicCaptureHeight > 0)
     {
+        // dynamic 路径与 static 路径保持同一语义:
+        // - 同样用 point texel read 读取最近表面的 depth / color
+        // - 只允许 capture fidelity 不同,不允许 resolve 规则不同
         int2 dynamicPixel = int2(
             min((int)(uv.x * (float)dynamicCaptureWidth), dynamicCaptureWidth - 1),
             min((int)(uv.y * (float)dynamicCaptureHeight), dynamicCaptureHeight - 1));

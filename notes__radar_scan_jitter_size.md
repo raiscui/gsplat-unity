@@ -314,6 +314,59 @@ PY
   - `Scale` 模式下分辨率推导必须可预测
   - supersampling 不得改变最近表面选择语义
   - 文档/Inspector 要把它作为台阶问题的推荐缓解手段
+
+## [2026-03-23 22:07:39 +0800] [Session ID: 20260323_10] 笔记: OpenSpec 落地前的差距核对与最终实施口径
+
+## 现象
+
+- OpenSpec 的 `design/spec/tasks` 已经齐了,但真正落代码前,需要分清楚“哪些能力代码里已经有了,哪些还只是 spec 里写了”。
+- 首轮核对后发现:
+  - `Auto / Scale / Explicit` 的 runtime 逻辑已经存在
+  - Inspector 也已经有基础说明
+  - README / CHANGELOG 也已经有大部分 external capture resolution 说明
+- 真正还缺的是:
+  - 更明确的“推荐怎么用”提示
+  - 更硬的回归测试,锁死 point texel read 与 depth/color layout 一致性
+
+## 当前主结论
+
+- 这次落地不需要重写 `GsplatLidarExternalGpuCapture` 的核心逻辑。
+- 更正确的做法是:
+  - 保留现有 capture-size 与 point resolve 实现
+  - 补足注释 / tooltip / Inspector help box / README / CHANGELOG 的设计口径
+  - 补足针对 invalid scale、point texel read、depth/color 同尺寸的测试护栏
+
+## 已补的关键护栏
+
+- runtime tooltip:
+  - 明确 `Scale > 1` 是 external depth stair-stepping 的推荐缓解手段
+  - 明确更高分辨率会增加显存 / 带宽 / capture 成本
+  - 明确这是提高 capture fidelity,不是改成 blur / bilinear depth 混合
+- compute / helper 注释:
+  - 明确方案1保留 point texel read
+  - 明确 `scale = 1` 继续等价于 Auto 基准尺寸
+  - 明确 depth / surfaceColor / depthStencil 必须共享同一 capture 尺寸
+- tests:
+  - invalid scale 会回退到 Auto 基准尺寸
+  - `Scale < 1` 仍能作为合法 downsample 工作
+  - external resolve 不允许偷偷改成 `Sample` / `SampleLevel`
+  - depth / surfaceColor / depthStencil 三者 capture 尺寸保持一致
+
+## 动态验证结果
+
+- `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - 结果: 成功, `0 warning / 0 error`
+- Unity EditMode targeted run:
+  - command filter: `Gsplat.Tests.GsplatLidarExternalGpuCaptureTests`
+  - 结果: `11 passed / 0 failed / 0 skipped`
+
+## 最终结论
+
+- `lidar-external-capture-supersampling` 这次实现已经把“方案1”的设计边界正式落进代码、文档和测试。
+- 当前 supersampling 路线的口径已经清晰:
+  - 推荐先调 `Scale > 1`
+  - 保持 point-based nearest-surface resolve
+  - 不把 blur / bilinear 深度混合混进方案1
   - 锁定 `ResolveLidarSubpixelCoverageSupportPx`
   - 锁定 `ResolveLidarCoveragePadPx`
   - 锁定 `<1px` 时会启用额外 coverage support,而不是回到旧的 `max(..., 1.0)` 语义

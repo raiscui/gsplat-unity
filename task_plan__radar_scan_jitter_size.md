@@ -205,3 +205,46 @@
 **目前在阶段4(本轮 openspec-ff-change 已完成)**
 - 方案1对应的 OpenSpec change 已经具备 `proposal/design/specs/tasks` 全套 artifact。
 - 下一步如继续,就可以直接进入实现阶段,例如 `/opsx:apply` 或继续让我按 tasks 落代码。
+
+## [2026-03-23 22:07:39 +0800] [Session ID: 20260323_10] 阶段进展: 开始实施 `lidar-external-capture-supersampling`
+
+- [ ] 阶段3: 执行/构建
+  - 已按 `openspec instructions apply` 确认当前 schema=`spec-driven`, apply state=`ready`。
+  - 当前进度为 `0/13 tasks complete`。
+  - 下一步先核对 runtime / editor / tests / docs 的现状,分辨哪些任务已被现有代码部分覆盖,哪些仍需要真正补实现。
+- [ ] 阶段4: 运行验证,记录结论与后续事项
+  - 本轮需要在代码落地后更新 `openspec` task checkbox,并跑相关 EditMode 验证。
+
+## 状态
+
+**目前在阶段3**
+- 正在实施 OpenSpec change: `lidar-external-capture-supersampling`。
+- 当前先做静态差距核对,然后按 tasks 顺序落代码与文档。
+
+## [2026-03-23 22:07:39 +0800] [Session ID: 20260323_10] 阶段完成: supersampling 方案1已完成落地与验证
+
+- [x] 阶段3: 执行/构建
+  - 已补 runtime tooltip、Inspector help box、README / CHANGELOG 文案。
+  - 已补 `GsplatLidarExternalGpuCapture` / `Gsplat.compute` 的语义注释。
+  - 已补 external capture supersampling 的回归测试:
+    - invalid scale sanitize
+    - downsample
+    - point texel read 不退化成 bilinear
+    - depth / surfaceColor / depthStencil 同尺寸
+  - 已把 `openspec/changes/lidar-external-capture-supersampling/tasks.md` 的 13 个任务全部勾完。
+- [x] 阶段4: 运行验证,记录结论与后续事项
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal` 通过,`0 warning / 0 error`。
+  - Unity EditMode 定向测试 `Gsplat.Tests.GsplatLidarExternalGpuCaptureTests` 运行结果:
+    - total=11
+    - passed=11
+    - failed=0
+    - skipped=0
+  - `openspec status --change "lidar-external-capture-supersampling"` 保持 complete。
+
+## 状态
+
+**目前在阶段4(本轮 implementation 已完成)**
+- `lidar-external-capture-supersampling` 已完成代码、文档、测试和 OpenSpec task 勾选。
+- 下一步如果继续,可以考虑:
+  - 归档这个 OpenSpec change
+  - 或继续做方案2/后续 edge-aware resolve 方向的 explore

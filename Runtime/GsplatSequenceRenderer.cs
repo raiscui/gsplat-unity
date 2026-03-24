@@ -160,6 +160,7 @@ namespace Gsplat
                  "说明:\n" +
                  "- Auto: 沿用当前 frustum capture 的默认基准尺寸.\n" +
                  "- Scale: 在 Auto 基准上再乘以倍率,用于 supersample / 降采样.\n" +
+                 "- 如果 external mesh 轮廓出现 depth 台阶 / stair-stepping,优先先尝试 `Scale`.\n" +
                  "- Explicit: 直接使用 `LidarExternalCaptureResolution` 指定的宽高.\n" +
                  "- 仅在 `LidarApertureMode=CameraFrustum` 且 external mesh 走 GPU capture 时生效.")]
         public GsplatLidarExternalCaptureResolutionMode LidarExternalCaptureResolutionMode =
@@ -170,15 +171,18 @@ namespace Gsplat
                  "说明:\n" +
                  "- 仅在 `LidarExternalCaptureResolutionMode=Scale` 时生效.\n" +
                  "- 1 表示保持 Auto 基准尺寸.\n" +
-                 "- >1 表示 supersample,可提高 external depth / color capture 精度.\n" +
-                 "- <1 表示降低 capture 分辨率,换取性能.")]
+                 "- >1 表示 supersample,可提高 external depth / color capture 精度,也是缓解 external depth 台阶的首选入口.\n" +
+                 "- <1 表示降低 capture 分辨率,换取性能.\n" +
+                 "- 更高倍率会增加离屏 RT 的显存、带宽与 capture 成本,但不会改变 LiDAR beam / azimuth grid 的离散语义.")]
         public float LidarExternalCaptureResolutionScale = 1.0f;
 
         [Tooltip("frustum external GPU capture 的显式分辨率(width,height).\n" +
                  "说明:\n" +
                  "- 仅在 `LidarExternalCaptureResolutionMode=Explicit` 时生效.\n" +
                  "- 建议保持与 frustum camera 的 aspect 接近,避免把 capture 采样拉伸.\n" +
-                 "- 这是 external mesh depth/color capture 的离屏分辨率,不是最终屏幕输出分辨率.")]
+                 "- 这是 external mesh depth/color capture 的离屏分辨率,不是最终屏幕输出分辨率.\n" +
+                 "- 更高显式分辨率会提高离屏采样精度,但也会提高离屏 capture 开销.\n" +
+                 "- 该参数提高的是 external capture fidelity,不会把 external hit 改成 blur / bilinear depth 混合.")]
         public Vector2Int LidarExternalCaptureResolution = new(1920, 1080);
 
         [Obsolete("Use LidarExternalStaticTargets and LidarExternalDynamicTargets instead.")]

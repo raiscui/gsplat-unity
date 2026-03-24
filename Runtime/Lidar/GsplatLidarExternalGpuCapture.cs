@@ -968,6 +968,8 @@ namespace Gsplat
                 // 说明:
                 // - 显式模式直接让用户精确指定 capture RT 宽高.
                 // - 仍然需要按硬件上限 clamp,避免申请超过设备支持的纹理尺寸.
+                // - 它只改变 external depth / surfaceColor capture 的离屏 fidelity,
+                //   不改变后续 point resolve / nearest-hit 的选择语义.
                 captureWidth = ClampCaptureDimensionToHardwareLimit(Mathf.Max(explicitCaptureResolution.x, 1));
                 captureHeight = ClampCaptureDimensionToHardwareLimit(Mathf.Max(explicitCaptureResolution.y, 1));
                 return true;
@@ -985,6 +987,7 @@ namespace Gsplat
             // 说明:
             // - Scale 模式在 Auto 基准尺寸上做 supersample / 降采样.
             // - 它保留默认决策来源,但把精度与性能的权衡显式交给用户控制.
+            // - `scale = 1` 时应继续等价于 Auto 基准尺寸,避免给旧场景引入隐式分辨率变化.
             captureWidth = ResolveScaledCaptureDimension(captureWidth, sanitizedScale);
             captureHeight = ResolveScaledCaptureDimension(captureHeight, sanitizedScale);
             return true;
@@ -1030,6 +1033,10 @@ namespace Gsplat
 
             DisposeCaptureBuffers(buffers);
 
+            // 关键约束:
+            // - linearDepth / surfaceColor / depthStencil 必须共享同一套 capture 宽高.
+            // - supersampling 只能统一提高 external capture fidelity,不能让 depth / color layout 脱节.
+            // - 这样最终 point resolve 才能在同一 texel 位置拿到同一最近表面的距离与颜色.
             var linearDepthFormat = SystemInfo.SupportsRenderTextureFormat(RenderTextureFormat.RFloat)
                 ? RenderTextureFormat.RFloat
                 : RenderTextureFormat.ARGBFloat;

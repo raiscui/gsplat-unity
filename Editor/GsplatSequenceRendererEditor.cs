@@ -157,9 +157,11 @@ namespace Gsplat.Editor
                     "external capture 分辨率说明:\n" +
                     "- 仅在 `CameraFrustum + external GPU capture` 路线生效.\n" +
                     "- Auto: 先取 frustum camera 的 pixelRect; 如果无效,再回退 targetTexture; 最后回退 active LiDAR grid.\n" +
-                    "- Scale: 在 Auto 基准上乘倍率,适合 supersample 提高 external mesh 边缘采样精度.\n" +
+                    "- Scale: 在 Auto 基准上乘倍率,是缓解 external mesh depth 台阶 / silhouette stair-stepping 的首选方案.\n" +
                     "- Explicit: 直接指定离屏 depth/color capture 的宽高.\n" +
-                    "- 这个参数控制的是 external mesh 的离屏采样精度,不会改变 LiDAR 自己的 beam / azimuth 离散语义.",
+                    "- 这个参数控制的是 external mesh 的离屏采样精度,不会改变 LiDAR 自己的 beam / azimuth 离散语义.\n" +
+                    "- 更高分辨率会增加显存、带宽和 capture 成本.\n" +
+                    "- 当前方案仍保持 point texel read + nearest-surface 语义,不是 blur / bilinear depth 过渡.",
                     MessageType.Info);
             }
             EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarExternalTargetVisibilityMode)));

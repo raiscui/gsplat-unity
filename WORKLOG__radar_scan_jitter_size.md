@@ -35,3 +35,26 @@
 ### 总结感悟
 - 这次方案1最重要的设计边界,不是“怎么把边缘弄顺”,而是“先不破坏 nearest-surface 语义”。
 - 当前仓库其实已经有 `Scale` 这套 API 了,更好的做法不是继续堆新参数,而是把它正式定义为 supersampling 质量入口。
+
+## [2026-03-23 22:07:39 +0800] [Session ID: 20260323_10] 任务名称: 落地 OpenSpec change `lidar-external-capture-supersampling`
+
+### 任务内容
+- 按 `openspec-apply-change` 实施方案1对应的 OpenSpec change。
+- 补齐 external capture supersampling 的代码注释、Inspector 提示、README / CHANGELOG 文案和回归测试。
+- 更新 OpenSpec `tasks.md`,让 change 从“可实施”推进到“已实施完成”。
+
+### 完成过程
+- 先读取 `openspec instructions apply` 与当前 `tasks.md`,确认本轮共有 `13` 个待完成任务。
+- 然后核对 runtime / editor / tests / docs 现状,确认 capture-size 逻辑主体已经存在,主要缺口在“语义护栏”和“推荐用法说明”。
+- 在 `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs` 中强化了 resolution mode / scale / explicit 的 tooltip。
+- 在 `Editor/GsplatRendererEditor.cs` / `Editor/GsplatSequenceRendererEditor.cs` 中强化了 external capture help box,明确 `Scale > 1` 是首选缓解手段,并补充成本与语义边界说明。
+- 在 `Runtime/Lidar/GsplatLidarExternalGpuCapture.cs` 与 `Runtime/Shaders/Gsplat.compute` 中补了中文注释,把 point texel read、Auto 基准、depth/color 同布局这些关键口径写死。
+- 在 `Tests/Editor/GsplatLidarExternalGpuCaptureTests.cs` 中增加了:
+  - invalid scale sanitize / downsample 测试
+  - point texel read 不得退化成 `Sample` / `SampleLevel` 的测试
+  - depth / surfaceColor / depthStencil 共用同尺寸的测试
+- 最后更新 `README.md`、`CHANGELOG.md` 与 OpenSpec `tasks.md`,并完成编译与 targeted Unity EditMode 验证。
+
+### 总结感悟
+- 这次最值得保留的做法,不是“多写一个 supersample 功能”,而是把现有参数真正定义成可理解、可验证、可维护的质量入口。
+- 对这种已有半成品实现的能力,最正确的推进方式通常不是重写,而是先补齐语义、文档和测试护栏。
