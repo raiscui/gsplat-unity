@@ -218,6 +218,56 @@
 ## 状态
 
 **目前在阶段3**
+
+## [2026-03-24 11:50:19 +0800] [Session ID: unknown] 阶段进展: 一次性补齐方案2 hybrid resolve artifacts
+
+- [x] 阶段1: 计划和设置
+  - 已确认继续沿用支线上下文 `__radar_scan_jitter_size`。
+  - 已确认当前 OpenSpec change 为 `lidar-external-hybrid-resolve`。
+  - 已重新读取 `proposal.md`、`openspec status` 与 `openspec instructions design/specs/tasks`。
+- [ ] 阶段2: 研究/收集信息
+  - 已收敛本轮必须写死的设计边界:
+    - `LidarExternalEdgeAwareResolveMode = Off / Kernel2x2 / Kernel3x3`
+    - `LidarExternalSubpixelResolveMode = Off / Quad4`
+    - 两者都开时顺序固定为“subpixel candidate -> edge-aware neighborhood resolve -> final nearest winner”
+    - edge-aware 过滤失败时回退中心 point sample
+    - color 跟随最终 depth winner,不做独立平均
+  - 下一步直接完成 `design.md` 与 capability `spec.md`。
+- [ ] 阶段3: 执行/构建
+  - 在 `design/specs` 完成后,继续生成 `tasks.md`,把 API、compute resolve、Inspector、测试与文档拆成可执行 checklist。
+- [ ] 阶段4: 审查和交付
+  - 最后执行 `openspec status --change "lidar-external-hybrid-resolve"`。
+  - 目标是让 change 进入 `apply-ready`。
+
+## 状态
+
+**目前在阶段2**
+- 方案2的口径已经收敛,不再需要继续 explore。
+- 正在正式落 `design.md`、`spec.md` 与 `tasks.md`。
+
+## [2026-03-24 11:53:09 +0800] [Session ID: unknown] 阶段完成: 方案2 OpenSpec artifacts 已一次性补齐
+
+- [x] 阶段2: 研究/收集信息
+  - 已把方案2的能力边界、组合顺序、回退语义和公开 API 形态写入 `design.md` 与 `spec.md`。
+- [x] 阶段3: 执行/构建
+  - 已创建:
+    - `openspec/changes/lidar-external-hybrid-resolve/design.md`
+    - `openspec/changes/lidar-external-hybrid-resolve/specs/gsplat-lidar-external-hybrid-resolve/spec.md`
+    - `openspec/changes/lidar-external-hybrid-resolve/tasks.md`
+- [x] 阶段4: 审查和交付
+  - 已执行 `openspec status --change "lidar-external-hybrid-resolve" --json`。
+  - 验证结果:
+    - `proposal = done`
+    - `design = done`
+    - `specs = done`
+    - `tasks = done`
+  - 当前 change 已进入 apply-ready。
+
+## 状态
+
+**目前在阶段4(本轮 OpenSpec artifact 快进已完成)**
+- `lidar-external-hybrid-resolve` 已具备完整的 `proposal/design/specs/tasks`。
+- 下一步可以直接进入实现阶段,按 `tasks.md` 落代码与测试。
 - 正在实施 OpenSpec change: `lidar-external-capture-supersampling`。
 - 当前先做静态差距核对,然后按 tasks 顺序落代码与文档。
 
@@ -248,3 +298,53 @@
 - 下一步如果继续,可以考虑:
   - 归档这个 OpenSpec change
   - 或继续做方案2/后续 edge-aware resolve 方向的 explore
+
+## [2026-03-24 10:53:30 +0800] [Session ID: 20260324_1] 阶段进展: 继续方案2 explore
+
+- [ ] 阶段2: 建立“现象 -> 假设 -> 验证计划”并找最小可证伪实验
+  - 用户明确要求“继续开方案2 explore”。
+  - 已确认当前相关 OpenSpec change `lidar-external-capture-supersampling` 已 complete。
+  - 下一步不做实现,只围绕“在不破坏 nearest-surface 语义的前提下,方案2还能怎么做 depth 过渡”展开技术探索。
+
+## 状态
+
+**目前在阶段2(explore)**
+- 正在梳理方案2的候选路线、收益、风险和推荐顺序。
+
+## [2026-03-24 10:53:30 +0800] [Session ID: 20260324_1] 阶段进展: 用户已选定方案2的组合方向
+
+- [ ] 阶段2: 建立“现象 -> 假设 -> 验证计划”并找最小可证伪实验
+  - 用户已明确要求方案2同时包含:
+    - edge-aware nearest resolve
+    - subpixel jitter resolve
+  - 同时需要两者都能单独开 / 关,也能一起开。
+  - 下一步给出推荐的参数形态、执行顺序和最小验证方案,确认这组组合不会产生语义歧义。
+
+## 状态
+
+**目前仍在阶段2(explore)**
+- 方案2的方向已经从“选哪条路”收敛到“如何把两条路组合得可控且可验证”。
+
+## [2026-03-24 11:31:47 +0800] [Session ID: 20260324_1] 阶段完成: 方案2已形成独立 proposal 草案
+
+- [x] 阶段2: 建立“现象 -> 假设 -> 验证计划”并找最小可证伪实验
+  - 已新建 OpenSpec change: `lidar-external-hybrid-resolve`。
+  - 已完成 `proposal.md` 草案。
+  - 当前 artifact 状态:
+    - `proposal = done`
+    - `design = ready`
+    - `specs = ready`
+    - `tasks = blocked by design/specs`
+  - proposal 已明确:
+    - edge-aware nearest resolve
+    - subpixel jitter resolve
+    - 两者独立开关
+    - 两者组合顺序与回退语义
+
+## 状态
+
+**目前在阶段4(本轮 explore 产出已落盘)**
+- 方案2已经从口头讨论推进成新的 OpenSpec proposal。
+- 下一步如果继续,最自然的是:
+  - 继续把 `design.md` 和 `specs` 补出来
+  - 或先停在 proposal 阶段审口径

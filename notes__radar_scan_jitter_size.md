@@ -218,6 +218,83 @@ PY
 
 ### 结论
 
+## [2026-03-24 11:50:19 +0800] [Session ID: unknown] 笔记: 方案2 `lidar-external-hybrid-resolve` 的 artifact 设计边界
+
+## 现象
+
+- 方案1 `lidar-external-capture-supersampling` 已经把 external capture 质量提升到“更高 capture fidelity + 继续 point texel read”的稳定状态。
+- 但当 external target 轮廓很细、斜面多,或者 capture texel 与 LiDAR ray 的相位关系不理想时,仍会看到边缘阶梯、断续感与局部空隙。
+- 用户要求继续做方案2,并且明确要两条路径都做:
+  - `2x2 / 3x3 edge-aware nearest resolve`
+  - `subpixel jitter resolve`
+  - 两者可独立开关,也可同时开启
+
+## 当前主假设
+
+- 主假设A: 仅靠 supersampling 仍然会把“单 texel 决策”的局部量化误差留在 silhouette 区域,所以需要邻域级 resolve。
+- 主假设B: 但如果直接做 blur 或普通 bilinear,会把前后表面混掉,破坏方案1刚刚守住的 nearest-hit 语义。
+- 主假设C: 因此方案2应拆成两条职责清晰的路径:
+  - subpixel resolve 负责扩充候选
+  - edge-aware nearest resolve 负责防串边和挑可信 texel
+
+## 最强备选解释
+
+- 备选解释A: 只做 `3x3 edge-aware` 可能已经够用,不一定要上 subpixel candidate。
+- 备选解释B: 只做 `Quad4` 也许已经能减轻阶梯,edge-aware 只会增加成本和阈值复杂度。
+- 当前没有动态证据表明其中任一条可以完全替代另一条,因此 OpenSpec 先把两条都作为可独立开关能力写入,实现阶段再用测试与现场效果决定默认推荐档位。
+
+## 设计结论
+
+### 1. 公开 API 用独立 mode,不用散乱 bool
+
+- `LidarExternalEdgeAwareResolveMode`
+  - `Off`
+  - `Kernel2x2`
+  - `Kernel3x3`
+- `LidarExternalSubpixelResolveMode`
+  - `Off`
+  - `Quad4`
+- 这样 Inspector、文档和测试都更容易表达,也天然覆盖四种组合状态。
+
+### 2. 两者同时开启时顺序固定
+
+- 固定顺序:
+  1. 生成 subpixel candidate uv
+  2. 对每个 candidate 执行 edge-aware neighborhood resolve
+  3. 在所有候选中选最近且可信的 winner
+- 这个顺序最符合当前目标:
+  - 先扩充候选,避免只盯中心 uv
+  - 再做保边过滤,避免跨 silhouette 串边
+  - 最后统一按 nearest-hit 选 winner
+
+### 3. 回退语义必须保守
+
+- edge-aware 过滤失败时,必须回退到中心 point sample。
+- 这样即使阈值过紧,最多退化回方案1,不会凭空制造新的空洞路径。
+
+### 4. color 必须跟随最终 depth winner
+
+- 不允许对 color 独立做平均或单独选样。
+- 原因是 external hit 是“距离 + 颜色”的同一命中结果,不能让深度和颜色来自不同候选。
+
+### 5. subpixel pattern 用 deterministic `Quad4`
+
+- 不用随机 jitter。
+- 这样 temporal stability 更稳,自动化测试也更容易锁定。
+
+### 6. 方案2不是 blur
+
+- OpenSpec 文案必须明确:
+  - 不是普通 blur
+  - 不是 naive bilinear
+  - 不是 plane fitting 或跨表面插值
+- 它本质上是“保 nearest-surface 语义的邻域选样 resolve”。
+
+## 落地提示
+
+- `Kernel3x3 + Quad4` 应作为更高质量、也更高成本的档位描述,不适合默认开启。
+- 如果后续需要公开阈值参数,应谨慎控制数量,避免 Inspector 被一堆细碎 slider 污染。
+
 - 这个最小实验支持主假设A/B:
   - 当点几何真实缩到 `< 1px` 后,标准像素中心采样下确实可能一个像素都打不到。
   - 所以“显示消失”不能只靠保留真实半径解决,还需要单独保留一层 subpixel 的 raster / coverage 支撑 footprint。
@@ -367,6 +444,117 @@ PY
   - 推荐先调 `Scale > 1`
   - 保持 point-based nearest-surface resolve
   - 不把 blur / bilinear 深度混合混进方案1
+
+## [2026-03-24 10:53:30 +0800] [Session ID: 20260324_1] 笔记: 方案2 explore 的问题定义
+
+## 现象
+
+- 方案1已经落地:
+  - external capture supersampling
+  - point texel read 保持不变
+- 用户现在要继续开方案2 explore。
+- 这说明新的问题不是“怎么开启 supersampling”,而是“如果 supersampling 之后仍觉得 external edge 台阶感不够好,下一步还能怎么做”。
+
+## 当前主假设
+
+- 主假设A: 方案2的核心目标应该是“在保住 nearest-surface 语义的前提下,减少 external depth 的 silhouette 阶梯”。
+- 主假设B: 纯 blur / 纯 bilinear 仍然不适合作为方案2默认路线,因为它们太容易跨边界混前后表面。
+- 主假设C: 更可行的方案2,应该是 edge-aware / neighborhood-aware 的“选样”或“保边过渡”,而不是简单平均。
+
+## 当前约束
+
+- 当前 `Gsplat.compute` 的 `ResolveExternalFrustumHits` 是:
+  - `uv -> int2 pixel`
+  - `Load(int3(pixel, 0))`
+- 当前 capture 输入只有:
+  - linear depth
+  - surface color
+- 目前没有额外的:
+  - normal buffer
+  - object id buffer
+  - motion vector
+- 这意味着方案2如果想保边,最好优先在“深度邻域选择”上做文章,而不是依赖更多 GBuffer 语义。
+
+## 初步候选方向
+
+- 方向1: 2x2 / 3x3 edge-aware nearest resolve
+  - 读小邻域深度
+  - 用深度差阈值 / ray-distance 一致性筛掉跨边界样本
+  - 从剩余候选里选最可信的最近样本
+- 方向2: 多点 jittered subpixel resolve
+  - 对每个 LiDAR cell 不是只取一个 uv,而是取 4 个或更多亚像素偏移样本
+  - 再按 nearest-hit 规则选最可信候选
+- 方向3: edge-aware weighted resolve
+  - 仍做加权,但权重同时看 uv 距离和深度差
+  - 只有深度接近时才允许混合
+- 方向4: 更激进的 silhouette-aware plane fit / reprojection
+  - 复杂度更高
+  - 当前更像后续方案3,不适合作为马上落地的方案2
+
+## [2026-03-24 10:53:30 +0800] [Session ID: 20260324_1] 笔记: 用户确认方案2同时包含两条 resolve 路线并支持独立开关
+
+## 用户决策
+
+- 用户希望方案2不是二选一,而是把这两条路线都做进去:
+  - `2x2 / 3x3 edge-aware nearest resolve`
+  - `多点 subpixel jitter resolve`
+- 同时要求:
+  - 两者都能单独开 / 关
+  - 也能同时开启
+
+## 当前设计结论
+
+- 这件事可以做,但最好不要用两个松散 bool 直接硬拼。
+- 更稳的设计是:
+  - 一个“edge-aware resolve mode”枚举
+  - 一个“subpixel resolve mode”枚举
+- 两者都提供 `Off`,这样天然满足“可单独开关”。
+
+## 推荐的开关形态
+
+- `LidarExternalEdgeAwareResolveMode`
+  - `Off`
+  - `Kernel2x2`
+  - `Kernel3x3`
+- `LidarExternalSubpixelResolveMode`
+  - `Off`
+  - `Quad4`
+
+## 四种组合语义
+
+- `Off + Off`
+  - 保持当前方案1行为
+  - `uv -> int pixel -> Load`
+- `Kernel2x2/3x3 + Off`
+  - 只做 edge-aware nearest resolve
+- `Off + Quad4`
+  - 只做多点 subpixel resolve
+- `Kernel2x2/3x3 + Quad4`
+  - 两者都开启
+  - 需要固定执行顺序,避免组合行为不明确
+
+## 推荐执行顺序
+
+- 先生成 subpixel 候选 uv
+- 再对每个候选 uv 做 edge-aware neighborhood resolve
+- 最后在所有候选结果里选“最近且可信”的 winner
+
+这样能保持一个清晰的语义:
+- subpixel resolve 负责“扩大可见采样机会 / 打散 texel 相位”
+- edge-aware resolve 负责“防止跨边界错采”
+- final winner selection 负责“继续保持 nearest-hit 语义”
+
+## 关键护栏
+
+- 不要用随机 jitter pattern
+  - 应使用固定的 deterministic quad pattern
+  - 否则 temporal stability 很容易出问题
+- edge-aware 过滤失败时,应回退到中心 point sample
+  - 这样阈值太紧时只是退化回方案1
+  - 不会凭空制造新空洞
+- color 必须跟随最终 depth winner
+  - 不能对颜色做单独平均
+  - 否则颜色和距离会脱钩
   - 锁定 `ResolveLidarSubpixelCoverageSupportPx`
   - 锁定 `ResolveLidarCoveragePadPx`
   - 锁定 `<1px` 时会启用额外 coverage support,而不是回到旧的 `max(..., 1.0)` 语义

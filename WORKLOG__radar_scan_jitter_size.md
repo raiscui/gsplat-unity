@@ -58,3 +58,54 @@
 ### 总结感悟
 - 这次最值得保留的做法,不是“多写一个 supersample 功能”,而是把现有参数真正定义成可理解、可验证、可维护的质量入口。
 - 对这种已有半成品实现的能力,最正确的推进方式通常不是重写,而是先补齐语义、文档和测试护栏。
+
+## [2026-03-24 11:31:47 +0800] [Session ID: 20260324_1] 任务名称: 方案2 hybrid resolve proposal 起草
+
+### 任务内容
+- 继续方案2 explore。
+- 把“edge-aware nearest resolve + subpixel jitter resolve, 且支持独立开关和组合启用”的方向整理成新的 OpenSpec proposal 草案。
+
+### 完成过程
+- 先确认方案1 `lidar-external-capture-supersampling` 已 complete,避免把方案2混进旧 change。
+- 再基于当前 `ResolveExternalFrustumHits` 的 point texel read 现状,收敛方案2的新增能力边界。
+- 新建 change:
+  - `openspec/changes/lidar-external-hybrid-resolve/`
+- 完成 proposal:
+  - `openspec/changes/lidar-external-hybrid-resolve/proposal.md`
+- proposal 里明确写了:
+  - 两条 resolve 路线都做
+  - 两者都能独立开关
+  - 两者都开时的固定执行顺序
+  - edge-aware 失败回退到中心样本
+  - color 跟随最终 depth winner
+
+### 总结感悟
+- 方案2的关键不是“加更多采样”本身,而是把两个质量路径的职责拆清楚:
+  - subpixel 负责增加候选
+  - edge-aware 负责防串边
+  - final winner selection 负责保 nearest-hit 语义
+
+## [2026-03-24 11:53:09 +0800] [Session ID: unknown] 任务名称: 一次性补齐方案2 `lidar-external-hybrid-resolve` OpenSpec artifacts
+
+### 任务内容
+- 继续用户要求的“方案2 explore 收口后一次性出完”。
+- 为 `lidar-external-hybrid-resolve` 补齐 `design`、`specs`、`tasks` 三个 artifact。
+- 把 change 推进到 apply-ready,为下一步直接实施做准备。
+
+### 完成过程
+- 先重新读取支线 `task_plan/notes/WORKLOG`、已有 `proposal.md` 和 `openspec instructions design/specs/tasks`。
+- 再把本轮已经收敛的设计口径写死:
+  - `LidarExternalEdgeAwareResolveMode = Off / Kernel2x2 / Kernel3x3`
+  - `LidarExternalSubpixelResolveMode = Off / Quad4`
+  - 两者都开时顺序固定为“subpixel candidate -> edge-aware neighborhood resolve -> final nearest winner”
+  - edge-aware 失败时回退中心 point sample
+  - color 跟随最终 depth winner
+- 然后创建以下文件:
+  - `openspec/changes/lidar-external-hybrid-resolve/design.md`
+  - `openspec/changes/lidar-external-hybrid-resolve/specs/gsplat-lidar-external-hybrid-resolve/spec.md`
+  - `openspec/changes/lidar-external-hybrid-resolve/tasks.md`
+- 最后执行 `openspec status --change "lidar-external-hybrid-resolve" --json`,确认 `proposal/design/specs/tasks` 全部为 `done`。
+
+### 总结感悟
+- 方案2最核心的边界,不是“把边缘弄顺”这么抽象,而是明确它是“保 nearest-surface 语义的候选选样 resolve”。
+- 这次先把 API、顺序、回退和颜色绑定规则写清楚,比直接冲进实现更稳,后面落代码时不容易因为局部效果好看而破坏整体语义。
