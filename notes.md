@@ -2,7 +2,7 @@
 
 ## 当前状态
 
-- 旧的 `task_plan.md` / `notes.md` / `WORKLOG.md` 已因超过 1000 行续档到 `archive/`。
+- 旧的 `task_plan.md` / `notes.md` / `WORKLOG.md` 已因超过 1000 行续档到 `archive/default_history/`。
 - 本文件用于保存本轮 continuous-learning 的摘要与沉淀决策。
 
 ## 六文件摘要(用于决定如何沉淀知识)
@@ -13,18 +13,18 @@
   - `__sog4d_display_issue`
   - `__splat4d_edge_opacity`
   - `__splat4d_single_frame_support`
-- 默认组任务目标(`archive/task_plan_2026-03-12_232802.md` 最新段落):
+- 默认组任务目标(`archive/default_history/task_plan_2026-03-12_232802.md` 最新段落):
   - 先排查真实多帧 `.splat4d` 是否复用了单帧 PLY 的 SH 排列错误
   - 在缺少原始 ckpt 时,改走真实资产 `SHCT/SHLB/SHDL` 自证路径
 - 默认组关键决定:
   - 不把“像根因”直接写成“已确认根因”
   - 当原始 ckpt 缺失时,改用真实 `.splat4d` 字节双重解码做动态证据
-- 默认组关键发现(`archive/notes_2026-03-12_232802.md` 最新段落):
+- 默认组关键发现(`archive/default_history/notes_2026-03-12_232802.md` 最新段落):
   - 真实资产 `ckpt_29999_v2_sh3_seg50_k512_f32_colmap_latest.splat4d` 的 `SHCT` 用两套独立索引解码后,三个 band 的 `max_abs_diff` 都是 `0.0`
   - 当前没有证据支持“这份真实多帧资产的颜色问题来自 `SHCT` 写/读 layout 不一致”
-- 默认组实际变更(`archive/WORKLOG_2026-03-12_232802.md` 最新段落):
+- 默认组实际变更(`archive/default_history/WORKLOG_2026-03-12_232802.md` 最新段落):
   - 已把“无原始 ckpt 时改做资产自证”沉淀为动态验证方法
-  - 默认组六文件原文件因超长已在本轮续档并转入 `archive/`
+  - 默认组六文件原文件因超长已在本轮续档并转入 `archive/default_history/`
 - 支线组摘要:
   - `__imgui_layout_error`:
     - 现象不是 package 自身 importer 直接导致
@@ -79,11 +79,11 @@
 ## 本轮续档与归档结果
 
 - 已续档并归档:
-  - `archive/task_plan_2026-03-12_232802.md`
-  - `archive/notes_2026-03-12_232802.md`
-  - `archive/WORKLOG_2026-03-12_232802.md`
-  - `archive/notes__splat4d_edge_opacity_2026-03-12_232802.md`
-  - `archive/notes__splat4d_single_frame_support_2026-03-12_232802.md`
+  - `archive/default_history/task_plan_2026-03-12_232802.md`
+  - `archive/default_history/notes_2026-03-12_232802.md`
+  - `archive/default_history/WORKLOG_2026-03-12_232802.md`
+  - `archive/branch_contexts/splat4d_edge_opacity/snapshots/2026-03-12_232802/notes__splat4d_edge_opacity_2026-03-12_232802.md`
+  - `archive/branch_contexts/splat4d_single_frame_support/snapshots/2026-03-12_232802/notes__splat4d_single_frame_support_2026-03-12_232802.md`
 - 已新建当前文件:
   - `task_plan.md`
   - `notes.md`

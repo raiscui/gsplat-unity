@@ -1,0 +1,1001 @@
+## [2026-03-23 16:37:02 +0800] [Session ID: 20260323_6] 笔记: RadarScan 抖动波纹与小粒径异常的首轮静态证据
+
+## 现象
+
+- 用户反馈 1: RadarScan 粒子增加位置抖动后,当密度提高时会出现明显波纹。
+- 用户反馈 2: 当粒子大小小于 `1` 时,显示不正常。
+
+## 当前主假设
+
+- 主假设A: 当前 show/hide 的屏幕空间 `warpPx` 完全按固定像素位移工作,没有和粒子半径或采样间距建立比例关系。密度一高,规则点阵会被同相位的平滑噪声场推成有组织的波纹。
+- 主假设B: fragment 中把 `pointRadiusPx` 强制钳到 `>= 1.0` 后,`0..1px` 的粒径区间会共享同一套覆盖率/边缘宽度计算,导致亚像素大小不再连续变化,从而出现“小于 1 显示不正常”。
+
+## 最强备选解释
+
+- 备选解释A: 波纹的主因不是 `warpPx` 过大,而是 `EvalLidarShowHideNoise01` 的低频 model-space 噪声与规则 LiDAR 栅格形成拍频。即使把位移幅度缩小,仍可能保留明暗波纹。
+- 备选解释B: 小粒径异常并不来自 fragment clamp,而是顶点阶段的几何外扩(`paddedRadiusPx` / `uvScale`)与 fragment 的 `outerLimit` 使用了不一致的半径定义。
+
+## 静态证据
+
+### 来源1: `Runtime/Shaders/GsplatLidarPassCore.hlsl`
+
+- `frag(...)` 中存在:
+  - `float pointRadiusPx = max(_LidarPointRadiusPixels, 1.0);`
+  - `float signedEdgePx = signedEdge * pointRadiusPx;`
+  - `float analyticWidthPx = max(fwidth(signedEdgePx), 1.0e-4);`
+- 这意味着 `_LidarPointRadiusPixels < 1` 时,fragment 覆盖率计算不会继续变小,而是被折叠到 `1px` 语义。
+- `vert(...)` 中的屏幕空间位移抖动存在:
+  - `warpPx = noiseStrengthVis * warpWeight * max(_LidarShowHideWarpPixels, 0.0) * warpStrengthMul;`
+  - `proj.xy += warpOffset;`
+- 该 `warpPx` 只受噪声强度、warp 强度和用户像素值控制,没有使用 `LidarPointRadiusPixels` 或 LiDAR 栅格 spacing。
+
+### 来源2: `Runtime/Lidar/GsplatLidarScan.cs`
+
+- `RenderPointCloud(...)` 下发点半径时仅做 `Mathf.Max(pointRadiusPixels, 0.0f)`。
+- 也就是说 C# 侧允许 `0..1` 的合法小粒径进入 shader,问题不是在运行时直接被 C# clamp 到 `1`。
+
+### 来源3: `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+
+- 默认参数:
+  - `LidarPointRadiusPixels = 2.0f`
+  - `NoiseStrength = 0.6f`
+  - `WarpStrength = 2.0f`
+  - `LidarShowHideWarpPixels = 6.0f`
+- 按当前公式估算,在 `NoiseStrength=0.6`、`WarpStrength=2`、`warpWeight≈1` 时:
+  - 实际 `warpPx ≈ sqrt(0.6) * 6 * 1 ≈ 4.65px`
+  - 对 `radius=0.5px` 的点来说,位移约为点半径的 `9.3x`
+  - 对 `radius=0.25px` 的点来说,位移约为点半径的 `18.6x`
+
+### 来源4: `Tests/Editor/GsplatLidarShaderPropertyTests.cs`
+
+- 现有测试显式锁定了字符串:
+  - `float pointRadiusPx = max(_LidarPointRadiusPixels, 1.0);`
+- 这说明如果我们修复小粒径异常,必须同步更新测试,否则旧测试会把错误行为继续当成正确契约。
+
+## 最小验证
+
+- 公式验证1:
+  - 用独立脚本代入当前 fragment 公式后,`radius=0.25 / 0.5 / 0.75 / 1.0` 在 coverage 计算上得到完全相同的 `pointRadiusPx=1.0`。
+  - 这支持主假设B。
+- 公式验证2:
+  - 用当前默认参数估算 `warpPx` 后,其量级明显大于小粒径本身。
+  - 这支持主假设A。
+
+## 还缺的动态证据
+
+- 还没有针对真实 shader 数学写成自动化回归测试,因此当前仍是“高置信候选假设”,还不是最终根因结论。
+- 下一步要补两类最小可证伪实验:
+  - 实验1: 写纯数学单测,证明 `size < 1` 现在会被折叠成 `1px` 行为,修复后应恢复连续变化。
+  - 实验2: 写纯数学单测或提取函数,证明 warp 应该受到“点半径 / AA fringe / 当前可见度”的上限约束,否则默认参数会远超粒径尺度。
+
+## [2026-03-23 16:56:29 +0800] [Session ID: 20260323_7] 笔记: 用户澄清后对主假设的回滚与新证据
+
+## 现象
+
+- 用户已明确纠正: 当前说的不是 `warp` 形变,而是“点分布太均匀,密度提高后出现摩尔纹”。
+- 同时,`size < 1` 的显示异常仍然是独立存在的问题,需要继续保留修复。
+
+## 上一假设回滚
+
+- 上一轮把“show/hide warp 过大”当成主因,这个口径不再成立。
+- 新证据推翻点:
+  - 用户直接否认了 `warp` 是他当前描述的问题。
+  - 现有代码里 LiDAR 点位本身就是严格按 `(azBin, beamIndex)` 的 bin center 重建,即使没有 show/hide 动画,高密度时也天然会形成规则栅格。
+
+## 当前主假设
+
+- 主假设A: 摩尔纹的主因是“规则 bin center 栅格过于均匀”,不是 `warp`。当 `LidarAzimuthBins` / `LidarBeamCount` 提高后,规则角域采样与屏幕像素栅格发生拍频,于是出现有组织的波纹/摩尔纹。
+- 主假设B: `size < 1` 的异常仍来自 fragment 覆盖率以前把半径折叠到 `>= 1px`。这个问题和摩尔纹不是同一个根因,但可以在同一轮一起修完。
+
+## 最强备选解释
+
+- 备选解释A: 摩尔纹不只是 bin center 太规则,还可能和当前每个 cell 的绘制顺序、方形点精灵边界、AA fringe 共同叠加。
+- 备选解释B: 当前新加的 in-cell jitter 如果只在 shader 绘制阶段生效,而不影响 first return 竞争,可能依然会保留一部分规则纹理感。这属于“效果强弱”问题,不是是否该加 jitter 的根本方向问题。
+
+## 新的静态证据
+
+### 来源1: `Runtime/Shaders/GsplatLidarPassCore.hlsl`
+
+- 点位方向仍然按 LUT 的中心值重建:
+  - `float2 azSC = _LidarAzSinCos[azBin];`
+  - `float2 beSC = _LidarBeamSinCos[beamIndex];`
+  - `float3 dirLocal = float3(azSC.x * beSC.y, beSC.x, azSC.y * beSC.y);`
+- 这说明当前每个 LiDAR cell 默认都精确落在规则角网格中心。
+- 已落地的 subpixel 修复值得保留:
+  - `float pointRadiusPxRaw = max(_LidarPointRadiusPixels, 0.0);`
+  - `float pointRadiusPx = max(pointRadiusPxRaw, 1.0e-4);`
+
+### 来源2: `Runtime/Lidar/GsplatLidarScan.cs`
+
+- `RenderPointCloud(...)` 当前还没有接收 `pointJitterCellFraction` 参数。
+- `MaterialPropertyBlock` 里也还没有 `_LidarPointJitterCellFraction` / `_LidarBeamMinRad` / `_LidarBeamMaxRad` 的下发。
+- 这说明工作区现在是“上层字段和调用点先改了一半,底层参数链还没补齐”的状态。
+
+### 来源3: `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+
+- 新字段 `LidarPointJitterCellFraction = 0.35f` 已经加进序列化对象,并且两个调用点都已经把它传给 `m_lidarScan.RenderPointCloud(...)`。
+- 两个 `ValidateLidarSerializedFields(...)` 路径也已经加了 `Mathf.Clamp01` 防御。
+- 这说明本轮应该继续把整条链补完,而不是撤回到“完全不做 jitter”。
+
+### 来源4: `Editor` / `Shader shell` / `Tests`
+
+- `Editor/GsplatRendererEditor.cs` 已经把 `LidarPointJitterCellFraction` 排除出默认绘制,准备放进自定义 LiDAR 调参区。
+- `Editor/GsplatSequenceRendererEditor.cs` 还没同步这个字段。
+- `Runtime/Shaders/GsplatLidar.shader` 与 `Runtime/Shaders/GsplatLidarAlphaToCoverage.shader` 还没声明 `_LidarPointJitterCellFraction` 隐藏属性。
+- `Tests/Editor/GsplatLidarShaderPropertyTests.cs` 里还有一条错误方向的测试,仍在锁“warp footprint cap”。
+
+## 当前结论
+
+- 目前可以确认的静态结论:
+  - `size < 1` 的 subpixel 修复方向是对的,应该保留。
+  - 摩尔纹主方向应该从“show/hide warp 限幅”切回“打散规则 cell 栅格”。
+- 还没完成的动态验证:
+  - 需要用测试锁定新参数确实走通到 shader。
+  - 需要确保新 jitter 方案不会把 first return 数据竞争语义改掉,也不会引入时间闪烁。
+
+## 下一步验证计划
+
+- 先补齐 `GsplatLidarScan.cs` 的参数签名与 MPB 下发。
+- 再补 shader 壳文件和两个 inspector 的可视化入口。
+- 最后把错误方向的 shader 测试改成“stable in-cell jitter + subpixel radius”契约,并跑一次包级 EditMode 测试确认没有新增失败。
+
+## [2026-03-23 17:24:59] [Session ID: 20260323_8] 笔记: `size < 1` 粒子消失问题的最小证伪
+
+## 现象
+
+- 用户确认 `jitter` 已经可以接受。
+- 当前剩余问题收敛为: LiDAR 粒子半径小于 `1px` 时,会出现“显示不出来 / 容易消失”的现象。
+- 当前默认 `LidarParticleAntialiasingMode` 仍是 `LegacySoftEdge`。
+
+## 当前主假设
+
+- 主假设A: 现在的问题不只是 fragment 里保留了真实 subpixel 半径,还因为顶点阶段也把 billboard 几何真实缩到了 `< 1px`。
+- 主假设B: 当几何 footprint 太小而且仍走 `LegacySoftEdge` 时,标准像素中心采样很容易根本不命中这个 quad,于是 fragment 不执行,看起来就像“粒子消失”。
+- 主假设C: 即便强行给几何加大 footprint,如果 fragment 仍只按真实半径做硬边界 discard,subpixel 点仍可能没有任何可见 coverage,所以需要把“真实半径”和“光栅/coverage 支撑半径”分开。
+
+## 最强备选解释
+
+- 备选解释A: 真正导致消失的是 A2C / AnalyticCoverage 分支的某个 alpha 公式不连续,而不是几何 footprint 太小。
+- 备选解释B: 问题只发生在某个特定 AA 模式,默认 Legacy 路径未必需要修。
+
+## 静态证据
+
+### 来源1: `Runtime/Shaders/GsplatLidarPassCore.hlsl`
+
+- 顶点阶段当前直接使用真实半径做几何外扩:
+  - `float rPx = max(_LidarPointRadiusPixels, 0.0);`
+  - `float paddedRadiusPx = rPx + aaFringePadPx;`
+  - `float2 offset = float2(v.vertex.x, v.vertex.y) * paddedRadiusPx * c;`
+- 默认 `LegacySoftEdge` 下 `coverageAaEnabled == 0`,因此 `aaFringePadPx == 0`,也就是 `<1px` 点会真的生成一个 `<1px` 的屏幕空间 quad。
+- fragment 阶段当前对 subpixel 只修了“真实半径不再钳到 1px”: 
+  - `float pointRadiusPxRaw = max(_LidarPointRadiusPixels, 0.0);`
+  - `float pointRadiusPx = max(pointRadiusPxRaw, 1.0e-4);`
+- 但这还没有解决“几何根本没被光栅化”的问题。
+
+### 来源2: `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+
+- 默认 AA 模式是 `LegacySoftEdge`。
+- 默认 `LidarParticleAAFringePixels = 1.0f`,但它只在非 Legacy 模式生效。
+- 这意味着默认配置下,subpixel 点并不会自动获得额外 raster / coverage 支撑空间。
+
+## 最小动态验证
+
+### 验证脚本
+
+```bash
+python3 - <<'PY'
+import math
+
+def covered_pixel_centers(radius_px, center_offset_x, center_offset_y):
+    hits=[]
+    left = center_offset_x - radius_px
+    right = center_offset_x + radius_px
+    bottom = center_offset_y - radius_px
+    top = center_offset_y + radius_px
+    for iy in range(-1, 2):
+        for ix in range(-1, 2):
+            px = ix + 0.5
+            py = iy + 0.5
+            if left <= px <= right and bottom <= py <= top:
+                hits.append((ix, iy))
+    return hits
+
+print('radius\toffset\thit_count\thits')
+for radius in [1.0, 0.75, 0.5, 0.4, 0.3, 0.25, 0.1]:
+    for off in [0.0, 0.25, 0.5]:
+        hits = covered_pixel_centers(radius, off, off)
+        print(f'{radius:.2f}\t{off:.2f}\t{len(hits)}\t{hits}')
+    print('-')
+PY
+```
+
+### 关键输出
+
+- `radius=0.40, offset=0.00 -> hit_count=0`
+- `radius=0.30, offset=0.00 -> hit_count=0`
+- `radius=0.25, offset=0.00 -> hit_count=0`
+- `radius=0.10, offset=0.25 -> hit_count=0`
+
+### 结论
+
+## [2026-03-24 11:50:19 +0800] [Session ID: unknown] 笔记: 方案2 `lidar-external-hybrid-resolve` 的 artifact 设计边界
+
+## 现象
+
+- 方案1 `lidar-external-capture-supersampling` 已经把 external capture 质量提升到“更高 capture fidelity + 继续 point texel read”的稳定状态。
+- 但当 external target 轮廓很细、斜面多,或者 capture texel 与 LiDAR ray 的相位关系不理想时,仍会看到边缘阶梯、断续感与局部空隙。
+- 用户要求继续做方案2,并且明确要两条路径都做:
+  - `2x2 / 3x3 edge-aware nearest resolve`
+  - `subpixel jitter resolve`
+  - 两者可独立开关,也可同时开启
+
+## 当前主假设
+
+- 主假设A: 仅靠 supersampling 仍然会把“单 texel 决策”的局部量化误差留在 silhouette 区域,所以需要邻域级 resolve。
+- 主假设B: 但如果直接做 blur 或普通 bilinear,会把前后表面混掉,破坏方案1刚刚守住的 nearest-hit 语义。
+- 主假设C: 因此方案2应拆成两条职责清晰的路径:
+  - subpixel resolve 负责扩充候选
+  - edge-aware nearest resolve 负责防串边和挑可信 texel
+
+## 最强备选解释
+
+- 备选解释A: 只做 `3x3 edge-aware` 可能已经够用,不一定要上 subpixel candidate。
+- 备选解释B: 只做 `Quad4` 也许已经能减轻阶梯,edge-aware 只会增加成本和阈值复杂度。
+- 当前没有动态证据表明其中任一条可以完全替代另一条,因此 OpenSpec 先把两条都作为可独立开关能力写入,实现阶段再用测试与现场效果决定默认推荐档位。
+
+## 设计结论
+
+### 1. 公开 API 用独立 mode,不用散乱 bool
+
+- `LidarExternalEdgeAwareResolveMode`
+  - `Off`
+  - `Kernel2x2`
+  - `Kernel3x3`
+- `LidarExternalSubpixelResolveMode`
+  - `Off`
+  - `Quad4`
+- 这样 Inspector、文档和测试都更容易表达,也天然覆盖四种组合状态。
+
+### 2. 两者同时开启时顺序固定
+
+- 固定顺序:
+  1. 生成 subpixel candidate uv
+  2. 对每个 candidate 执行 edge-aware neighborhood resolve
+  3. 在所有候选中选最近且可信的 winner
+- 这个顺序最符合当前目标:
+  - 先扩充候选,避免只盯中心 uv
+  - 再做保边过滤,避免跨 silhouette 串边
+  - 最后统一按 nearest-hit 选 winner
+
+### 3. 回退语义必须保守
+
+- edge-aware 过滤失败时,必须回退到中心 point sample。
+- 这样即使阈值过紧,最多退化回方案1,不会凭空制造新的空洞路径。
+
+### 4. color 必须跟随最终 depth winner
+
+- 不允许对 color 独立做平均或单独选样。
+- 原因是 external hit 是“距离 + 颜色”的同一命中结果,不能让深度和颜色来自不同候选。
+
+### 5. subpixel pattern 用 deterministic `Quad4`
+
+- 不用随机 jitter。
+- 这样 temporal stability 更稳,自动化测试也更容易锁定。
+
+### 6. 方案2不是 blur
+
+- OpenSpec 文案必须明确:
+  - 不是普通 blur
+  - 不是 naive bilinear
+  - 不是 plane fitting 或跨表面插值
+- 它本质上是“保 nearest-surface 语义的邻域选样 resolve”。
+
+## 落地提示
+
+- `Kernel3x3 + Quad4` 应作为更高质量、也更高成本的档位描述,不适合默认开启。
+- 如果后续需要公开阈值参数,应谨慎控制数量,避免 Inspector 被一堆细碎 slider 污染。
+
+- 这个最小实验支持主假设A/B:
+  - 当点几何真实缩到 `< 1px` 后,标准像素中心采样下确实可能一个像素都打不到。
+  - 所以“显示消失”不能只靠保留真实半径解决,还需要单独保留一层 subpixel 的 raster / coverage 支撑 footprint。
+- 目前还缺的部分是主假设C 的正式实现验证:
+  - 需要把 shader 改成“真实半径用于视觉强度,支撑半径用于光栅和 coverage”,再跑测试确认这条链路成立。
+
+## [2026-03-23 17:24:59] [Session ID: 20260323_8] 笔记: subpixel 消失问题的修复结论与验证结果
+
+## 结论
+
+- 主假设A/B 已被当前实现与测试共同支持:
+  - 问题不只是 fragment 保留了真实半径后仍然异常。
+  - 更关键的是 `<1px` 点在默认 `LegacySoftEdge` 路径下, billboard 几何和 coverage 支撑都过小,标准像素中心采样下可能完全打不到片元。
+- 最终修复不是把真实半径再钳回 `1px`。
+- 最终修复是把“真实半径”和“subpixel 的 raster / coverage 支撑宽度”拆开:
+  - 真实半径继续保留给视觉语义。
+  - `<1px` 时额外保留 `1px` 的 coverage support,只服务于光栅与 coverage,不改真实 size 语义。
+
+## 已落地实现
+
+### `Runtime/Shaders/GsplatLidarPassCore.hlsl`
+
+- 新增 `ResolveLidarSubpixelCoverageSupportPx(float pointRadiusPxRaw)`
+  - 当 `0 < pointRadiusPxRaw < 1` 时,返回 `1.0`。
+- 新增 `ResolveLidarCoveragePadPx(float pointRadiusPxRaw, float coverageAaEnabled)`
+  - 合并 AA fringe 与 subpixel support,统一给顶点/片元两侧使用。
+- 顶点阶段改为:
+  - `float coveragePadPx = ResolveLidarCoveragePadPx(rPx, coverageAaEnabled);`
+  - `float paddedRadiusPx = rPx + coveragePadPx;`
+- 片元阶段改为:
+  - `float subpixelCoverageSupportPx = ResolveLidarSubpixelCoverageSupportPx(pointRadiusPxRaw);`
+  - `float coveragePadPx = ResolveLidarCoveragePadPx(pointRadiusPxRaw, coverageAaEnabled);`
+  - `float outerLimit = 1.0 + coveragePadPx / pointRadiusPx;`
+  - `float fixedCoverageAlphaShape = saturate(signedEdgePx / max(coveragePadPx, 1.0e-4) + 0.5);`
+  - `if (coverageAaEnabled > 0.5 || subpixelCoverageSupportPx > 0.0)`
+- 这样即使用户还在默认 `LegacySoftEdge`,当粒径小于 `1px` 时也不会因为支撑 footprint 退化而直接消失。
+
+### `Tests/Editor/GsplatLidarShaderPropertyTests.cs`
+
+- 把 shader 契约测试同步到新语义:
+
+## [2026-03-23 21:02:50 +0800] [Session ID: 20260323_9] 笔记: external capture supersampling 方案1的 OpenSpec 设计依据
+
+## 现象
+
+- 用户希望继续推进“方案1”,即通过 external capture supersampling 缓解 frustum external GPU capture 的 depth 台阶。
+- 当前目标不是直接改实现代码,而是先把 OpenSpec change 快进到可实施状态。
+
+## 已确认的静态证据
+
+### 来源1: `Runtime/Lidar/GsplatLidarExternalGpuCapture.cs`
+
+- external capture 创建的 RT 当前使用:
+  - `filterMode = FilterMode.Point`
+  - `antiAliasing = 1`
+- 这说明 capture 结果本身没有依赖硬件 MSAA 做平滑。
+
+### 来源2: `Runtime/Shaders/Gsplat.compute`
+
+- `ResolveExternalFrustumHits` 当前会把 `uv` 直接映射成整数像素:
+  - `int2 staticPixel = int2(...)`
+- 然后使用:
+  - `_LidarExternalStaticLinearDepthTex.Load(int3(staticPixel, 0)).x`
+- dynamic external 路径也是同样模式。
+- 这说明当前 resolve 是典型的 point texel read,不是 bilinear,也不是 neighborhood-aware resolve。
+
+### 来源3: `Runtime/Shaders/GsplatLidarExternalCapture.shader`
+
+- external capture 写入的是最近表面的线性 view depth。
+- 这是一张离散屏幕空间 depth 图,不是连续几何求交结果。
+
+## 当前结论
+
+- 对于 frustum external GPU capture 这条链路来说,“depth 基于像素采样而产生台阶感”已经有代码证据支撑。
+- 但这不能外推成“高密度波纹细缝全部都由 depth 台阶单独造成”。
+- 当前更稳妥的 OpenSpec 方案1应该是:
+  - 先提高 external capture 的离屏分辨率
+  - 继续保留 point resolve 与 nearest-surface / nearest-hit 语义
+  - 暂不引入 blur、naive bilinear 深度混合、edge-aware resolve
+
+## 最强备选解释
+
+- 备选解释A: 轮廓台阶确实能被 supersampling 缓解,但规则 LiDAR 栅格自身的 moire 仍会残留。
+- 备选解释B: 如果直接做 blur 或 bilinear 深度混合,虽然边缘看起来更“顺”,但前后表面可能被错误混合,反而破坏 first-hit 语义。
+
+## 对 OpenSpec artifact 的影响
+
+- `design.md` 需要明确:
+  - 方案1是“提高 capture fidelity”,不是“改变 depth resolve 语义”
+  - `Scale` 模式是首选质量入口
+  - 风险主要是显存/带宽/性能开销,不是语义变化
+- capability spec 需要锁定:
+  - supersampling 是正式支持的质量路径
+  - `Scale` 模式下分辨率推导必须可预测
+  - supersampling 不得改变最近表面选择语义
+  - 文档/Inspector 要把它作为台阶问题的推荐缓解手段
+
+## [2026-03-23 22:07:39 +0800] [Session ID: 20260323_10] 笔记: OpenSpec 落地前的差距核对与最终实施口径
+
+## 现象
+
+- OpenSpec 的 `design/spec/tasks` 已经齐了,但真正落代码前,需要分清楚“哪些能力代码里已经有了,哪些还只是 spec 里写了”。
+- 首轮核对后发现:
+  - `Auto / Scale / Explicit` 的 runtime 逻辑已经存在
+  - Inspector 也已经有基础说明
+  - README / CHANGELOG 也已经有大部分 external capture resolution 说明
+- 真正还缺的是:
+  - 更明确的“推荐怎么用”提示
+  - 更硬的回归测试,锁死 point texel read 与 depth/color layout 一致性
+
+## 当前主结论
+
+- 这次落地不需要重写 `GsplatLidarExternalGpuCapture` 的核心逻辑。
+- 更正确的做法是:
+  - 保留现有 capture-size 与 point resolve 实现
+  - 补足注释 / tooltip / Inspector help box / README / CHANGELOG 的设计口径
+  - 补足针对 invalid scale、point texel read、depth/color 同尺寸的测试护栏
+
+## 已补的关键护栏
+
+- runtime tooltip:
+  - 明确 `Scale > 1` 是 external depth stair-stepping 的推荐缓解手段
+  - 明确更高分辨率会增加显存 / 带宽 / capture 成本
+  - 明确这是提高 capture fidelity,不是改成 blur / bilinear depth 混合
+- compute / helper 注释:
+  - 明确方案1保留 point texel read
+  - 明确 `scale = 1` 继续等价于 Auto 基准尺寸
+  - 明确 depth / surfaceColor / depthStencil 必须共享同一 capture 尺寸
+- tests:
+  - invalid scale 会回退到 Auto 基准尺寸
+  - `Scale < 1` 仍能作为合法 downsample 工作
+  - external resolve 不允许偷偷改成 `Sample` / `SampleLevel`
+  - depth / surfaceColor / depthStencil 三者 capture 尺寸保持一致
+
+## 动态验证结果
+
+- `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - 结果: 成功, `0 warning / 0 error`
+- Unity EditMode targeted run:
+  - command filter: `Gsplat.Tests.GsplatLidarExternalGpuCaptureTests`
+  - 结果: `11 passed / 0 failed / 0 skipped`
+
+## 最终结论
+
+- `lidar-external-capture-supersampling` 这次实现已经把“方案1”的设计边界正式落进代码、文档和测试。
+- 当前 supersampling 路线的口径已经清晰:
+  - 推荐先调 `Scale > 1`
+  - 保持 point-based nearest-surface resolve
+  - 不把 blur / bilinear 深度混合混进方案1
+
+## [2026-03-24 10:53:30 +0800] [Session ID: 20260324_1] 笔记: 方案2 explore 的问题定义
+
+## 现象
+
+- 方案1已经落地:
+  - external capture supersampling
+  - point texel read 保持不变
+- 用户现在要继续开方案2 explore。
+- 这说明新的问题不是“怎么开启 supersampling”,而是“如果 supersampling 之后仍觉得 external edge 台阶感不够好,下一步还能怎么做”。
+
+## 当前主假设
+
+- 主假设A: 方案2的核心目标应该是“在保住 nearest-surface 语义的前提下,减少 external depth 的 silhouette 阶梯”。
+- 主假设B: 纯 blur / 纯 bilinear 仍然不适合作为方案2默认路线,因为它们太容易跨边界混前后表面。
+- 主假设C: 更可行的方案2,应该是 edge-aware / neighborhood-aware 的“选样”或“保边过渡”,而不是简单平均。
+
+## 当前约束
+
+- 当前 `Gsplat.compute` 的 `ResolveExternalFrustumHits` 是:
+  - `uv -> int2 pixel`
+  - `Load(int3(pixel, 0))`
+- 当前 capture 输入只有:
+  - linear depth
+  - surface color
+- 目前没有额外的:
+  - normal buffer
+  - object id buffer
+  - motion vector
+- 这意味着方案2如果想保边,最好优先在“深度邻域选择”上做文章,而不是依赖更多 GBuffer 语义。
+
+## 初步候选方向
+
+- 方向1: 2x2 / 3x3 edge-aware nearest resolve
+  - 读小邻域深度
+  - 用深度差阈值 / ray-distance 一致性筛掉跨边界样本
+  - 从剩余候选里选最可信的最近样本
+- 方向2: 多点 jittered subpixel resolve
+  - 对每个 LiDAR cell 不是只取一个 uv,而是取 4 个或更多亚像素偏移样本
+  - 再按 nearest-hit 规则选最可信候选
+- 方向3: edge-aware weighted resolve
+  - 仍做加权,但权重同时看 uv 距离和深度差
+  - 只有深度接近时才允许混合
+- 方向4: 更激进的 silhouette-aware plane fit / reprojection
+  - 复杂度更高
+  - 当前更像后续方案3,不适合作为马上落地的方案2
+
+## [2026-03-24 10:53:30 +0800] [Session ID: 20260324_1] 笔记: 用户确认方案2同时包含两条 resolve 路线并支持独立开关
+
+## 用户决策
+
+- 用户希望方案2不是二选一,而是把这两条路线都做进去:
+  - `2x2 / 3x3 edge-aware nearest resolve`
+  - `多点 subpixel jitter resolve`
+- 同时要求:
+  - 两者都能单独开 / 关
+  - 也能同时开启
+
+## 当前设计结论
+
+- 这件事可以做,但最好不要用两个松散 bool 直接硬拼。
+- 更稳的设计是:
+  - 一个“edge-aware resolve mode”枚举
+  - 一个“subpixel resolve mode”枚举
+- 两者都提供 `Off`,这样天然满足“可单独开关”。
+
+## 推荐的开关形态
+
+- `LidarExternalEdgeAwareResolveMode`
+  - `Off`
+  - `Kernel2x2`
+  - `Kernel3x3`
+- `LidarExternalSubpixelResolveMode`
+  - `Off`
+  - `Quad4`
+
+## 四种组合语义
+
+- `Off + Off`
+  - 保持当前方案1行为
+  - `uv -> int pixel -> Load`
+- `Kernel2x2/3x3 + Off`
+  - 只做 edge-aware nearest resolve
+- `Off + Quad4`
+  - 只做多点 subpixel resolve
+- `Kernel2x2/3x3 + Quad4`
+  - 两者都开启
+  - 需要固定执行顺序,避免组合行为不明确
+
+## 推荐执行顺序
+
+- 先生成 subpixel 候选 uv
+- 再对每个候选 uv 做 edge-aware neighborhood resolve
+- 最后在所有候选结果里选“最近且可信”的 winner
+
+这样能保持一个清晰的语义:
+- subpixel resolve 负责“扩大可见采样机会 / 打散 texel 相位”
+- edge-aware resolve 负责“防止跨边界错采”
+- final winner selection 负责“继续保持 nearest-hit 语义”
+
+## 关键护栏
+
+- 不要用随机 jitter pattern
+  - 应使用固定的 deterministic quad pattern
+  - 否则 temporal stability 很容易出问题
+- edge-aware 过滤失败时,应回退到中心 point sample
+  - 这样阈值太紧时只是退化回方案1
+  - 不会凭空制造新空洞
+- color 必须跟随最终 depth winner
+  - 不能对颜色做单独平均
+  - 否则颜色和距离会脱钩
+  - 锁定 `ResolveLidarSubpixelCoverageSupportPx`
+  - 锁定 `ResolveLidarCoveragePadPx`
+  - 锁定 `<1px` 时会启用额外 coverage support,而不是回到旧的 `max(..., 1.0)` 语义
+
+## 验证结果
+
+### 编译验证
+
+```bash
+dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal
+```
+
+结果:
+- `0 个警告`
+- `0 个错误`
+
+### Unity 包级 EditMode 验证
+
+```bash
+/Applications/Unity/Hub/Editor/6000.3.8f1/Unity.app/Contents/MacOS/Unity \
+  -batchmode \
+  -accept-apiupdate \
+  -projectPath /tmp/gsplat_pkg_min_project \
+  -runTests \
+  -testPlatform EditMode \
+  -assemblyNames Gsplat.Tests.Editor \
+  -testResults /tmp/gsplat_pkg_min_project_tests_20260323_173424.xml \
+  -logFile /tmp/gsplat_pkg_min_project_unity_20260323_173424.log
+```
+
+结果摘要:
+- `total=123`
+- `passed=117`
+- `failed=3`
+- `skipped=3`
+
+与本次相关的测试结果:
+- `Gsplat.Tests.GsplatLidarShaderPropertyTests.LidarShader_UsesAnalyticCoverageAndExternalHitCompetition => Passed`
+- `Gsplat.Tests.GsplatLidarShaderPropertyTests.LidarShader_ProtectsSubpixelPointRadiusAndUsesStableInCellJitter => Passed`
+- `Gsplat.Tests.GsplatLidarShaderPropertyTests.LidarAlphaToCoverageShader_DeclaresAlphaToMaskOn => Passed`
+- `Gsplat.Tests.GsplatLidarScanTests.ValidateLidarSerializedFields_PreservesSubpixelPointRadius_GsplatRenderer => Passed`
+- `Gsplat.Tests.GsplatLidarScanTests.ValidateLidarSerializedFields_PreservesSubpixelPointRadius_GsplatSequenceRenderer => Passed`
+
+剩余 3 个失败测试:
+- `Gsplat.Tests.GsplatVisibilityAnimationTests.AdvanceVisibilityState_LegacyDurationMode_ProgressRemainsBoundsIndependent`
+- `Gsplat.Tests.GsplatVisibilityAnimationTests.AdvanceVisibilityState_WorldSpeedMode_KeepsRevealFrontDistanceComparableAcrossBoundsScales`
+- `Gsplat.Tests.GsplatVisibilityAnimationTests.SetRenderStyleAndRadarScan_Animated_KeepsSplatsUntilGaussianAlphaFadeFinishes`
+
+判断:
+- 这 3 个失败与本次 LiDAR subpixel / jitter 修复无直接对应关系。
+- 当前证据支持“本次改动没有扩大失败面,相关 LiDAR 测试已通过”。
+
+## [2026-03-23 17:24:59] [Session ID: 20260323_8] 笔记: 为什么密度打高后会出现空隙和波纹细缝
+
+## 现象
+
+- 用户追问: 为什么 LiDAR / RadarScan 的粒子密度打高以后,反而会出现大量空隙和波纹细缝。
+- 这类现象在“点分布非常均匀 + 单点尺寸较小”时最明显。
+
+## 当前主假设
+
+- 主假设A: 这不是“密度越高,几何上真的更稀疏”了。
+- 主假设B: 真正出现的是采样拍频:
+  - LiDAR 点是规则角栅格.
+  - 屏幕显示又是规则像素栅格.
+  - 当两套规则频率接近但又不完全一致时,会出现有组织的明暗带、细缝、空隙,也就是摩尔纹 / beat pattern。
+- 主假设C: 当单点半径较小,甚至进入 subpixel 区间时,每个点对像素的覆盖本来就很脆弱,所以这种拍频会被放大,看起来像“大量空隙”。
+
+## 最强备选解释
+
+- 备选解释A: 不是摩尔纹,而是 show/hide 的 warp 或噪声把点真的拉开了。
+- 备选解释B: 不是规则栅格问题,而是 fragment alpha 或深度混合公式造成的周期性丢失。
+
+## 当前证据
+
+### 静态证据
+
+- 当前 LiDAR 点默认按 `(azBin, beamIndex)` 的规则角域中心重建。
+- 在未加 jitter 的情况下,每个 cell 都落在非常规则的 bin center 上。
+- 这天然会形成一个规则点阵,与屏幕像素栅格发生拍频。
+
+### 最小数值实验
+
+- 用规则点阵覆盖规则像素中心做简化模拟。
+- 只改变点阵步长(step),保持点为小方形 footprint。
+- 结果会出现明显的 coverage 波动: 有些步长 / 相位组合下覆盖率突然掉很多,看起来就是“空一条缝”或“出现明暗波纹”。
+
+## 当前结论
+
+- 目前更符合证据的解释是:
+  - 密度打高以后,问题不是“点不够多”,而是“点太规则”。
+  - 当规则点阵进入接近像素频率的区间时,屏幕上看到的是采样拍频,不是物理密度本身。
+- 所以用户看到“大量空隙和波纹细缝”,本质上是 aliasing / moire,不是数据真的缺了一大片。
+- 这也是为什么 stable in-cell jitter 会有效:
+  - 它不是增加点数。
+  - 它是在打散规则相位,让原本集中成条纹的误差变成更均匀的细噪声。
+
+## [2026-03-23 17:24:59] [Session ID: 20260323_8] 笔记: camera depth 像素阶梯假设的静态验证
+
+## 现象
+
+- 用户怀疑: 细缝/阶梯是否来自 camera depth 图本身按像素采样,深度存在 pixel-based 阶梯。
+- 用户进一步问: 能不能在深度图采样时做一个过渡。
+
+## 当前主假设
+
+- 主假设A: 如果当前走的是 frustum external GPU capture 路径,那么 external mesh 的深度确实不是连续几何解析求交,而是“先渲染到离屏 depth RT,再在 compute 中按像素读取”。
+- 主假设B: 这条路径上的深度读取当前是 nearest / point 风格,没有任何 bilinear / neighborhood 过渡。
+- 主假设C: 因此如果用户看到的是 external target 边缘、斜面、远处小结构上的阶梯 / 细缝,那么 depth RT 的像素化确实可能是参与因素。
+
+## 最强备选解释
+
+- 备选解释A: 当前用户看到的主要细缝仍然是 LiDAR 规则角栅格 vs 屏幕像素栅格的摩尔纹,而不是 external depth capture。
+- 备选解释B: 即使 external depth 存在像素阶梯,它也更可能影响 external target 的表面轮廓与远处斜边,不一定解释所有“高密度规则细缝”。
+
+## 静态证据
+
+### 来源1: `Runtime/Lidar/GsplatLidarExternalGpuCapture.cs`
+
+- external capture 创建 RT 时明确使用:
+  - `filterMode = FilterMode.Point`
+  - `antiAliasing = 1`
+- 深度与颜色 capture 纹理都是 point filter。
+
+### 来源2: `Runtime/Shaders/Gsplat.compute`
+
+- external frustum resolve 不是连续采样,而是直接把 uv 映射到整数像素:
+  - `int2 staticPixel = int2(min((int)(uv.x * (float)staticCaptureWidth), staticCaptureWidth - 1), ... )`
+  - `float linearDepth = _LidarExternalStaticLinearDepthTex.Load(int3(staticPixel, 0)).x;`
+- dynamic 路径同样如此:
+  - `float linearDepth = _LidarExternalDynamicLinearDepthTex.Load(int3(dynamicPixel, 0)).x;`
+- `Load(...)` 是整数 texel 读取,没有双线性过滤,也没有邻域平滑。
+
+### 来源3: `Runtime/Shaders/GsplatLidarExternalCapture.shader`
+
+- depth capture pass 写的是“当前像素最近表面”的线性 view depth。
+- 这说明 external capture 的深度本质上就是一张屏幕空间离散深度图,不是 per-ray 的连续几何求交结果。
+
+## 当前结论
+
+- 如果讨论的是 frustum external GPU capture 这条链路,那么“深度基于 pixel 采样,存在阶梯”是有静态证据支撑的。
+- 但是不能把它直接说成“当前所有波纹细缝的唯一根因”。
+- 更准确的说法是:
+  - 它是一个真实存在的候选来源。
+  - 它更容易在 external target 的边界、斜面、远处小结构上制造台阶感、断续感。
+  - 而高密度规则点阵本身的摩尔纹问题,仍然是另一条独立来源。
+
+## 能否做“深度采样过渡”
+
+- 可以做,而且方向上是合理的。
+- 但要注意: 不能简单对深度做普通线性 blur,否则会把前后表面混在一起,造成穿帮或漂浮。
+- 更稳的方向通常是:
+  1. 小邻域(min / median / bilateral-like) 深度 resolve
+  2. 对轮廓 / 深度跳变做阈值保护,避免跨物体边缘混合
+  3. 或直接 supersample capture RT,降低像素阶梯本身
+
+## [2026-03-23 17:24:59] [Session ID: 20260323_8] 笔记: 已创建方案1的 OpenSpec change
+
+## 目标
+
+- 为“external capture 超采样降低 depth 台阶”创建独立 OpenSpec change。
+- change 名称采用: `lidar-external-capture-supersampling`
+- 这样后续可以单独跟踪 proposal / design / tasks,避免把实现意图散落在临时对话里。
+
+## [2026-03-23 17:24:59] [Session ID: 20260323_8] 笔记: 已创建 supersampling change 的 proposal
+
+- artifact: `openspec/changes/lidar-external-capture-supersampling/proposal.md`
+- capability 命名: `gsplat-lidar-external-capture-quality`
+- proposal 重点:
+  - external depth 的 texel 阶梯问题
+  - supersampling 作为低风险优先方案
+  - 不先引入更重的 edge-aware resolve
+
+## [2026-03-24 12:34:31 +0800] [Session ID: 20260324_8] 笔记: `lidar-external-hybrid-resolve` 最终验证与测试契约回收
+
+## 现象
+
+- `lidar-external-hybrid-resolve` 的 OpenSpec `tasks.md` 只剩 `4.4` 未勾。
+- `dotnet build` 已通过,但 Unity MCP 跑测链路先后出现两类干扰:
+  - 旧 job `16b3d306df314707b4353231203bd602` 会把后续请求挡成 `tests_running`
+  - `test_names` 精确过滤虽然能启动 job,但返回 `summary.total = 0`,不能证明目标用例真的执行过
+
+## 当前主假设
+
+- 主假设A: `4.4` 的剩余问题主要是验证证据链不够干净,不是 hybrid resolve 还缺实现。
+- 主假设B: 当前唯一与本轮代码直接相关的红项,是 `ExternalGpuResolve_UsesLinearDepthTextureBeforeRayDistanceConversion` 仍锁着旧的 static/dynamic 内联源码形态。
+
+## 最强备选解释
+
+- 备选解释A: 可能不是测试契约漂移,而是 compute helper 重构时真的改坏了“先读 linear depth,再转 ray depth”的语义。
+- 备选解释B: 整程序集的既有失败可能遮住新增回归,所以不能只看失败总数。
+
+## 验证计划
+
+- 先静态回读 `Tests/Editor/GsplatLidarExternalGpuCaptureTests.cs` 与 `Runtime/Shaders/Gsplat.compute`,判断是实现坏了还是断言过时。
+- 若证据显示只是断言漂移,就修测试后重跑:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - Unity EditMode `Gsplat.Tests.Editor` 整程序集
+- 最终不看“是否全绿”,而是看失败列表里是否还出现任何 `GsplatLidarScanTests` 或 `GsplatLidarExternalGpuCaptureTests`。
+
+## 静态证据
+
+### 来源1: `Tests/Editor/GsplatLidarExternalGpuCaptureTests.cs`
+
+- 旧断言要求源码直接出现:
+  - `_LidarExternalStaticLinearDepthTex.Load(...)`
+  - `_LidarExternalDynamicLinearDepthTex.Load(...)`
+- 这说明测试锁的是“展开后的源码结构”,不是“helper 收敛后的语义”。
+
+### 来源2: `Runtime/Shaders/Gsplat.compute`
+
+- 当前真实语义仍然存在:
+  - `float linearDepth = linearDepthTex.Load(int3(pixel, 0)).x;`
+  - `float rayDepth = linearDepth / rayForwardDot;`
+- static / dynamic 只是改为通过 `ResolveExternalCaptureSource(...)` 复用 `LoadExternalPointSample(...)`,并没有退回 bilinear sample 或 encoded depth decode。
+
+## 动态验证
+
+- `openspec status --change "lidar-external-hybrid-resolve" --json`
+  - 结果: `proposal/design/specs/tasks` 全部 `done`
+- `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - 结果: `0 warning / 0 error`
+- Unity EditMode 整程序集:
+  - job: `9bfd63c810704827aacb7c94bbfae734`
+  - 结果: `completed=131 / total=131`
+  - 失败列表仅剩:
+    - `GsplatSplat4DImporterDeltaV1Tests.ImportV1_StaticSingleFrame4D_RealFixturePlyThroughExporterAndImporter`
+      - 原因: `numpy` 缺失
+    - 多个 `GsplatVisibilityAnimationTests`
+  - 失败列表中已不再包含任何 `GsplatLidarScanTests` 或 `GsplatLidarExternalGpuCaptureTests`
+
+## 结论
+
+- 主假设A成立: `4.4` 的关键难点是验证口径收口,不是实现继续缺功能。
+- 主假设B成立: 本轮真正需要修的是测试契约漂移,不是 compute hybrid resolve 语义退化。
+- `lidar-external-hybrid-resolve` 可以视为实现和相关验证都已完成。
+- 仓库仍有与本轮无关的既有失败:
+  - `GsplatVisibilityAnimationTests`
+  - `numpy` 环境缺失导致的 importer fixture
+
+## [2026-03-24 13:09:06 +0800] [Session ID: 20260324_8] 笔记: Metal 上 `ExternalResolveSample` struct ternary 不可编译
+
+## 现象
+
+- 用户反馈 Metal 编译报错:
+  - `conditional operator only supports results with numeric scalar, vector, or matrix types`
+- 报错位置落在 `Runtime/Shaders/Gsplat.compute`
+- Unity Console 在 reload 后稳定复现这条 shader error
+
+## 当前主假设
+
+- 主假设: `ResolveExternalCandidate(...)` 里用三元表达式返回 `ExternalResolveSample` 这个自定义 struct:
+  - `return bestNeighborhoodSample.Valid != 0 ? bestNeighborhoodSample : centerSample;`
+- Metal/HLSLcc 只接受数值标量 / 向量 / 矩阵作为 `?:` 结果,不接受自定义 struct
+
+## 最强备选解释
+
+- 备选解释: 可能是 `Gsplat.compute` 里别的 `?:` 也触发了同类限制,而不是这一行
+
+## 验证计划
+
+- 先全文件搜索 `Gsplat.compute` 中所有 `?:`
+- 确认哪些是 numeric,哪些是 sample struct
+- 若只有这一处 struct ternary,就只改这一处为显式 `if/return`,不扩大改动面
+
+## 静态证据
+
+### 来源1: `Runtime/Shaders/Gsplat.compute`
+
+- 搜索结果:
+  - `return _LidarExternalSubpixelResolveMode == ... ? 4 : 1;`
+  - `return bestNeighborhoodSample.Valid != 0 ? bestNeighborhoodSample : centerSample;`
+  - `_LidarExternalRangeSqBits[cell] = bestSample.Valid != 0 ? ...`
+  - `_LidarExternalBaseColor[cell] = bestSample.Valid != 0 ? ...`
+- 其中只有 `bestNeighborhoodSample / centerSample` 这一处返回的是自定义 struct `ExternalResolveSample`
+
+## 动态验证
+
+- `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - 结果: `0 warning / 0 error`
+- Unity reload 后读取 Console:
+  - `filter_text = Gsplat.compute`
+  - 结果: `0` 条
+  - `filter_text = conditional operator`
+  - 结果: `0` 条
+
+## 结论
+
+- 主假设成立,备选解释不成立
+- Metal 编译错误的根因就是“对自定义 struct 使用三元返回”
+- 最正确修法是改成显式分支返回,而不是继续围绕 Metal 单独打平台补丁
+
+## [2026-03-24 14:12:25 +0800] [Session ID: 20260324_8] 笔记: LiDAR compute 单轴 dispatch 超出 65535 group limit 的根因与修法
+
+## 现象
+
+- 用户现场报错:
+  - `Thread group count is above the maximum allowed limit. Maximum allowed thread group count is 65535.`
+- 栈定位到:
+  - `Gsplat.GsplatLidarScan:TryRebuildRangeImage(...)`
+  - `Graphics.ExecuteCommandBuffer(m_cmd);`
+
+## 当前主假设
+
+- 主假设: 当前不是“线程数超过了”,而是单次 `DispatchCompute(x,1,1)` 的 `x` 维 group count 超过了 `65535`
+- 因为当前 LiDAR range image compute 使用:
+  - `k_lidarThreads = 256`
+  - `groupsCells = DivRoundUp(cellCount, 256)`
+  - `groupsSplats = DivRoundUp(splatCount, 256)`
+- 所以一旦 `cellCount` 或 `splatCount` 超过 `16776960`,单次 x 维 dispatch 就会撞上平台上限
+
+## 最强备选解释
+
+- 备选解释: 不是单轴 dispatch 设计问题,而只是这次某个 kernel 参数/坏数据异常把 group count 算错了
+
+## 验证计划
+
+- 先回读 `TryRebuildRangeImage(...)` 的 dispatch 公式
+- 再搜索整个仓库里是否还有同类 “`DispatchCompute(groups,1,1)` + 线性索引 kernel” 的路径
+- 若证据成立,就不去试图“突破 65535”,而是把线性索引 kernel 改成支持 `dispatchBaseIndex` 分批执行
+
+## 静态证据
+
+### 来源1: `Runtime/Lidar/GsplatLidarScan.cs`
+
+- 旧代码:
+  - `m_cmd.DispatchCompute(..., groupsCells, 1, 1);`
+  - `m_cmd.DispatchCompute(..., groupsSplats, 1, 1);`
+- `groupsCells/groupsSplats` 都直接来自 `DivRoundUp(itemCount, 256)`
+
+### 来源2: `Runtime/Shaders/Gsplat.compute`
+
+- `ClearRangeImage` / `ReduceMinRangeSq` / `ResolveMinSplatId` / `ResolveExternalFrustumHits`
+  都使用线性 `SV_DispatchThreadID.x` 作为全局索引
+- 这说明它们天然适合改成“同一 kernel 多次 dispatch + baseIndex 偏移”
+
+### 来源3: `Runtime/Lidar/GsplatLidarExternalGpuCapture.cs`
+
+- external frustum resolve 也有同类路径:
+  - `DispatchCompute(..., groups, 1, 1);`
+- 如果只修 `GsplatLidarScan`,后续 external capture 仍可能撞同一个上限
+
+## 动态验证
+
+- `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - 结果: `0 warning / 0 error`
+- Unity Console:
+  - 清空后 refresh/compile
+  - 查询 `Thread group count is above the maximum allowed limit`
+  - 结果: `0` 条
+- Unity EditMode 整程序集:
+  - job: `fa6d81bb09744bbe8966695fc555f4a9`
+  - 结果: `133/133` 执行完成
+  - 失败列表里无 `GsplatUtilsTests`、`GsplatLidarScanTests` 或 `GsplatLidarExternalGpuCaptureTests`
+
+## 结论
+
+- 主假设成立,备选解释不成立
+- 这个 `65535` 上限本身不能直接“超过”
+- 正确修法不是提高上限,而是:
+  - CPU 侧分批 dispatch
+  - shader 侧加 `dispatchBaseIndex`
+  - 让多个 dispatch 共同覆盖完整的一维 item 空间
+
+## [2026-03-24 14:29:56 +0800] [Session ID: 20260324_9] 笔记: `LidarBeamCount` 的 `512` 上限属于历史防呆值,不是当前底层硬上限
+
+## 现象
+
+- 用户发现 `LidarBeamCount` 在运行时会被限制到 `512`
+- 字段声明本身只有 `[Min(1)]`,但实际值进入运行期后会被压回 `512`
+
+## 当前主假设
+
+- 主假设:
+  - `512` 来自 `ValidateLidarSerializedFields()` 的历史防御性 clamp
+  - 不是 shader、layout、buffer 或 dispatch 体系的真实硬上限
+
+## 最强备选解释
+
+- 备选解释:
+  - 仓库里也许还有其他隐式约束,比如:
+    - layout helper 默认只支持 `512`
+    - range image / LUT buffer 用固定容量
+    - 测试契约仍把 `512` 当正式上限
+
+## 验证计划
+
+- 回读 `TryGetEffectiveLidarLayout`
+- 回读 `EnsureRangeImageBuffers` / `EnsureLutBuffers`
+- 回读相关 EditMode tests
+- 再结合前一轮已完成的“线性 compute dispatch 分批化”修复,判断 `512` 是否仍有保留必要
+
+## 静态证据
+
+### 来源1: `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+
+- 旧限制都在 `ValidateLidarSerializedFields()`:
+  - `if (LidarBeamCount > 512) LidarBeamCount = 512;`
+- 字段声明处没有 `[Range(..., 512)]`,只有 `[Min(1)]`
+
+### 来源2: `Runtime/Lidar/GsplatLidarScan.cs`
+
+- `EnsureRangeImageBuffers(...)` 使用:
+  - `cellCount = azimuthBins * beamCount`
+- `EnsureLutBuffers(...)` 使用:
+  - `azimuthBins`
+  - `beamCount`
+- 整条 buffer 分配链都是按一般 `cellCount` / `beamCount` 工作,没有写死 `512`
+
+### 来源3: `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+
+- `TryGetEffectiveLidarLayout(...)` 与 external hit 路径都只是把 `LidarBeamCount` 传给 layout / cellCount 公式
+- 没有发现“超过 `512` 就直接拒绝”的隐藏分支
+
+### 来源4: 既有 dispatch 修复
+
+- 前一轮已经把 LiDAR 相关线性 compute kernel 改成分批 dispatch
+- 因此“为了绕开单次 `DispatchCompute(x,1,1)` 的 `65535` 上限而把 beamCount 压在 `512` 以下”这条理由已经失效
+
+## 动态验证
+
+- 源码检索:
+  - 已确认旧的 `LidarBeamCount > 512` / `LidarBeamCount = 512` runtime clamp 不再存在
+- 编译验证:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - 结果: `0 warning / 0 error`
+- Unity EditMode 整程序集:
+  - job: `a135cf447dc74e7b9fa6d7449c5b8126`
+  - 已执行 `135/135`
+  - 失败列表仍是既有 `numpy` 缺失 importer fixture 与 `GsplatVisibilityAnimationTests`
+  - 未出现新的 `GsplatLidarScanTests` 红项
+- 点名过滤验证:
+  - job: `81632a589684421490a5ad08169771ec`
+  - 返回 `summary.total = 0`
+  - 这类结果不能当作有效通过证据,因此本轮不把它计入正式验证结论
+
+## 结论
+
+- 主假设成立
+- `LidarBeamCount = 512` 是旧的保守防呆值,不是当前底层硬上限
+- 当前正确语义应为:
+  - `beamCount < 1` 时回默认值
+  - 合法大值原样保留
+  - 真正的上限由 `beamCount * azimuthBins` 带来的性能、显存和 buffer 成本决定

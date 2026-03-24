@@ -160,3 +160,15 @@
   - `LATER_PLANS__sog4d_updatecount_bad.md`
   - `EPIPHANY_LOG__sog4d_updatecount_bad.md`
   - `ERRORFIX__sog4d_updatecount_bad.md`
+
+## [2026-03-24 16:05:00] [Session ID: 20260324_27] 支线索引: __continuous_learning_20260324
+
+- 启用原因: 用户明确触发 `continuous-learning` skill。该任务需要系统回读默认组六文件与多条历史支线,并执行摘要、归档、经验沉淀与索引更新。为了避免把持续学习过程混写进 2026-03-15 尚未完成的主线任务,启用独立支线上下文集。
+- 支线主题: 按 `continuous-learning` 流程完成六文件检索总结、活跃度判定、归档、经验分流、`AGENTS.md` 索引检查,并给出当前项目后续建议。
+- 对应上下文集:
+  - `task_plan__continuous_learning_20260324.md`
+  - `notes__continuous_learning_20260324.md`
+  - `WORKLOG__continuous_learning_20260324.md`
+  - `LATER_PLANS__continuous_learning_20260324.md`
+  - `EPIPHANY_LOG__continuous_learning_20260324.md`
+  - `ERRORFIX__continuous_learning_20260324.md`
