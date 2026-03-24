@@ -87,9 +87,18 @@ Texture2D<float4> _LidarExternalDynamicSurfaceColorTex;
 float4x4 _LidarExternalCaptureProjection;
 float4 _LidarExternalStaticCaptureSize;
 float4 _LidarExternalDynamicCaptureSize;
+int _LidarExternalEdgeAwareResolveMode;
+int _LidarExternalSubpixelResolveMode;
 
 static const uint kLidarInfBits = 0x7f7fffff; // float max
 static const uint kLidarInvalidId = 0xffffffff;
+static const int kLidarExternalEdgeAwareResolveOff = 0;
+static const int kLidarExternalEdgeAwareResolveKernel2x2 = 1;
+static const int kLidarExternalEdgeAwareResolveKernel3x3 = 2;
+static const int kLidarExternalSubpixelResolveOff = 0;
+static const int kLidarExternalSubpixelResolveQuad4 = 1;
+static const float kLidarExternalEdgeAwareDepthAbsMeters = 0.05;
+static const float kLidarExternalEdgeAwareDepthRelFactor = 0.02;
 
 [numthreads(LIDAR_GROUP_SIZE,1,1)]
 void ClearRangeImage(uint3 id : SV_DispatchThreadID)
@@ -247,6 +256,234 @@ void ResolveMinSplatId(uint3 id : SV_DispatchThreadID)
     InterlockedMin(_LidarMinSplatId[cell], splatId);
 }
 
+struct ExternalResolveSample
+{
+    uint Valid;
+    float RayDepth;
+    uint DepthSqBits;
+    float4 BaseColor;
+    int2 Pixel;
+};
+
+ExternalResolveSample MakeInvalidExternalResolveSample()
+{
+    ExternalResolveSample sample;
+    sample.Valid = 0;
+    sample.RayDepth = 0.0;
+    sample.DepthSqBits = kLidarInfBits;
+    sample.BaseColor = 0.0;
+    sample.Pixel = int2(0, 0);
+    return sample;
+}
+
+bool IsExternalResolveSampleCloser(ExternalResolveSample candidate, ExternalResolveSample currentBest)
+{
+    return candidate.Valid != 0 && (currentBest.Valid == 0 || candidate.DepthSqBits < currentBest.DepthSqBits);
+}
+
+int2 ResolveExternalCaptureSizeInt2(float4 captureSize)
+{
+    return int2(max((int)captureSize.x, 0), max((int)captureSize.y, 0));
+}
+
+float2 ResolveExternalClampedUv(float2 uv)
+{
+    return saturate(uv);
+}
+
+int2 ResolveExternalPointPixel(float2 uv, int2 captureSize)
+{
+    float2 clampedUv = ResolveExternalClampedUv(uv);
+    return int2(
+        min((int)(clampedUv.x * (float)captureSize.x), captureSize.x - 1),
+        min((int)(clampedUv.y * (float)captureSize.y), captureSize.y - 1));
+}
+
+float ResolveExternalDepthConsistencyThreshold(float referenceRayDepth)
+{
+    return max(kLidarExternalEdgeAwareDepthAbsMeters, referenceRayDepth * kLidarExternalEdgeAwareDepthRelFactor);
+}
+
+bool IsExternalDepthConsistent(float candidateRayDepth, float referenceRayDepth)
+{
+    return abs(candidateRayDepth - referenceRayDepth) <= ResolveExternalDepthConsistencyThreshold(referenceRayDepth);
+}
+
+ExternalResolveSample LoadExternalPointSample(Texture2D<float4> linearDepthTex,
+    Texture2D<float4> surfaceColorTex,
+    int2 pixel,
+    float rayForwardDot)
+{
+    ExternalResolveSample sample = MakeInvalidExternalResolveSample();
+    sample.Pixel = pixel;
+
+    float linearDepth = linearDepthTex.Load(int3(pixel, 0)).x;
+    if (linearDepth <= 0.0 || !isfinite(linearDepth))
+        return sample;
+
+    float rayDepth = linearDepth / rayForwardDot;
+    if (rayDepth <= 0.0 || !isfinite(rayDepth))
+        return sample;
+
+    float depthSq = rayDepth * rayDepth;
+    if (depthSq <= 0.0 || !isfinite(depthSq))
+        return sample;
+
+    sample.Valid = 1;
+    sample.RayDepth = rayDepth;
+    sample.DepthSqBits = asuint(depthSq);
+    sample.BaseColor = surfaceColorTex.Load(int3(pixel, 0));
+    return sample;
+}
+
+float2 ResolveExternalQuad4OffsetInTexels(int candidateIndex)
+{
+    switch (candidateIndex)
+    {
+        case 0:
+            return float2(-0.25, -0.25);
+        case 1:
+            return float2(0.25, -0.25);
+        case 2:
+            return float2(-0.25, 0.25);
+        case 3:
+            return float2(0.25, 0.25);
+        default:
+            return 0.0;
+    }
+}
+
+int GetExternalSubpixelCandidateCount()
+{
+    return _LidarExternalSubpixelResolveMode == kLidarExternalSubpixelResolveQuad4 ? 4 : 1;
+}
+
+float2 GetExternalSubpixelCandidateUv(float2 uv, int2 captureSize, int candidateIndex)
+{
+    if (_LidarExternalSubpixelResolveMode != kLidarExternalSubpixelResolveQuad4)
+        return ResolveExternalClampedUv(uv);
+
+    float2 texelSize = 1.0 / max(float2(captureSize), 1.0);
+    float2 offsetUv = ResolveExternalQuad4OffsetInTexels(candidateIndex) * texelSize;
+    return ResolveExternalClampedUv(uv + offsetUv);
+}
+
+int GetExternalNeighborhoodSampleCount()
+{
+    if (_LidarExternalEdgeAwareResolveMode == kLidarExternalEdgeAwareResolveKernel2x2)
+        return 4;
+    if (_LidarExternalEdgeAwareResolveMode == kLidarExternalEdgeAwareResolveKernel3x3)
+        return 9;
+
+    return 1;
+}
+
+int2 GetExternalNeighborhoodPixel(float2 uv, int2 captureSize, int sampleIndex)
+{
+    int2 captureMax = max(captureSize - 1, 0);
+    int2 centerPixel = ResolveExternalPointPixel(uv, captureSize);
+
+    if (_LidarExternalEdgeAwareResolveMode == kLidarExternalEdgeAwareResolveKernel2x2)
+    {
+        float2 pixelPos = ResolveExternalClampedUv(uv) * float2(captureSize) - 0.5;
+        int2 anchorPixel = clamp((int2)floor(pixelPos), int2(0, 0), captureMax);
+
+        switch (sampleIndex)
+        {
+            case 0:
+                return anchorPixel;
+            case 1:
+                return int2(min(anchorPixel.x + 1, captureMax.x), anchorPixel.y);
+            case 2:
+                return int2(anchorPixel.x, min(anchorPixel.y + 1, captureMax.y));
+            case 3:
+                return int2(min(anchorPixel.x + 1, captureMax.x), min(anchorPixel.y + 1, captureMax.y));
+            default:
+                return centerPixel;
+        }
+    }
+
+    if (_LidarExternalEdgeAwareResolveMode == kLidarExternalEdgeAwareResolveKernel3x3)
+    {
+        int2 offset = int2(sampleIndex % 3, sampleIndex / 3) - 1;
+        return clamp(centerPixel + offset, int2(0, 0), captureMax);
+    }
+
+    return centerPixel;
+}
+
+ExternalResolveSample ResolveExternalCandidate(Texture2D<float4> linearDepthTex,
+    Texture2D<float4> surfaceColorTex,
+    int2 captureSize,
+    float2 candidateUv,
+    float rayForwardDot)
+{
+    ExternalResolveSample centerSample = LoadExternalPointSample(
+        linearDepthTex,
+        surfaceColorTex,
+        ResolveExternalPointPixel(candidateUv, captureSize),
+        rayForwardDot);
+
+    if (_LidarExternalEdgeAwareResolveMode == kLidarExternalEdgeAwareResolveOff)
+        return centerSample;
+
+    ExternalResolveSample bestNeighborhoodSample = MakeInvalidExternalResolveSample();
+    bool hasReferenceDepth = centerSample.Valid != 0;
+    int neighborhoodSampleCount = GetExternalNeighborhoodSampleCount();
+
+    for (int sampleIndex = 0; sampleIndex < neighborhoodSampleCount; sampleIndex++)
+    {
+        ExternalResolveSample neighborhoodSample = LoadExternalPointSample(
+            linearDepthTex,
+            surfaceColorTex,
+            GetExternalNeighborhoodPixel(candidateUv, captureSize, sampleIndex),
+            rayForwardDot);
+        if (neighborhoodSample.Valid == 0)
+            continue;
+
+        if (hasReferenceDepth && !IsExternalDepthConsistent(neighborhoodSample.RayDepth, centerSample.RayDepth))
+            continue;
+
+        if (IsExternalResolveSampleCloser(neighborhoodSample, bestNeighborhoodSample))
+            bestNeighborhoodSample = neighborhoodSample;
+    }
+
+    // 回退语义:
+    // - edge-aware 过滤一旦没有留下可信邻域,就退回当前 candidate 的中心 point sample.
+    // - 这样阈值过紧时最多退化回方案1,不会凭空制造新的命中语义.
+    return bestNeighborhoodSample.Valid != 0 ? bestNeighborhoodSample : centerSample;
+}
+
+ExternalResolveSample ResolveExternalCaptureSource(Texture2D<float4> linearDepthTex,
+    Texture2D<float4> surfaceColorTex,
+    float4 captureSize,
+    float2 uv,
+    float rayForwardDot)
+{
+    int2 captureSizeInt = ResolveExternalCaptureSizeInt2(captureSize);
+    if (captureSizeInt.x <= 0 || captureSizeInt.y <= 0)
+        return MakeInvalidExternalResolveSample();
+
+    ExternalResolveSample bestCandidateSample = MakeInvalidExternalResolveSample();
+    int subpixelCandidateCount = GetExternalSubpixelCandidateCount();
+
+    for (int candidateIndex = 0; candidateIndex < subpixelCandidateCount; candidateIndex++)
+    {
+        float2 candidateUv = GetExternalSubpixelCandidateUv(uv, captureSizeInt, candidateIndex);
+        ExternalResolveSample candidateSample = ResolveExternalCandidate(
+            linearDepthTex,
+            surfaceColorTex,
+            captureSizeInt,
+            candidateUv,
+            rayForwardDot);
+
+        if (IsExternalResolveSampleCloser(candidateSample, bestCandidateSample))
+            bestCandidateSample = candidateSample;
+    }
+
+    return bestCandidateSample;
+}
+
 [numthreads(LIDAR_GROUP_SIZE,1,1)]
 void ResolveExternalFrustumHits(uint3 id : SV_DispatchThreadID)
 {
@@ -283,69 +520,28 @@ void ResolveExternalFrustumHits(uint3 id : SV_DispatchThreadID)
     if (rayDirSensor.z <= 1e-6)
         return;
 
-    uint bestDepthSqBits = kLidarInfBits;
-    float4 bestBaseColor = 0.0;
+    ExternalResolveSample bestSample = MakeInvalidExternalResolveSample();
 
-    int staticCaptureWidth = (int)_LidarExternalStaticCaptureSize.x;
-    int staticCaptureHeight = (int)_LidarExternalStaticCaptureSize.y;
-    if (staticCaptureWidth > 0 && staticCaptureHeight > 0)
-    {
-        // 方案1的质量策略:
-        // - supersampling 只提高 capture RT 分辨率,降低 texel 量化台阶.
-        // - resolve 仍然保持 point texel read,不做 bilinear / blur,避免跨边界混合前后表面.
-        int2 staticPixel = int2(
-            min((int)(uv.x * (float)staticCaptureWidth), staticCaptureWidth - 1),
-            min((int)(uv.y * (float)staticCaptureHeight), staticCaptureHeight - 1));
+    ExternalResolveSample staticSample = ResolveExternalCaptureSource(
+        _LidarExternalStaticLinearDepthTex,
+        _LidarExternalStaticSurfaceColorTex,
+        _LidarExternalStaticCaptureSize,
+        uv,
+        rayDirSensor.z);
+    if (IsExternalResolveSampleCloser(staticSample, bestSample))
+        bestSample = staticSample;
 
-        float linearDepth = _LidarExternalStaticLinearDepthTex.Load(int3(staticPixel, 0)).x;
-        if (linearDepth > 0.0 && isfinite(linearDepth))
-        {
-            float depth = linearDepth / rayDirSensor.z;
-            if (depth > 0.0 && isfinite(depth))
-            {
-                float depthSq = depth * depth;
-                if (depthSq > 0.0 && isfinite(depthSq))
-                {
-                    bestDepthSqBits = asuint(depthSq);
-                    bestBaseColor = _LidarExternalStaticSurfaceColorTex.Load(int3(staticPixel, 0));
-                }
-            }
-        }
-    }
+    ExternalResolveSample dynamicSample = ResolveExternalCaptureSource(
+        _LidarExternalDynamicLinearDepthTex,
+        _LidarExternalDynamicSurfaceColorTex,
+        _LidarExternalDynamicCaptureSize,
+        uv,
+        rayDirSensor.z);
+    if (IsExternalResolveSampleCloser(dynamicSample, bestSample))
+        bestSample = dynamicSample;
 
-    int dynamicCaptureWidth = (int)_LidarExternalDynamicCaptureSize.x;
-    int dynamicCaptureHeight = (int)_LidarExternalDynamicCaptureSize.y;
-    if (dynamicCaptureWidth > 0 && dynamicCaptureHeight > 0)
-    {
-        // dynamic 路径与 static 路径保持同一语义:
-        // - 同样用 point texel read 读取最近表面的 depth / color
-        // - 只允许 capture fidelity 不同,不允许 resolve 规则不同
-        int2 dynamicPixel = int2(
-            min((int)(uv.x * (float)dynamicCaptureWidth), dynamicCaptureWidth - 1),
-            min((int)(uv.y * (float)dynamicCaptureHeight), dynamicCaptureHeight - 1));
-
-        float linearDepth = _LidarExternalDynamicLinearDepthTex.Load(int3(dynamicPixel, 0)).x;
-        if (linearDepth > 0.0 && isfinite(linearDepth))
-        {
-            float depth = linearDepth / rayDirSensor.z;
-            if (depth > 0.0 && isfinite(depth))
-            {
-                float depthSq = depth * depth;
-                if (depthSq > 0.0 && isfinite(depthSq))
-                {
-                    uint depthSqBits = asuint(depthSq);
-                    if (depthSqBits < bestDepthSqBits)
-                    {
-                        bestDepthSqBits = depthSqBits;
-                        bestBaseColor = _LidarExternalDynamicSurfaceColorTex.Load(int3(dynamicPixel, 0));
-                    }
-                }
-            }
-        }
-    }
-
-    _LidarExternalRangeSqBits[cell] = bestDepthSqBits;
-    _LidarExternalBaseColor[cell] = bestBaseColor;
+    _LidarExternalRangeSqBits[cell] = bestSample.Valid != 0 ? bestSample.DepthSqBits : kLidarInfBits;
+    _LidarExternalBaseColor[cell] = bestSample.Valid != 0 ? bestSample.BaseColor : 0.0;
 }
 
 [numthreads(GROUP_SIZE,1,1)]

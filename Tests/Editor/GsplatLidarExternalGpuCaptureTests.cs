@@ -102,6 +102,28 @@ namespace Gsplat.Tests
                 });
         }
 
+        static Vector2[] InvokeDebugResolveSubpixelCandidateUvsForInputs(Vector2 uv,
+            Vector2Int captureSize,
+            GsplatLidarExternalSubpixelResolveMode subpixelResolveMode)
+        {
+            var type = GetExternalGpuCaptureType();
+            var m = type.GetMethod("DebugResolveSubpixelCandidateUvsForInputs",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.IsNotNull(m, "Expected debug subpixel candidate helper to exist.");
+            return (Vector2[])m.Invoke(null, new object[] { uv, captureSize, subpixelResolveMode });
+        }
+
+        static Vector2Int[] InvokeDebugResolveEdgeAwareNeighborhoodPixelsForInputs(Vector2 uv,
+            Vector2Int captureSize,
+            GsplatLidarExternalEdgeAwareResolveMode edgeAwareResolveMode)
+        {
+            var type = GetExternalGpuCaptureType();
+            var m = type.GetMethod("DebugResolveEdgeAwareNeighborhoodPixelsForInputs",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.IsNotNull(m, "Expected debug edge-aware neighborhood helper to exist.");
+            return (Vector2Int[])m.Invoke(null, new object[] { uv, captureSize, edgeAwareResolveMode });
+        }
+
         static bool InvokeIsDynamicCaptureUpdateDue(double nowRealtime,
             float updateHz,
             double lastCaptureRealtime,
@@ -365,6 +387,83 @@ namespace Gsplat.Tests
         }
 
         [Test]
+        public void ExternalGpuCapture_DebugResolveSubpixelCandidateUvsForInputs_KeepsOffAtCenterAndQuad4Deterministic()
+        {
+            var uv = new Vector2(0.5f, 0.5f);
+            var captureSize = new Vector2Int(8, 4);
+
+            var offCandidates = InvokeDebugResolveSubpixelCandidateUvsForInputs(
+                uv,
+                captureSize,
+                GsplatLidarExternalSubpixelResolveMode.Off);
+            CollectionAssert.AreEqual(new[] { uv }, offCandidates);
+
+            var quadCandidatesA = InvokeDebugResolveSubpixelCandidateUvsForInputs(
+                uv,
+                captureSize,
+                GsplatLidarExternalSubpixelResolveMode.Quad4);
+            var quadCandidatesB = InvokeDebugResolveSubpixelCandidateUvsForInputs(
+                uv,
+                captureSize,
+                GsplatLidarExternalSubpixelResolveMode.Quad4);
+
+            Assert.AreEqual(4, quadCandidatesA.Length);
+            CollectionAssert.AreEqual(quadCandidatesA, quadCandidatesB,
+                "Quad4 candidate pattern 必须 deterministic,不能依赖随机 jitter.");
+
+            Assert.AreEqual(new Vector2(0.46875f, 0.4375f), quadCandidatesA[0]);
+            Assert.AreEqual(new Vector2(0.53125f, 0.4375f), quadCandidatesA[1]);
+            Assert.AreEqual(new Vector2(0.46875f, 0.5625f), quadCandidatesA[2]);
+            Assert.AreEqual(new Vector2(0.53125f, 0.5625f), quadCandidatesA[3]);
+        }
+
+        [Test]
+        public void ExternalGpuCapture_DebugResolveEdgeAwareNeighborhoodPixelsForInputs_UsesKernel2x2And3x3Layouts()
+        {
+            var uv = new Vector2(0.51f, 0.49f);
+            var captureSize = new Vector2Int(8, 6);
+
+            var offPixels = InvokeDebugResolveEdgeAwareNeighborhoodPixelsForInputs(
+                uv,
+                captureSize,
+                GsplatLidarExternalEdgeAwareResolveMode.Off);
+            CollectionAssert.AreEqual(new[] { new Vector2Int(4, 2) }, offPixels);
+
+            var kernel2x2Pixels = InvokeDebugResolveEdgeAwareNeighborhoodPixelsForInputs(
+                uv,
+                captureSize,
+                GsplatLidarExternalEdgeAwareResolveMode.Kernel2x2);
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    new Vector2Int(3, 2),
+                    new Vector2Int(4, 2),
+                    new Vector2Int(3, 3),
+                    new Vector2Int(4, 3)
+                },
+                kernel2x2Pixels);
+
+            var kernel3x3Pixels = InvokeDebugResolveEdgeAwareNeighborhoodPixelsForInputs(
+                uv,
+                captureSize,
+                GsplatLidarExternalEdgeAwareResolveMode.Kernel3x3);
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    new Vector2Int(3, 1),
+                    new Vector2Int(4, 1),
+                    new Vector2Int(5, 1),
+                    new Vector2Int(3, 2),
+                    new Vector2Int(4, 2),
+                    new Vector2Int(5, 2),
+                    new Vector2Int(3, 3),
+                    new Vector2Int(4, 3),
+                    new Vector2Int(5, 3)
+                },
+                kernel3x3Pixels);
+        }
+
+        [Test]
         public void ExternalGpuCaptureShader_UsesCullOffAndHardwareDepthToPreferNearestVisibleSurface()
         {
             const string kShaderAssetPath = "Packages/wu.yize.gsplat/Runtime/Shaders/GsplatLidarExternalCapture.shader";
@@ -412,10 +511,12 @@ namespace Gsplat.Tests
             Assert.IsTrue(File.Exists(computeFullPath), $"Expected compute source file to exist: {computeFullPath}");
 
             var computeText = File.ReadAllText(computeFullPath);
-            StringAssert.Contains("float linearDepth = _LidarExternalStaticLinearDepthTex.Load(int3(staticPixel, 0)).x;",
-                computeText);
-            StringAssert.Contains("float linearDepth = _LidarExternalDynamicLinearDepthTex.Load(int3(dynamicPixel, 0)).x;",
-                computeText);
+            StringAssert.Contains("float linearDepth = linearDepthTex.Load(int3(pixel, 0)).x;",
+                computeText,
+                "point texel read 现在应收敛在统一 helper 里,而不是继续在 static/dynamic 分支各写一份.");
+            StringAssert.Contains("float rayDepth = linearDepth / rayForwardDot;",
+                computeText,
+                "Resolve 仍必须先读取线性 view depth,再转换成 LiDAR ray depth.");
             Assert.IsFalse(computeText.Contains("_LidarExternalStaticLinearDepthTex.Sample("),
                 "external static depth resolve 应保持 point texel read,不要偷偷切成 bilinear Sample.");
             Assert.IsFalse(computeText.Contains("_LidarExternalDynamicLinearDepthTex.Sample("),
@@ -426,6 +527,27 @@ namespace Gsplat.Tests
                 "dynamic depth resolve 不应通过 SampleLevel 做额外纹理过滤.");
             Assert.IsFalse(computeText.Contains("float linearDepth = rcp(encodedDepth);"),
                 "Resolve 不应再把 capture texture 当作 encoded depth 解码.");
+            StringAssert.Contains("LoadExternalPointSample(",
+                computeText,
+                "linear depth -> ray depth 的点采样语义必须收敛在统一 helper 里.");
+            StringAssert.Contains("int _LidarExternalEdgeAwareResolveMode;", computeText,
+                "compute resolve 必须显式接收 edge-aware resolve mode.");
+            StringAssert.Contains("int _LidarExternalSubpixelResolveMode;", computeText,
+                "compute resolve 必须显式接收 subpixel resolve mode.");
+            StringAssert.Contains("ResolveExternalCaptureSource(", computeText,
+                "external resolve 应通过统一 helper 收敛 static / dynamic 的 hybrid resolve 语义.");
+            StringAssert.Contains("_LidarExternalStaticLinearDepthTex,", computeText,
+                "static capture 仍必须走线性 depth 纹理输入.");
+            StringAssert.Contains("_LidarExternalDynamicLinearDepthTex,", computeText,
+                "dynamic capture 仍必须走线性 depth 纹理输入.");
+            StringAssert.Contains("GetExternalSubpixelCandidateUv(", computeText,
+                "Quad4 subpixel candidate 生成必须独立成 helper,以便锁定 deterministic pattern.");
+            StringAssert.Contains("GetExternalNeighborhoodPixel(", computeText,
+                "edge-aware resolve 必须显式读取 kernel 邻域,而不是偷偷退回 blur/bilinear.");
+            StringAssert.Contains("return bestNeighborhoodSample.Valid != 0 ? bestNeighborhoodSample : centerSample;", computeText,
+                "edge-aware 过滤失败时必须回退中心 point sample.");
+            StringAssert.Contains("_LidarExternalBaseColor[cell] = bestSample.Valid != 0 ? bestSample.BaseColor : 0.0;", computeText,
+                "final color 必须跟随最终 depth winner,不能单独 average.");
         }
 
         [Test]
@@ -446,6 +568,30 @@ namespace Gsplat.Tests
                 "depth pass 必须按平台使用正确的 clearDepth,否则 reversed-Z 平台会稳定留下 far side.");
             StringAssert.Contains("m_cmd.ClearRenderTarget(false, true, Color.clear);", sourceText,
                 "Surface color pass 必须保留上一 pass 的 depth buffer,否则无法稳定锁定最近表面颜色.");
+        }
+
+        [Test]
+        public void ExternalGpuCaptureSource_PassesHybridResolveModesToCompute()
+        {
+            const string kSourceAssetPath = "Packages/wu.yize.gsplat/Runtime/Lidar/GsplatLidarExternalGpuCapture.cs";
+
+            var projectRoot = Directory.GetParent(Application.dataPath);
+            Assert.IsNotNull(projectRoot, "Failed to resolve Unity project root from Application.dataPath.");
+
+            var sourceFullPath = Path.Combine(projectRoot.FullName, kSourceAssetPath);
+            Assert.IsTrue(File.Exists(sourceFullPath), $"Expected source file to exist: {sourceFullPath}");
+
+            var sourceText = File.ReadAllText(sourceFullPath);
+            StringAssert.Contains("k_lidarExternalEdgeAwareResolveMode", sourceText,
+                "GPU capture helper 必须显式持有 edge-aware resolve mode 的 compute property ID.");
+            StringAssert.Contains("k_lidarExternalSubpixelResolveMode", sourceText,
+                "GPU capture helper 必须显式持有 subpixel resolve mode 的 compute property ID.");
+            StringAssert.Contains("m_cmd.SetComputeIntParam(computeShader, k_lidarExternalEdgeAwareResolveMode, (int)edgeAwareResolveMode);",
+                sourceText,
+                "ExecuteResolve 必须把 edge-aware resolve mode 下发到 compute shader.");
+            StringAssert.Contains("m_cmd.SetComputeIntParam(computeShader, k_lidarExternalSubpixelResolveMode, (int)subpixelResolveMode);",
+                sourceText,
+                "ExecuteResolve 必须把 subpixel resolve mode 下发到 compute shader.");
         }
 
         [Test]
@@ -472,6 +618,41 @@ namespace Gsplat.Tests
                 "buffers.DepthStencilTexture = new RenderTexture(captureWidth, captureHeight, 24, RenderTextureFormat.Depth)",
                 sourceText,
                 "depth/stencil 也必须与 depth/color capture 使用同一套 capture 尺寸.");
+        }
+
+        [Test]
+        public void ExternalGpuResolve_CombinedPath_EvaluatesSubpixelThenEdgeAwareThenFinalWinner()
+        {
+            const string kComputeAssetPath = "Packages/wu.yize.gsplat/Runtime/Shaders/Gsplat.compute";
+
+            var projectRoot = Directory.GetParent(Application.dataPath);
+            Assert.IsNotNull(projectRoot, "Failed to resolve Unity project root from Application.dataPath.");
+
+            var computeFullPath = Path.Combine(projectRoot.FullName, kComputeAssetPath);
+            Assert.IsTrue(File.Exists(computeFullPath), $"Expected compute source file to exist: {computeFullPath}");
+
+            var computeText = File.ReadAllText(computeFullPath);
+            var resolveSourceIndex = computeText.IndexOf("ExternalResolveSample ResolveExternalCaptureSource(",
+                StringComparison.Ordinal);
+            Assert.GreaterOrEqual(resolveSourceIndex, 0,
+                "Expected hybrid resolve source helper to exist.");
+
+            var candidateUvIndex = computeText.IndexOf("float2 candidateUv = GetExternalSubpixelCandidateUv(",
+                resolveSourceIndex,
+                StringComparison.Ordinal);
+            var candidateResolveIndex = computeText.IndexOf("ExternalResolveSample candidateSample = ResolveExternalCandidate(",
+                resolveSourceIndex,
+                StringComparison.Ordinal);
+            var finalWinnerIndex = computeText.IndexOf("if (IsExternalResolveSampleCloser(candidateSample, bestCandidateSample))",
+                resolveSourceIndex,
+                StringComparison.Ordinal);
+
+            Assert.Greater(candidateUvIndex, resolveSourceIndex,
+                "Combined path 必须先生成 subpixel candidate uv.");
+            Assert.Greater(candidateResolveIndex, candidateUvIndex,
+                "Combined path 必须在 candidate uv 之后再执行 edge-aware resolve.");
+            Assert.Greater(finalWinnerIndex, candidateResolveIndex,
+                "Combined path 必须在 candidate resolve 之后再做 final nearest winner 选择.");
         }
 
         [Test]

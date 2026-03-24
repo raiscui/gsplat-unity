@@ -51,6 +51,8 @@ namespace Gsplat
         static readonly int k_lidarExternalCaptureProjection = Shader.PropertyToID("_LidarExternalCaptureProjection");
         static readonly int k_lidarExternalStaticCaptureSize = Shader.PropertyToID("_LidarExternalStaticCaptureSize");
         static readonly int k_lidarExternalDynamicCaptureSize = Shader.PropertyToID("_LidarExternalDynamicCaptureSize");
+        static readonly int k_lidarExternalEdgeAwareResolveMode = Shader.PropertyToID("_LidarExternalEdgeAwareResolveMode");
+        static readonly int k_lidarExternalSubpixelResolveMode = Shader.PropertyToID("_LidarExternalSubpixelResolveMode");
         static readonly int k_lidarExternalStaticLinearDepthTex = Shader.PropertyToID("_LidarExternalStaticLinearDepthTex");
         static readonly int k_lidarExternalStaticSurfaceColorTex = Shader.PropertyToID("_LidarExternalStaticSurfaceColorTex");
         static readonly int k_lidarExternalDynamicLinearDepthTex = Shader.PropertyToID("_LidarExternalDynamicLinearDepthTex");
@@ -165,6 +167,10 @@ namespace Gsplat
         GraphicsBuffer m_lastResolvedRangeSqBitsBuffer;
         GraphicsBuffer m_lastResolvedBaseColorBuffer;
         bool m_hasResolvedExternalHits;
+        GsplatLidarExternalEdgeAwareResolveMode m_lastEdgeAwareResolveMode =
+            GsplatLidarExternalEdgeAwareResolveMode.Off;
+        GsplatLidarExternalSubpixelResolveMode m_lastSubpixelResolveMode =
+            GsplatLidarExternalSubpixelResolveMode.Off;
 
         public int StaticEntryCount => m_staticEntries.Count;
         public int DynamicEntryCount => m_dynamicEntries.Count;
@@ -199,6 +205,8 @@ namespace Gsplat
             m_lastResolvedRangeSqBitsBuffer = null;
             m_lastResolvedBaseColorBuffer = null;
             m_hasResolvedExternalHits = false;
+            m_lastEdgeAwareResolveMode = GsplatLidarExternalEdgeAwareResolveMode.Off;
+            m_lastSubpixelResolveMode = GsplatLidarExternalSubpixelResolveMode.Off;
         }
 
         public bool TryCaptureExternalHits(GsplatLidarScan lidarScan,
@@ -211,6 +219,8 @@ namespace Gsplat
             GsplatLidarExternalCaptureResolutionMode captureResolutionMode,
             float captureResolutionScale,
             Vector2Int explicitCaptureResolution,
+            GsplatLidarExternalEdgeAwareResolveMode edgeAwareResolveMode,
+            GsplatLidarExternalSubpixelResolveMode subpixelResolveMode,
             GsplatLidarExternalTargetVisibilityMode visibilityMode)
         {
             if (lidarScan == null || settings == null || !frustumCamera)
@@ -228,6 +238,11 @@ namespace Gsplat
             if (!settings.ComputeShader || !settings.LidarExternalCaptureMaterial)
                 return false;
 
+            var sanitizedEdgeAwareResolveMode =
+                GsplatUtils.SanitizeLidarExternalEdgeAwareResolveMode(edgeAwareResolveMode);
+            var sanitizedSubpixelResolveMode =
+                GsplatUtils.SanitizeLidarExternalSubpixelResolveMode(subpixelResolveMode);
+
             SyncGroupEntries(staticTargets, m_staticEntriesByRendererId, m_staticEntries);
             SyncGroupEntries(dynamicTargets, m_dynamicEntriesByRendererId, m_dynamicEntries);
 
@@ -240,6 +255,8 @@ namespace Gsplat
                 m_lastResolvedRangeSqBitsBuffer = null;
                 m_lastResolvedBaseColorBuffer = null;
                 m_hasResolvedExternalHits = false;
+                m_lastEdgeAwareResolveMode = GsplatLidarExternalEdgeAwareResolveMode.Off;
+                m_lastSubpixelResolveMode = GsplatLidarExternalSubpixelResolveMode.Off;
                 lidarScan.ClearExternalHits(Mathf.Max(layout.CellCount, 1));
                 return false;
             }
@@ -282,16 +299,26 @@ namespace Gsplat
                 now,
                 dynamicUpdateHz);
 
+            var resolveModesChanged =
+                sanitizedEdgeAwareResolveMode != m_lastEdgeAwareResolveMode ||
+                sanitizedSubpixelResolveMode != m_lastSubpixelResolveMode;
+
             var needsResolve = staticChanged ||
                                dynamicChanged ||
                                !m_hasResolvedExternalHits ||
+                               resolveModesChanged ||
                                !ReferenceEquals(m_lastResolvedRangeSqBitsBuffer, lidarScan.ExternalRangeSqBitsBuffer) ||
                                !ReferenceEquals(m_lastResolvedBaseColorBuffer, lidarScan.ExternalBaseColorBuffer);
 
             if (!needsResolve)
                 return true;
 
-            return ExecuteResolve(lidarScan, settings.ComputeShader, layout, projectionMatrix);
+            return ExecuteResolve(lidarScan,
+                settings.ComputeShader,
+                layout,
+                projectionMatrix,
+                sanitizedEdgeAwareResolveMode,
+                sanitizedSubpixelResolveMode);
         }
 
         void SyncGroupEntries(GameObject[] roots,
@@ -1149,7 +1176,9 @@ namespace Gsplat
         bool ExecuteResolve(GsplatLidarScan lidarScan,
             ComputeShader computeShader,
             in GsplatLidarLayout layout,
-            Matrix4x4 projectionMatrix)
+            Matrix4x4 projectionMatrix,
+            GsplatLidarExternalEdgeAwareResolveMode edgeAwareResolveMode,
+            GsplatLidarExternalSubpixelResolveMode subpixelResolveMode)
         {
             m_cmd ??= new CommandBuffer { name = "Gsplat.LidarExternalGpuResolve" };
             m_cmd.Clear();
@@ -1157,6 +1186,8 @@ namespace Gsplat
             m_cmd.SetComputeIntParam(computeShader, k_lidarCellCount, layout.CellCount);
             m_cmd.SetComputeIntParam(computeShader, k_lidarAzimuthBins, Mathf.Max(layout.ActiveAzimuthBins, 1));
             m_cmd.SetComputeIntParam(computeShader, k_lidarBeamCount, Mathf.Max(layout.ActiveBeamCount, 1));
+            m_cmd.SetComputeIntParam(computeShader, k_lidarExternalEdgeAwareResolveMode, (int)edgeAwareResolveMode);
+            m_cmd.SetComputeIntParam(computeShader, k_lidarExternalSubpixelResolveMode, (int)subpixelResolveMode);
             m_cmd.SetComputeMatrixParam(computeShader, k_lidarExternalCaptureProjection, projectionMatrix);
             m_cmd.SetComputeVectorParam(computeShader, k_lidarExternalStaticCaptureSize,
                 ResolveCaptureSizeVector(m_staticCaptureState.Buffers, m_staticCaptureState.CaptureValid));
@@ -1192,6 +1223,8 @@ namespace Gsplat
             m_lastResolvedRangeSqBitsBuffer = lidarScan.ExternalRangeSqBitsBuffer;
             m_lastResolvedBaseColorBuffer = lidarScan.ExternalBaseColorBuffer;
             m_hasResolvedExternalHits = true;
+            m_lastEdgeAwareResolveMode = edgeAwareResolveMode;
+            m_lastSubpixelResolveMode = subpixelResolveMode;
             return true;
         }
 
@@ -1617,6 +1650,89 @@ namespace Gsplat
                 out var captureHeight)
                 ? new Vector2Int(captureWidth, captureHeight)
                 : Vector2Int.zero;
+        }
+
+        static Vector2[] DebugResolveSubpixelCandidateUvsForInputs(Vector2 uv,
+            Vector2Int captureSize,
+            GsplatLidarExternalSubpixelResolveMode subpixelResolveMode)
+        {
+            var sanitizedMode = GsplatUtils.SanitizeLidarExternalSubpixelResolveMode(subpixelResolveMode);
+            if (captureSize.x < 1 || captureSize.y < 1)
+                return Array.Empty<Vector2>();
+
+            static Vector2 ClampUv(Vector2 candidateUv)
+            {
+                return new Vector2(Mathf.Clamp01(candidateUv.x), Mathf.Clamp01(candidateUv.y));
+            }
+
+            if (sanitizedMode == GsplatLidarExternalSubpixelResolveMode.Off)
+                return new[] { ClampUv(uv) };
+
+            var texelSize = new Vector2(1.0f / Mathf.Max(captureSize.x, 1), 1.0f / Mathf.Max(captureSize.y, 1));
+            return new[]
+            {
+                ClampUv(uv + Vector2.Scale(new Vector2(-0.25f, -0.25f), texelSize)),
+                ClampUv(uv + Vector2.Scale(new Vector2(0.25f, -0.25f), texelSize)),
+                ClampUv(uv + Vector2.Scale(new Vector2(-0.25f, 0.25f), texelSize)),
+                ClampUv(uv + Vector2.Scale(new Vector2(0.25f, 0.25f), texelSize))
+            };
+        }
+
+        static Vector2Int[] DebugResolveEdgeAwareNeighborhoodPixelsForInputs(Vector2 uv,
+            Vector2Int captureSize,
+            GsplatLidarExternalEdgeAwareResolveMode edgeAwareResolveMode)
+        {
+            var sanitizedMode = GsplatUtils.SanitizeLidarExternalEdgeAwareResolveMode(edgeAwareResolveMode);
+            if (captureSize.x < 1 || captureSize.y < 1)
+                return Array.Empty<Vector2Int>();
+
+            static Vector2 ClampUv(Vector2 candidateUv)
+            {
+                return new Vector2(Mathf.Clamp01(candidateUv.x), Mathf.Clamp01(candidateUv.y));
+            }
+
+            static Vector2Int ResolvePointPixel(Vector2 candidateUv, Vector2Int size)
+            {
+                var clampedUv = ClampUv(candidateUv);
+                return new Vector2Int(
+                    Mathf.Min((int)(clampedUv.x * size.x), size.x - 1),
+                    Mathf.Min((int)(clampedUv.y * size.y), size.y - 1));
+            }
+
+            var centerPixel = ResolvePointPixel(uv, captureSize);
+            if (sanitizedMode == GsplatLidarExternalEdgeAwareResolveMode.Off)
+                return new[] { centerPixel };
+
+            var captureMax = new Vector2Int(Mathf.Max(captureSize.x - 1, 0), Mathf.Max(captureSize.y - 1, 0));
+            if (sanitizedMode == GsplatLidarExternalEdgeAwareResolveMode.Kernel2x2)
+            {
+                var clampedUv = ClampUv(uv);
+                var pixelPos = new Vector2(clampedUv.x * captureSize.x - 0.5f, clampedUv.y * captureSize.y - 0.5f);
+                var anchor = new Vector2Int(
+                    Mathf.Clamp(Mathf.FloorToInt(pixelPos.x), 0, captureMax.x),
+                    Mathf.Clamp(Mathf.FloorToInt(pixelPos.y), 0, captureMax.y));
+
+                return new[]
+                {
+                    anchor,
+                    new Vector2Int(Mathf.Min(anchor.x + 1, captureMax.x), anchor.y),
+                    new Vector2Int(anchor.x, Mathf.Min(anchor.y + 1, captureMax.y)),
+                    new Vector2Int(Mathf.Min(anchor.x + 1, captureMax.x), Mathf.Min(anchor.y + 1, captureMax.y))
+                };
+            }
+
+            return new[]
+            {
+                new Vector2Int(Mathf.Clamp(centerPixel.x - 1, 0, captureMax.x), Mathf.Clamp(centerPixel.y - 1, 0, captureMax.y)),
+                new Vector2Int(centerPixel.x, Mathf.Clamp(centerPixel.y - 1, 0, captureMax.y)),
+                new Vector2Int(Mathf.Clamp(centerPixel.x + 1, 0, captureMax.x), Mathf.Clamp(centerPixel.y - 1, 0, captureMax.y)),
+                new Vector2Int(Mathf.Clamp(centerPixel.x - 1, 0, captureMax.x), centerPixel.y),
+                centerPixel,
+                new Vector2Int(Mathf.Clamp(centerPixel.x + 1, 0, captureMax.x), centerPixel.y),
+                new Vector2Int(Mathf.Clamp(centerPixel.x - 1, 0, captureMax.x), Mathf.Clamp(centerPixel.y + 1, 0, captureMax.y)),
+                new Vector2Int(centerPixel.x, Mathf.Clamp(centerPixel.y + 1, 0, captureMax.y)),
+                new Vector2Int(Mathf.Clamp(centerPixel.x + 1, 0, captureMax.x), Mathf.Clamp(centerPixel.y + 1, 0, captureMax.y))
+            };
         }
     }
 }

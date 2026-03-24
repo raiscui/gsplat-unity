@@ -219,6 +219,20 @@
 
 **目前在阶段3**
 
+## [2026-03-24 12:26:48 +0800] [Session ID: 20260324_8] 阶段进展: 继续收口 `lidar-external-hybrid-resolve` 的 4.4 验证
+
+- [ ] 阶段4: 运行验证,记录结论与后续事项
+  - 当前继续沿用 OpenSpec change: `lidar-external-hybrid-resolve`。
+  - 代码与 `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal` 的静态编译验证已经通过,但 `tasks.md` 的 `4.4` 仍未完成。
+  - 当前主阻塞不是代码编译错误,而是 Unity Editor 侧持续返回 `tests_running`,需要先确认这是已有测试未结束,还是状态卡住未释放。
+  - 下一步先读取 Unity 当前 editor/test 状态,若已可运行,立即执行 `Gsplat.Tests.Editor` 下的相关 EditMode 测试并据结果更新 OpenSpec task。
+
+## 状态
+
+**目前在阶段4**
+- 正在处理 `lidar-external-hybrid-resolve` 的最终验证收尾。
+- 下一步先确认 Unity Editor 是否还处于 `tests_running` 占用状态。
+
 ## [2026-03-24 11:50:19 +0800] [Session ID: unknown] 阶段进展: 一次性补齐方案2 hybrid resolve artifacts
 
 - [x] 阶段1: 计划和设置
@@ -268,6 +282,67 @@
 **目前在阶段4(本轮 OpenSpec artifact 快进已完成)**
 - `lidar-external-hybrid-resolve` 已具备完整的 `proposal/design/specs/tasks`。
 - 下一步可以直接进入实现阶段,按 `tasks.md` 落代码与测试。
+
+## [2026-03-24 11:59:27 +0800] [Session ID: unknown] 阶段进展: 开始实施 `lidar-external-hybrid-resolve`
+
+- [ ] 阶段3: 执行/构建
+  - 已确认本轮正式进入 `openspec-apply-change` 流程。
+  - 当前 change: `lidar-external-hybrid-resolve`
+  - 下一步先读取 `openspec instructions apply`、proposal/design/specs/tasks 和当前 runtime/editor/tests 代码入口。
+  - 目标是先确认现有代码结构能否直接承接:
+    - 新增两个 resolve mode 的 public API
+    - `Gsplat.compute` 的 hybrid candidate resolve 流程
+    - Inspector、README、CHANGELOG 与测试矩阵
+- [ ] 阶段4: 运行验证,记录结论与后续事项
+  - 代码落地后需要更新 `tasks.md` checkbox,并跑编译与相关 EditMode 测试。
+
+## 状态
+
+**目前在阶段3**
+- 已从 artifact 创建切到真正实现阶段。
+- 正在读取 apply 指引与代码现状,准备拆出第一批可直接落地的任务。
+
+## [2026-03-24 12:00:00 +0800] [Session ID: unknown] 阶段进展: hybrid resolve 主体实现已落地,验证被现有 Unity 实例占用阻塞
+
+- [x] 阶段3: 执行/构建
+  - 已完成 public API:
+    - `GsplatLidarExternalEdgeAwareResolveMode`
+    - `GsplatLidarExternalSubpixelResolveMode`
+  - 已完成 `GsplatRenderer` / `GsplatSequenceRenderer` 的默认值、sanitize 与 Inspector 接线。
+  - 已完成 `GsplatLidarExternalGpuCapture` 的参数链与 mode-change re-resolve 触发。
+  - 已完成 `Gsplat.compute` 的 hybrid resolve 主体:
+    - deterministic `Quad4`
+    - `Kernel2x2 / Kernel3x3` edge-aware neighborhood resolve
+    - final nearest winner
+    - color follows winner
+  - 已完成 `README.md` / `CHANGELOG.md` 与相关 EditMode 测试补充。
+- [ ] 阶段4: 运行验证,记录结论与后续事项
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal` 已通过,`0 warning / 0 error`。
+  - Unity CLI `-runTests` 被现有打开的 Unity 实例占用阻塞,不是代码报错。
+  - Unity MCP 已连接到实例 `st-dongfeng-worldmodel@717de14b`,但 `run_tests` 持续返回 `tests_running`,当前无法拿到新的 EditMode 执行结果。
+
+## 状态
+
+**目前在阶段4(实现已完成,最终 Unity 跑测被阻塞)**
+- 代码、文档和测试已补齐。
+- 当前唯一未闭环项是拿到一次新的 Unity EditMode 执行结果。
+
+## [2026-03-24 12:25:36 +0800] [Session ID: unknown] 阶段进展: 继续处理 `4.4` Unity 跑测阻塞
+
+- [ ] 阶段4: 运行验证,记录结论与后续事项
+  - 当前唯一未完成项仍是 `openspec tasks 4.4`。
+  - 已知现象:
+    - Unity CLI 直接跑 `-runTests` 时,报“另一个 Unity 实例正在打开该项目”。
+    - Unity MCP 已连到现有实例,但 `run_tests` 连续返回 `tests_running`。
+  - 下一步先确认这是不是“现有测试任务仍在跑 / 卡住”,还是“编辑器刚 recompile 完仍未释放测试状态”。
+  - 若能接管现有测试任务或等到空闲,就继续跑目标测试组并收证据。
+  - 若确认短时间内无法解锁,则要把阻塞原因、已完成验证和剩余风险明确写回记录。
+
+## 状态
+
+**目前仍在阶段4**
+- 正在专门处理 Unity 测试占用问题。
+- 目标是不留模糊口径,而是拿到明确的“可跑 / 不可跑”证据。
 - 正在实施 OpenSpec change: `lidar-external-capture-supersampling`。
 - 当前先做静态差距核对,然后按 tasks 顺序落代码与文档。
 
@@ -348,3 +423,20 @@
 - 下一步如果继续,最自然的是:
   - 继续把 `design.md` 和 `specs` 补出来
   - 或先停在 proposal 阶段审口径
+
+## [2026-03-24 12:34:31 +0800] [Session ID: 20260324_8] 阶段完成: `lidar-external-hybrid-resolve` 验证已收口
+
+- [x] 阶段4: 运行验证,记录结论与后续事项
+  - 已执行 `openspec status --change "lidar-external-hybrid-resolve" --json`,结果为 `proposal/design/specs/tasks` 全部 `done`。
+  - 已执行 `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`,结果 `0 warning / 0 error`。
+  - 已验证 Unity MCP 的旧 job `16b3d306df314707b4353231203bd602` 实际是“初始化超时后自动失败”,不能继续当作运行中 job。
+  - 已确认 `test_names` 精确过滤返回 `summary.total = 0` 时不能作为有效通过证据,因此本轮改用整程序集失败列表归因。
+  - 已重新跑 `Gsplat.Tests.Editor` 整程序集 EditMode 验证。最终失败列表里不再包含任何 `GsplatLidarScanTests` 或 `GsplatLidarExternalGpuCaptureTests`。
+  - 剩余失败来自既有 `GsplatVisibilityAnimationTests` 和环境缺失 `numpy` 的 importer fixture,未见本轮 hybrid resolve 扩大失败面。
+  - 已把 `openspec/changes/lidar-external-hybrid-resolve/tasks.md` 的 `4.4` 勾选完成。
+
+## 状态
+
+**目前在阶段4(已完成)**
+- `lidar-external-hybrid-resolve` 的实现与相关验证已经完成。
+- 下一步更适合归档该 change,或者单独处理现有的 `GsplatVisibilityAnimationTests` / `numpy` 环境问题。

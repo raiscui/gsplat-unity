@@ -109,3 +109,62 @@
 ### 总结感悟
 - 方案2最核心的边界,不是“把边缘弄顺”这么抽象,而是明确它是“保 nearest-surface 语义的候选选样 resolve”。
 - 这次先把 API、顺序、回退和颜色绑定规则写清楚,比直接冲进实现更稳,后面落代码时不容易因为局部效果好看而破坏整体语义。
+
+## [2026-03-24 12:00:00 +0800] [Session ID: unknown] 任务名称: 落地方案2 `lidar-external-hybrid-resolve`
+
+### 任务内容
+- 按 OpenSpec `tasks.md` 实施 frustum external hybrid resolve。
+- 把 `edge-aware nearest resolve + Quad4 subpixel resolve` 真的接到 runtime / editor / compute / docs / tests。
+- 尽量把验证推进到 Unity EditMode 真实执行阶段。
+
+### 完成过程
+- 在 `Runtime/GsplatUtils.cs` 中新增:
+  - `GsplatLidarExternalEdgeAwareResolveMode`
+  - `GsplatLidarExternalSubpixelResolveMode`
+  - 以及对应 sanitize helper
+- 在 `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs` 中新增两个公开字段,补默认值、校验和 GPU capture 调用参数。
+- 在 `Editor/GsplatRendererEditor.cs` / `Editor/GsplatSequenceRendererEditor.cs` 中新增 Hybrid Resolve 区块,把组合顺序、成本差异和“不是 blur”写进 HelpBox。
+- 在 `Runtime/Lidar/GsplatLidarExternalGpuCapture.cs` 中补齐:
+  - 两个 compute property ID
+  - `TryCaptureExternalHits` 新参数
+  - mode 变化触发重新 resolve 的缓存失效逻辑
+  - Debug helper,供 EditMode tests 锁定 Quad4 / kernel 布局
+- 在 `Runtime/Shaders/Gsplat.compute` 中把原来的单 texel external resolve 重构成:
+  - center point sample
+  - `Quad4` subpixel candidate 生成
+  - `Kernel2x2 / Kernel3x3` edge-aware neighborhood 过滤
+  - final nearest winner 选择
+  - color follows winner
+- 在 `Tests/Editor/GsplatLidarScanTests.cs` / `Tests/Editor/GsplatLidarExternalGpuCaptureTests.cs` 中补了默认值、sanitize、deterministic Quad4、kernel 布局、参数下发和 source contract 测试。
+- 在 `README.md` / `CHANGELOG.md` 中同步文档口径。
+
+### 总结感悟
+- 这次最关键的工程点,其实不是 shader 公式本身,而是把“mode 切换也必须触发重新 resolve”这条状态语义补上,否则 Inspector 调档位时很容易看到旧缓存假象。
+- `Off + Off` 保持原路径不动,把新能力都收进 helper,这种改法虽然比直接硬改长一点,但回归风险明显更低。
+
+## [2026-03-24 12:34:31 +0800] [Session ID: 20260324_8] 任务名称: 收口 `lidar-external-hybrid-resolve` 的最终验证
+
+### 任务内容
+- 完成 OpenSpec `4.4`。
+- 把 Unity MCP 测试占用、会话抖动和真正有效的验证证据区分清楚。
+- 修掉一条因 helper 重构带来的测试契约漂移。
+
+### 完成过程
+- 先重新读取支线 `task_plan`、`notes`、`WORKLOG` 与 `openspec/changes/lidar-external-hybrid-resolve/tasks.md`,确认唯一未完成项就是 `4.4`。
+- 再通过 `mcpforunity://editor/state`、`~/.unity-mcp/unity-mcp-status-717de14b.json` 与 `lsof` 交叉确认:
+  - Unity Editor 仍在运行
+  - MCP bridge listener 存在
+  - 旧 job `16b3...` 实际是初始化超时后自动失败,不是真的一直在跑
+- 然后重新绑定 active instance,恢复动作通道,并继续执行 Unity EditMode 验证。
+- 在整程序集首轮验证里定位到唯一相关红项:
+  - `Gsplat.Tests.GsplatLidarExternalGpuCaptureTests.ExternalGpuResolve_UsesLinearDepthTextureBeforeRayDistanceConversion`
+- 最后把这条测试从“锁旧的 static/dynamic 内联源码”改成“锁统一 helper 下的 linear depth -> ray depth point load 语义”,并重新完成编译与整程序集复验。
+
+### 总结感悟
+- 这轮最重要的收获,不是“又跑了一次测试”,而是把无效证据排除了:
+  - `tests_running` 不一定代表 job 真在执行
+  - `summary.total = 0` 的 `test_names` 结果不能当通过
+- Unity MCP 在 domain reload 后可能换端口,所以验证时要同时看:
+  - `editor/state`
+  - `~/.unity-mcp/unity-mcp-status-*.json`
+  - `lsof` 的实际 listener

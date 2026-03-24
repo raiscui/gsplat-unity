@@ -168,6 +168,18 @@ Enable it in the Inspector:
     - Use a larger `Explicit` resolution only when you need exact control over the capture width / height
     - This improves the offscreen external depth/color capture precision, but it does **not** change the LiDAR beam / azimuth grid semantics themselves
     - Higher capture resolutions increase offscreen RT memory / bandwidth / capture cost
+  - Optional frustum external hybrid resolve controls (`CameraFrustum` GPU capture only):
+    - `LidarExternalEdgeAwareResolveMode`
+      - `Off` = keep the supersampling-only center-uv point texel read path
+      - `Kernel2x2` = read a `2x2` neighborhood around each candidate and keep only depth-consistent nearest samples
+      - `Kernel3x3` = use a `3x3` neighborhood for a stronger but more expensive edge-aware resolve
+    - `LidarExternalSubpixelResolveMode`
+      - `Off` = evaluate only the center uv
+      - `Quad4` = evaluate 4 deterministic subpixel candidates before choosing the final nearest winner
+    - Both modes are independent and can be combined
+    - When both are enabled, the order is fixed: `subpixel candidate -> edge-aware neighborhood resolve -> final nearest winner`
+    - This path still avoids blur / naive bilinear depth mixing; final color follows the same resolved winner as depth
+    - `Kernel3x3 + Quad4` is the highest-cost quality tier and should stay opt-in
   - Legacy `LidarExternalTargets` is still accepted and maps to `LidarExternalStaticTargets` for backward compatibility
   - `LidarExternalTargetVisibilityMode = ForceRenderingOff` by default, so those targets can stay scan-only (participate in LiDAR, but stop rendering as ordinary meshes)
   - `ForceRenderingOffInPlayMode` keeps the original mesh visible while editing, but automatically hides it during Play mode
@@ -231,6 +243,8 @@ r.LidarExternalDynamicUpdateHz = 15.0f;
 r.LidarExternalCaptureResolutionMode = GsplatLidarExternalCaptureResolutionMode.Scale;
 r.LidarExternalCaptureResolutionScale = 2.0f; // supersample frustum external capture for sharper mesh silhouettes
 r.LidarExternalCaptureResolution = new Vector2Int(2560, 1440); // only used in Explicit mode
+r.LidarExternalEdgeAwareResolveMode = GsplatLidarExternalEdgeAwareResolveMode.Kernel2x2; // conservative edge-aware quality tier
+r.LidarExternalSubpixelResolveMode = GsplatLidarExternalSubpixelResolveMode.Quad4; // add 4 deterministic subpixel candidates
 r.LidarExternalTargetVisibilityMode = GsplatLidarExternalTargetVisibilityMode.ForceRenderingOffInPlayMode;
 r.LidarExternalHitBiasMeters = 0.0f; // keep at 0 by default, opt in only if points look slightly behind the mesh
 r.HideSplatsWhenLidarEnabled = true;
@@ -261,6 +275,9 @@ Manual verification checklist:
 - In `CameraFrustum` mode, dynamic external meshes refresh at `LidarExternalDynamicUpdateHz` and can remain stale between refreshes by design
 - In `CameraFrustum` mode, increasing `LidarExternalCaptureResolutionMode=Scale` or using a larger `Explicit` resolution should make external-mesh silhouettes look less blocky, while leaving the LiDAR grid semantics unchanged
 - The current quality path intentionally keeps point-based nearest-surface resolve; supersampling reduces capture quantization, but it does not switch the external depth resolve to blur or bilinear depth averaging
+- In `CameraFrustum` mode, `LidarExternalEdgeAwareResolveMode=Kernel2x2/Kernel3x3` should improve silhouette stability without turning the external depth resolve into blur or cross-surface averaging
+- In `CameraFrustum` mode, `LidarExternalSubpixelResolveMode=Quad4` should evaluate a deterministic 4-candidate pattern; repeated captures under the same input should not jitter randomly
+- When both hybrid resolve modes are enabled, the final external color should still follow the same resolved winner as depth
 - With `LidarExternalTargetVisibilityMode=ForceRenderingOff`, external targets disappear as ordinary meshes but still remain valid LiDAR scan targets
 - With `LidarExternalTargetVisibilityMode=ForceRenderingOffInPlayMode`, external targets remain visible while editing but switch to scan-only during Play mode
 - With ordinary meshes still visible, `LidarExternalHitBiasMeters` can stay at `0` by default, and only be increased slightly (`0.01`, `0.02`, ...) if the RadarScan particles look like they are sitting just behind the source mesh surface

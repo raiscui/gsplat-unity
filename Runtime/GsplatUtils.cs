@@ -82,6 +82,30 @@ namespace Gsplat
     }
 
     /// <summary>
+    /// frustum external GPU capture 的保边 resolve 模式.
+    /// - Off: 保持方案1的中心 uv point texel read.
+    /// - Kernel2x2: 读取围绕 candidate uv 的 2x2 小邻域,做保边 nearest resolve.
+    /// - Kernel3x3: 读取 3x3 小邻域,质量更高,但成本也更高.
+    /// </summary>
+    public enum GsplatLidarExternalEdgeAwareResolveMode
+    {
+        Off = 0,
+        Kernel2x2 = 1,
+        Kernel3x3 = 2
+    }
+
+    /// <summary>
+    /// frustum external GPU capture 的 subpixel candidate 模式.
+    /// - Off: 只看中心 uv.
+    /// - Quad4: 评估固定 4 个亚像素候选,用于打散单 texel 决策的相位误差.
+    /// </summary>
+    public enum GsplatLidarExternalSubpixelResolveMode
+    {
+        Off = 0,
+        Quad4 = 1
+    }
+
+    /// <summary>
     /// LiDAR 粒子抗锯齿模式.
     /// - LegacySoftEdge: 继续使用固定 feather 的旧边缘语义.
     /// - AnalyticCoverage: 使用屏幕导数驱动的本地 coverage AA.
@@ -232,6 +256,35 @@ namespace Gsplat
             return IsValidLidarExternalCaptureResolutionMode(mode)
                 ? mode
                 : GsplatLidarExternalCaptureResolutionMode.Auto;
+        }
+
+        public static bool IsValidLidarExternalEdgeAwareResolveMode(GsplatLidarExternalEdgeAwareResolveMode mode)
+        {
+            return mode == GsplatLidarExternalEdgeAwareResolveMode.Off ||
+                   mode == GsplatLidarExternalEdgeAwareResolveMode.Kernel2x2 ||
+                   mode == GsplatLidarExternalEdgeAwareResolveMode.Kernel3x3;
+        }
+
+        public static GsplatLidarExternalEdgeAwareResolveMode SanitizeLidarExternalEdgeAwareResolveMode(
+            GsplatLidarExternalEdgeAwareResolveMode mode)
+        {
+            return IsValidLidarExternalEdgeAwareResolveMode(mode)
+                ? mode
+                : GsplatLidarExternalEdgeAwareResolveMode.Off;
+        }
+
+        public static bool IsValidLidarExternalSubpixelResolveMode(GsplatLidarExternalSubpixelResolveMode mode)
+        {
+            return mode == GsplatLidarExternalSubpixelResolveMode.Off ||
+                   mode == GsplatLidarExternalSubpixelResolveMode.Quad4;
+        }
+
+        public static GsplatLidarExternalSubpixelResolveMode SanitizeLidarExternalSubpixelResolveMode(
+            GsplatLidarExternalSubpixelResolveMode mode)
+        {
+            return IsValidLidarExternalSubpixelResolveMode(mode)
+                ? mode
+                : GsplatLidarExternalSubpixelResolveMode.Off;
         }
 
 #if GSPLAT_ENABLE_HDRP

@@ -185,6 +185,26 @@ namespace Gsplat
                  "- 该参数提高的是 external capture fidelity,不会把 external hit 改成 blur / bilinear depth 混合.")]
         public Vector2Int LidarExternalCaptureResolution = new(1920, 1080);
 
+        [Tooltip("frustum external GPU capture 的 edge-aware resolve 模式.\n" +
+                 "说明:\n" +
+                 "- Off: 保持当前中心 uv 的 point texel read 语义.\n" +
+                 "- Kernel2x2: 读取围绕 candidate uv 的 2x2 depth 邻域,做保边 nearest resolve.\n" +
+                 "- Kernel3x3: 读取 3x3 depth 邻域,质量更高,但成本也更高.\n" +
+                 "- 这是保边选样,不是 blur / bilinear depth mixing.\n" +
+                 "- 默认 Off,避免旧场景隐式增加开销或改变语义.")]
+        public GsplatLidarExternalEdgeAwareResolveMode LidarExternalEdgeAwareResolveMode =
+            GsplatLidarExternalEdgeAwareResolveMode.Off;
+
+        [Tooltip("frustum external GPU capture 的 subpixel resolve 模式.\n" +
+                 "说明:\n" +
+                 "- Off: 只评估中心 uv.\n" +
+                 "- Quad4: 评估固定 4 个亚像素 candidate,用于降低单 texel 决策的相位误差.\n" +
+                 "- 该模式使用 deterministic pattern,不会引入随机 temporal jitter.\n" +
+                 "- 与 edge-aware resolve 可独立开关,也可同时开启.\n" +
+                 "- 默认 Off,保持方案1行为不变.")]
+        public GsplatLidarExternalSubpixelResolveMode LidarExternalSubpixelResolveMode =
+            GsplatLidarExternalSubpixelResolveMode.Off;
+
         [Obsolete("Use LidarExternalStaticTargets and LidarExternalDynamicTargets instead.")]
         public GameObject[] LidarExternalTargets
         {
@@ -2784,6 +2804,8 @@ namespace Gsplat
                         LidarExternalCaptureResolutionMode,
                         LidarExternalCaptureResolutionScale,
                         LidarExternalCaptureResolution,
+                        LidarExternalEdgeAwareResolveMode,
+                        LidarExternalSubpixelResolveMode,
                         LidarExternalTargetVisibilityMode))
                 {
                     DisposeLidarExternalTargetHelper();
@@ -3324,6 +3346,10 @@ namespace Gsplat
 
             LidarExternalCaptureResolutionMode =
                 GsplatUtils.SanitizeLidarExternalCaptureResolutionMode(LidarExternalCaptureResolutionMode);
+            LidarExternalEdgeAwareResolveMode =
+                GsplatUtils.SanitizeLidarExternalEdgeAwareResolveMode(LidarExternalEdgeAwareResolveMode);
+            LidarExternalSubpixelResolveMode =
+                GsplatUtils.SanitizeLidarExternalSubpixelResolveMode(LidarExternalSubpixelResolveMode);
 
             if (float.IsNaN(LidarExternalCaptureResolutionScale) || float.IsInfinity(LidarExternalCaptureResolutionScale) ||
                 LidarExternalCaptureResolutionScale <= 0.0f)

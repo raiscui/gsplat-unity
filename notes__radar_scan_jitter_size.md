@@ -727,3 +727,70 @@ dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal
   - external depth 的 texel 阶梯问题
   - supersampling 作为低风险优先方案
   - 不先引入更重的 edge-aware resolve
+
+## [2026-03-24 12:34:31 +0800] [Session ID: 20260324_8] 笔记: `lidar-external-hybrid-resolve` 最终验证与测试契约回收
+
+## 现象
+
+- `lidar-external-hybrid-resolve` 的 OpenSpec `tasks.md` 只剩 `4.4` 未勾。
+- `dotnet build` 已通过,但 Unity MCP 跑测链路先后出现两类干扰:
+  - 旧 job `16b3d306df314707b4353231203bd602` 会把后续请求挡成 `tests_running`
+  - `test_names` 精确过滤虽然能启动 job,但返回 `summary.total = 0`,不能证明目标用例真的执行过
+
+## 当前主假设
+
+- 主假设A: `4.4` 的剩余问题主要是验证证据链不够干净,不是 hybrid resolve 还缺实现。
+- 主假设B: 当前唯一与本轮代码直接相关的红项,是 `ExternalGpuResolve_UsesLinearDepthTextureBeforeRayDistanceConversion` 仍锁着旧的 static/dynamic 内联源码形态。
+
+## 最强备选解释
+
+- 备选解释A: 可能不是测试契约漂移,而是 compute helper 重构时真的改坏了“先读 linear depth,再转 ray depth”的语义。
+- 备选解释B: 整程序集的既有失败可能遮住新增回归,所以不能只看失败总数。
+
+## 验证计划
+
+- 先静态回读 `Tests/Editor/GsplatLidarExternalGpuCaptureTests.cs` 与 `Runtime/Shaders/Gsplat.compute`,判断是实现坏了还是断言过时。
+- 若证据显示只是断言漂移,就修测试后重跑:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - Unity EditMode `Gsplat.Tests.Editor` 整程序集
+- 最终不看“是否全绿”,而是看失败列表里是否还出现任何 `GsplatLidarScanTests` 或 `GsplatLidarExternalGpuCaptureTests`。
+
+## 静态证据
+
+### 来源1: `Tests/Editor/GsplatLidarExternalGpuCaptureTests.cs`
+
+- 旧断言要求源码直接出现:
+  - `_LidarExternalStaticLinearDepthTex.Load(...)`
+  - `_LidarExternalDynamicLinearDepthTex.Load(...)`
+- 这说明测试锁的是“展开后的源码结构”,不是“helper 收敛后的语义”。
+
+### 来源2: `Runtime/Shaders/Gsplat.compute`
+
+- 当前真实语义仍然存在:
+  - `float linearDepth = linearDepthTex.Load(int3(pixel, 0)).x;`
+  - `float rayDepth = linearDepth / rayForwardDot;`
+- static / dynamic 只是改为通过 `ResolveExternalCaptureSource(...)` 复用 `LoadExternalPointSample(...)`,并没有退回 bilinear sample 或 encoded depth decode。
+
+## 动态验证
+
+- `openspec status --change "lidar-external-hybrid-resolve" --json`
+  - 结果: `proposal/design/specs/tasks` 全部 `done`
+- `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - 结果: `0 warning / 0 error`
+- Unity EditMode 整程序集:
+  - job: `9bfd63c810704827aacb7c94bbfae734`
+  - 结果: `completed=131 / total=131`
+  - 失败列表仅剩:
+    - `GsplatSplat4DImporterDeltaV1Tests.ImportV1_StaticSingleFrame4D_RealFixturePlyThroughExporterAndImporter`
+      - 原因: `numpy` 缺失
+    - 多个 `GsplatVisibilityAnimationTests`
+  - 失败列表中已不再包含任何 `GsplatLidarScanTests` 或 `GsplatLidarExternalGpuCaptureTests`
+
+## 结论
+
+- 主假设A成立: `4.4` 的关键难点是验证口径收口,不是实现继续缺功能。
+- 主假设B成立: 本轮真正需要修的是测试契约漂移,不是 compute hybrid resolve 语义退化。
+- `lidar-external-hybrid-resolve` 可以视为实现和相关验证都已完成。
+- 仓库仍有与本轮无关的既有失败:
+  - `GsplatVisibilityAnimationTests`
+  - `numpy` 环境缺失导致的 importer fixture

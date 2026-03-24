@@ -325,6 +325,8 @@ namespace Gsplat.Tests
             r.EnableLidarScan = true;
             r.LidarApertureMode = (GsplatLidarApertureMode)123;
             r.LidarExternalDynamicUpdateHz = 0.0f;
+            r.LidarExternalEdgeAwareResolveMode = (GsplatLidarExternalEdgeAwareResolveMode)123;
+            r.LidarExternalSubpixelResolveMode = (GsplatLidarExternalSubpixelResolveMode)123;
 
             r.LidarRotationHz = float.NaN;
             r.LidarUpdateHz = 0.0f;
@@ -372,6 +374,8 @@ namespace Gsplat.Tests
             r.EnableLidarScan = true;
             r.LidarApertureMode = (GsplatLidarApertureMode)123;
             r.LidarExternalDynamicUpdateHz = 0.0f;
+            r.LidarExternalEdgeAwareResolveMode = (GsplatLidarExternalEdgeAwareResolveMode)123;
+            r.LidarExternalSubpixelResolveMode = (GsplatLidarExternalSubpixelResolveMode)123;
 
             r.LidarRotationHz = float.NaN;
             r.LidarUpdateHz = 0.0f;
@@ -504,6 +508,40 @@ namespace Gsplat.Tests
                 var renderer = go.AddComponent<GsplatSequenceRenderer>();
                 Assert.AreEqual(GsplatLidarExternalTargetVisibilityMode.ForceRenderingOff,
                     renderer.LidarExternalTargetVisibilityMode);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        [Test]
+        public void NewGsplatRenderer_DefaultsHybridResolveModesToOff()
+        {
+            var go = new GameObject("GsplatRenderer_DefaultHybridResolveModes");
+            try
+            {
+                go.SetActive(false);
+                var renderer = go.AddComponent<GsplatRenderer>();
+                Assert.AreEqual(GsplatLidarExternalEdgeAwareResolveMode.Off, renderer.LidarExternalEdgeAwareResolveMode);
+                Assert.AreEqual(GsplatLidarExternalSubpixelResolveMode.Off, renderer.LidarExternalSubpixelResolveMode);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(go);
+            }
+        }
+
+        [Test]
+        public void NewGsplatSequenceRenderer_DefaultsHybridResolveModesToOff()
+        {
+            var go = new GameObject("GsplatSequenceRenderer_DefaultHybridResolveModes");
+            try
+            {
+                go.SetActive(false);
+                var renderer = go.AddComponent<GsplatSequenceRenderer>();
+                Assert.AreEqual(GsplatLidarExternalEdgeAwareResolveMode.Off, renderer.LidarExternalEdgeAwareResolveMode);
+                Assert.AreEqual(GsplatLidarExternalSubpixelResolveMode.Off, renderer.LidarExternalSubpixelResolveMode);
             }
             finally
             {
@@ -937,6 +975,8 @@ namespace Gsplat.Tests
             Assert.AreEqual(10.0f, r.LidarUpdateHz);
             Assert.AreEqual(GsplatLidarApertureMode.Surround360, r.LidarApertureMode);
             Assert.AreEqual(10.0f, r.LidarExternalDynamicUpdateHz);
+            Assert.AreEqual(GsplatLidarExternalEdgeAwareResolveMode.Off, r.LidarExternalEdgeAwareResolveMode);
+            Assert.AreEqual(GsplatLidarExternalSubpixelResolveMode.Off, r.LidarExternalSubpixelResolveMode);
             Assert.AreEqual(2048, r.LidarAzimuthBins);
 
             Assert.AreEqual(10.0f, r.LidarUpFovDeg);
@@ -989,6 +1029,8 @@ namespace Gsplat.Tests
             Assert.AreEqual(10.0f, r.LidarUpdateHz);
             Assert.AreEqual(GsplatLidarApertureMode.Surround360, r.LidarApertureMode);
             Assert.AreEqual(10.0f, r.LidarExternalDynamicUpdateHz);
+            Assert.AreEqual(GsplatLidarExternalEdgeAwareResolveMode.Off, r.LidarExternalEdgeAwareResolveMode);
+            Assert.AreEqual(GsplatLidarExternalSubpixelResolveMode.Off, r.LidarExternalSubpixelResolveMode);
             Assert.AreEqual(2048, r.LidarAzimuthBins);
             Assert.AreEqual(GsplatUtils.k_LidarDefaultBeamCount, r.LidarBeamCount);
             Assert.AreEqual(2.0f, r.LidarDepthFar);

@@ -26,6 +26,8 @@ namespace Gsplat.Editor
                 nameof(GsplatRenderer.LidarExternalCaptureResolutionMode),
                 nameof(GsplatRenderer.LidarExternalCaptureResolutionScale),
                 nameof(GsplatRenderer.LidarExternalCaptureResolution),
+                nameof(GsplatRenderer.LidarExternalEdgeAwareResolveMode),
+                nameof(GsplatRenderer.LidarExternalSubpixelResolveMode),
                 nameof(GsplatRenderer.LidarExternalTargetVisibilityMode),
                 nameof(GsplatRenderer.LidarRotationHz),
                 nameof(GsplatRenderer.LidarEnableScanMotion),
@@ -141,6 +143,10 @@ namespace Gsplat.Editor
                     serializedObject.FindProperty(nameof(GsplatRenderer.LidarExternalCaptureResolutionScale));
                 var explicitCaptureResolutionProp =
                     serializedObject.FindProperty(nameof(GsplatRenderer.LidarExternalCaptureResolution));
+                var edgeAwareResolveModeProp =
+                    serializedObject.FindProperty(nameof(GsplatRenderer.LidarExternalEdgeAwareResolveMode));
+                var subpixelResolveModeProp =
+                    serializedObject.FindProperty(nameof(GsplatRenderer.LidarExternalSubpixelResolveMode));
 
                 EditorGUILayout.Space();
                 EditorGUILayout.LabelField("External Capture", EditorStyles.boldLabel);
@@ -160,6 +166,11 @@ namespace Gsplat.Editor
                     EditorGUILayout.PropertyField(explicitCaptureResolutionProp);
                 }
 
+                EditorGUILayout.Space();
+                EditorGUILayout.LabelField("Hybrid Resolve", EditorStyles.boldLabel);
+                EditorGUILayout.PropertyField(edgeAwareResolveModeProp);
+                EditorGUILayout.PropertyField(subpixelResolveModeProp);
+
                 EditorGUILayout.HelpBox(
                     "external capture 分辨率说明:\n" +
                     "- 仅在 `CameraFrustum + external GPU capture` 路线生效.\n" +
@@ -169,6 +180,16 @@ namespace Gsplat.Editor
                     "- 这个参数控制的是 external mesh 的离屏采样精度,不会改变 LiDAR 自己的 beam / azimuth 离散语义.\n" +
                     "- 更高分辨率会增加显存、带宽和 capture 成本.\n" +
                     "- 当前方案仍保持 point texel read + nearest-surface 语义,不是 blur / bilinear depth 过渡.",
+                    MessageType.Info);
+
+                EditorGUILayout.HelpBox(
+                    "hybrid resolve 说明:\n" +
+                    "- EdgeAware=Kernel2x2 / Kernel3x3: 读取 depth 小邻域做保边 nearest resolve,不是 blur.\n" +
+                    "- Subpixel=Quad4: 评估固定 4 个亚像素 candidate,用于减轻单 texel 决策的相位误差.\n" +
+                    "- 两者可独立开关,也可同时开启.\n" +
+                    "- 两者都开时顺序固定为: subpixel candidate -> edge-aware neighborhood resolve -> final nearest winner.\n" +
+                    "- color 会跟随最终 depth winner,不会单独平均.\n" +
+                    "- `Kernel3x3 + Quad4` 质量更高,但成本也最高,默认仍建议保持保守.",
                     MessageType.Info);
             }
             EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarExternalTargetVisibilityMode)));
