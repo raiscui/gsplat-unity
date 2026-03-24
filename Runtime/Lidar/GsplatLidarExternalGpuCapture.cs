@@ -43,6 +43,7 @@ namespace Gsplat
 
         static readonly int k_lidarCaptureBaseColor = Shader.PropertyToID("_LidarCaptureBaseColor");
         static readonly int k_lidarExternalDepthZTest = Shader.PropertyToID("_LidarExternalDepthZTest");
+        static readonly int k_lidarDispatchBaseIndex = Shader.PropertyToID("_LidarDispatchBaseIndex");
         static readonly int k_lidarCellCount = Shader.PropertyToID("_LidarCellCount");
         static readonly int k_lidarAzimuthBins = Shader.PropertyToID("_LidarAzimuthBins");
         static readonly int k_lidarBeamCount = Shader.PropertyToID("_LidarBeamCount");
@@ -1216,8 +1217,7 @@ namespace Gsplat
             m_cmd.SetComputeBufferParam(computeShader, m_kernelResolveExternalFrustumHits,
                 k_lidarExternalBaseColor, lidarScan.ExternalBaseColorBuffer);
 
-            var groups = DivRoundUp(layout.CellCount, k_resolveThreads);
-            m_cmd.DispatchCompute(computeShader, m_kernelResolveExternalFrustumHits, groups, 1, 1);
+            DispatchResolveKernelInChunks(computeShader, layout.CellCount);
             Graphics.ExecuteCommandBuffer(m_cmd);
 
             m_lastResolvedRangeSqBitsBuffer = lidarScan.ExternalRangeSqBitsBuffer;
@@ -1485,6 +1485,21 @@ namespace Gsplat
                 return 0;
 
             return (x + d - 1) / d;
+        }
+
+        void DispatchResolveKernelInChunks(ComputeShader computeShader, int itemCount)
+        {
+            var chunkCount = GsplatUtils.GetLinearComputeDispatchChunkCount(itemCount, k_resolveThreads);
+            for (var chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
+            {
+                GsplatUtils.GetLinearComputeDispatchChunk(itemCount,
+                    k_resolveThreads,
+                    chunkIndex,
+                    out var dispatchBaseIndex,
+                    out var groupsX);
+                m_cmd.SetComputeIntParam(computeShader, k_lidarDispatchBaseIndex, dispatchBaseIndex);
+                m_cmd.DispatchCompute(computeShader, m_kernelResolveExternalFrustumHits, groupsX, 1, 1);
+            }
         }
 
         static bool Approximately(Vector3 a, Vector3 b)

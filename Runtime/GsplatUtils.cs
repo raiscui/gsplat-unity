@@ -126,6 +126,7 @@ namespace Gsplat
         public const int k_LidarDefaultBeamCount = 128;
         public const int k_LidarDefaultUpBeams = 16;
         public const int k_LidarDefaultDownBeams = 112;
+        internal const int k_ComputeMaxThreadGroupsPerDimension = 65535;
 
 #if GSPLAT_ENABLE_HDRP
         // --------------------------------------------------------------------
@@ -151,6 +152,76 @@ namespace Gsplat
         public static float Sigmoid(float x)
         {
             return 1.0f / (1.0f + Mathf.Exp(-x));
+        }
+
+        // --------------------------------------------------------------------
+        // Compute dispatch 规划:
+        // - 单次 DispatchCompute 在单个维度上的 group count 不能无限增长.
+        // - 对线性索引 kernel,需要按“baseIndex + groupsX”拆成多次 dispatch.
+        // --------------------------------------------------------------------
+        internal static int GetLinearComputeDispatchChunkCount(int itemCount,
+            int threadsPerGroup,
+            int maxGroupsPerDispatch = k_ComputeMaxThreadGroupsPerDimension)
+        {
+            itemCount = Mathf.Max(itemCount, 0);
+            var maxItemsPerDispatch = ResolveLinearComputeMaxItemsPerDispatch(threadsPerGroup, maxGroupsPerDispatch);
+            if (itemCount <= 0 || maxItemsPerDispatch <= 0)
+                return 0;
+
+            return (int)(((long)itemCount + maxItemsPerDispatch - 1L) / maxItemsPerDispatch);
+        }
+
+        internal static void GetLinearComputeDispatchChunk(int itemCount,
+            int threadsPerGroup,
+            int chunkIndex,
+            out int dispatchBaseIndex,
+            out int groupsX,
+            int maxGroupsPerDispatch = k_ComputeMaxThreadGroupsPerDimension)
+        {
+            dispatchBaseIndex = 0;
+            groupsX = 0;
+
+            itemCount = Mathf.Max(itemCount, 0);
+            if (chunkIndex < 0)
+                return;
+
+            var maxItemsPerDispatch = ResolveLinearComputeMaxItemsPerDispatch(threadsPerGroup, maxGroupsPerDispatch);
+            var chunkCount = GetLinearComputeDispatchChunkCount(itemCount, threadsPerGroup, maxGroupsPerDispatch);
+            if (maxItemsPerDispatch <= 0 || chunkIndex >= chunkCount)
+                return;
+
+            dispatchBaseIndex = (int)Math.Min((long)chunkIndex * maxItemsPerDispatch, itemCount);
+            var itemsThisChunk = Mathf.Min(itemCount - dispatchBaseIndex, maxItemsPerDispatch);
+            groupsX = (int)(((long)itemsThisChunk + threadsPerGroup - 1L) / threadsPerGroup);
+        }
+
+        internal static Vector2Int[] DebugResolveLinearComputeDispatchChunksForInputs(int itemCount,
+            int threadsPerGroup,
+            int maxGroupsPerDispatch = k_ComputeMaxThreadGroupsPerDimension)
+        {
+            var chunkCount = GetLinearComputeDispatchChunkCount(itemCount, threadsPerGroup, maxGroupsPerDispatch);
+            var chunks = new Vector2Int[chunkCount];
+            for (var chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
+            {
+                GetLinearComputeDispatchChunk(itemCount,
+                    threadsPerGroup,
+                    chunkIndex,
+                    out var dispatchBaseIndex,
+                    out var groupsX,
+                    maxGroupsPerDispatch);
+                chunks[chunkIndex] = new Vector2Int(dispatchBaseIndex, groupsX);
+            }
+
+            return chunks;
+        }
+
+        static int ResolveLinearComputeMaxItemsPerDispatch(int threadsPerGroup, int maxGroupsPerDispatch)
+        {
+            if (threadsPerGroup <= 0 || maxGroupsPerDispatch <= 0)
+                return 0;
+
+            var maxItems = (long)threadsPerGroup * maxGroupsPerDispatch;
+            return maxItems >= int.MaxValue ? int.MaxValue : (int)maxItems;
         }
 
         public static bool IsValidLidarParticleAntialiasingMode(GsplatLidarParticleAntialiasingMode mode)

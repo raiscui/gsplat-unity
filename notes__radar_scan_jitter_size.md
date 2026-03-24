@@ -794,3 +794,127 @@ dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal
 - 仓库仍有与本轮无关的既有失败:
   - `GsplatVisibilityAnimationTests`
   - `numpy` 环境缺失导致的 importer fixture
+
+## [2026-03-24 13:09:06 +0800] [Session ID: 20260324_8] 笔记: Metal 上 `ExternalResolveSample` struct ternary 不可编译
+
+## 现象
+
+- 用户反馈 Metal 编译报错:
+  - `conditional operator only supports results with numeric scalar, vector, or matrix types`
+- 报错位置落在 `Runtime/Shaders/Gsplat.compute`
+- Unity Console 在 reload 后稳定复现这条 shader error
+
+## 当前主假设
+
+- 主假设: `ResolveExternalCandidate(...)` 里用三元表达式返回 `ExternalResolveSample` 这个自定义 struct:
+  - `return bestNeighborhoodSample.Valid != 0 ? bestNeighborhoodSample : centerSample;`
+- Metal/HLSLcc 只接受数值标量 / 向量 / 矩阵作为 `?:` 结果,不接受自定义 struct
+
+## 最强备选解释
+
+- 备选解释: 可能是 `Gsplat.compute` 里别的 `?:` 也触发了同类限制,而不是这一行
+
+## 验证计划
+
+- 先全文件搜索 `Gsplat.compute` 中所有 `?:`
+- 确认哪些是 numeric,哪些是 sample struct
+- 若只有这一处 struct ternary,就只改这一处为显式 `if/return`,不扩大改动面
+
+## 静态证据
+
+### 来源1: `Runtime/Shaders/Gsplat.compute`
+
+- 搜索结果:
+  - `return _LidarExternalSubpixelResolveMode == ... ? 4 : 1;`
+  - `return bestNeighborhoodSample.Valid != 0 ? bestNeighborhoodSample : centerSample;`
+  - `_LidarExternalRangeSqBits[cell] = bestSample.Valid != 0 ? ...`
+  - `_LidarExternalBaseColor[cell] = bestSample.Valid != 0 ? ...`
+- 其中只有 `bestNeighborhoodSample / centerSample` 这一处返回的是自定义 struct `ExternalResolveSample`
+
+## 动态验证
+
+- `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - 结果: `0 warning / 0 error`
+- Unity reload 后读取 Console:
+  - `filter_text = Gsplat.compute`
+  - 结果: `0` 条
+  - `filter_text = conditional operator`
+  - 结果: `0` 条
+
+## 结论
+
+- 主假设成立,备选解释不成立
+- Metal 编译错误的根因就是“对自定义 struct 使用三元返回”
+- 最正确修法是改成显式分支返回,而不是继续围绕 Metal 单独打平台补丁
+
+## [2026-03-24 14:12:25 +0800] [Session ID: 20260324_8] 笔记: LiDAR compute 单轴 dispatch 超出 65535 group limit 的根因与修法
+
+## 现象
+
+- 用户现场报错:
+  - `Thread group count is above the maximum allowed limit. Maximum allowed thread group count is 65535.`
+- 栈定位到:
+  - `Gsplat.GsplatLidarScan:TryRebuildRangeImage(...)`
+  - `Graphics.ExecuteCommandBuffer(m_cmd);`
+
+## 当前主假设
+
+- 主假设: 当前不是“线程数超过了”,而是单次 `DispatchCompute(x,1,1)` 的 `x` 维 group count 超过了 `65535`
+- 因为当前 LiDAR range image compute 使用:
+  - `k_lidarThreads = 256`
+  - `groupsCells = DivRoundUp(cellCount, 256)`
+  - `groupsSplats = DivRoundUp(splatCount, 256)`
+- 所以一旦 `cellCount` 或 `splatCount` 超过 `16776960`,单次 x 维 dispatch 就会撞上平台上限
+
+## 最强备选解释
+
+- 备选解释: 不是单轴 dispatch 设计问题,而只是这次某个 kernel 参数/坏数据异常把 group count 算错了
+
+## 验证计划
+
+- 先回读 `TryRebuildRangeImage(...)` 的 dispatch 公式
+- 再搜索整个仓库里是否还有同类 “`DispatchCompute(groups,1,1)` + 线性索引 kernel” 的路径
+- 若证据成立,就不去试图“突破 65535”,而是把线性索引 kernel 改成支持 `dispatchBaseIndex` 分批执行
+
+## 静态证据
+
+### 来源1: `Runtime/Lidar/GsplatLidarScan.cs`
+
+- 旧代码:
+  - `m_cmd.DispatchCompute(..., groupsCells, 1, 1);`
+  - `m_cmd.DispatchCompute(..., groupsSplats, 1, 1);`
+- `groupsCells/groupsSplats` 都直接来自 `DivRoundUp(itemCount, 256)`
+
+### 来源2: `Runtime/Shaders/Gsplat.compute`
+
+- `ClearRangeImage` / `ReduceMinRangeSq` / `ResolveMinSplatId` / `ResolveExternalFrustumHits`
+  都使用线性 `SV_DispatchThreadID.x` 作为全局索引
+- 这说明它们天然适合改成“同一 kernel 多次 dispatch + baseIndex 偏移”
+
+### 来源3: `Runtime/Lidar/GsplatLidarExternalGpuCapture.cs`
+
+- external frustum resolve 也有同类路径:
+  - `DispatchCompute(..., groups, 1, 1);`
+- 如果只修 `GsplatLidarScan`,后续 external capture 仍可能撞同一个上限
+
+## 动态验证
+
+- `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - 结果: `0 warning / 0 error`
+- Unity Console:
+  - 清空后 refresh/compile
+  - 查询 `Thread group count is above the maximum allowed limit`
+  - 结果: `0` 条
+- Unity EditMode 整程序集:
+  - job: `fa6d81bb09744bbe8966695fc555f4a9`
+  - 结果: `133/133` 执行完成
+  - 失败列表里无 `GsplatUtilsTests`、`GsplatLidarScanTests` 或 `GsplatLidarExternalGpuCaptureTests`
+
+## 结论
+
+- 主假设成立,备选解释不成立
+- 这个 `65535` 上限本身不能直接“超过”
+- 正确修法不是提高上限,而是:
+  - CPU 侧分批 dispatch
+  - shader 侧加 `dispatchBaseIndex`
+  - 让多个 dispatch 共同覆盖完整的一维 item 空间

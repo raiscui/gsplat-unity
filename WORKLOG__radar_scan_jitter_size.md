@@ -168,3 +168,52 @@
   - `editor/state`
   - `~/.unity-mcp/unity-mcp-status-*.json`
   - `lsof` 的实际 listener
+
+## [2026-03-24 13:09:06 +0800] [Session ID: 20260324_8] 任务名称: 修复 Metal 下 `Gsplat.compute` 的 struct ternary 编译错误
+
+### 任务内容
+- 处理用户反馈的 Metal shader compile error。
+- 确认是不是 `ExternalResolveSample` 被当成 `?:` 结果触发平台限制。
+- 在不改语义的前提下做最小修复并完成现场编译验证。
+
+### 完成过程
+- 先读取 `Gsplat.compute` 报错行附近源码,确认 `ResolveExternalCandidate(...)` 在返回处用了:
+  - `return bestNeighborhoodSample.Valid != 0 ? bestNeighborhoodSample : centerSample;`
+- 再全文件搜索 `?:`,确认只有这一处是“自定义 struct 作为三元结果”,其余都是 numeric/向量写法。
+- 然后把该返回改成显式 `if (bestNeighborhoodSample.Valid != 0) return bestNeighborhoodSample; return centerSample;`
+- 同步更新 `Tests/Editor/GsplatLidarExternalGpuCaptureTests.cs`,把源码契约从“锁三元表达式”改成“锁显式分支返回”。
+- 最后完成两层验证:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - Unity reload 后读取 Console 中 `Gsplat.compute` / `conditional operator` 相关错误
+
+### 总结感悟
+- 这类问题的重点不是“Metal 真麻烦”,而是要先把类型层级看清:
+  - numeric ternary 在 HLSL 里没问题
+  - struct ternary 才是触发点
+- 一旦根因坐实,最稳的修法通常是语言级等价改写,而不是加平台分支
+
+## [2026-03-24 14:12:25 +0800] [Session ID: 20260324_8] 任务名称: 修复 LiDAR compute 单轴 dispatch 超出 65535 group limit
+
+### 任务内容
+- 处理用户现场报错:
+  - `Thread group count is above the maximum allowed limit`
+- 解释这个上限是否可以“突破”
+- 把 scan 与 external capture 两条 compute 提交链路一起改成可分批 dispatch
+
+### 完成过程
+- 先定位 `GsplatLidarScan.TryRebuildRangeImage(...)` 的三次单轴 `DispatchCompute(x,1,1)`。
+- 再确认 `GsplatLidarExternalGpuCapture` 里也有同类单轴 dispatch 风险。
+- 然后在 `GsplatUtils` 里抽出线性 compute dispatch chunk 规划 helper:
+  - 给出每个 chunk 的 `dispatchBaseIndex`
+  - 给出每个 chunk 的 `groupsX`
+- 在 `GsplatLidarScan` / `GsplatLidarExternalGpuCapture` 中改成循环分批 dispatch。
+- 在 `Gsplat.compute` 中新增 `_LidarDispatchBaseIndex`,让相关 kernel 都能从偏移后的全局线性索引开始处理。
+- 最后补 `GsplatUtilsTests` 锁定边界:
+  - 1024 item -> 单 chunk
+  - `16776960 + 1` item -> 自动拆成两次 dispatch
+
+### 总结感悟
+- 这次最关键的认知点是:
+  - 不能把“线程组上限”理解成“最多只能处理这么多数据”
+  - 真正受限的是“单次 dispatch 的单个维度”
+- 对线性 kernel 来说,只要把 `dispatchBaseIndex` 设计好,分批 dispatch 就是最自然也最稳的解法

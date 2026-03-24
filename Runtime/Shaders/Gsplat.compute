@@ -61,6 +61,7 @@ RWStructuredBuffer<uint> _LidarExternalRangeSqBits;
 RWStructuredBuffer<float4> _LidarExternalBaseColor;
 
 float4x4 _LidarMatrixModelToLidar;
+int _LidarDispatchBaseIndex;
 int _LidarCellCount;
 int _LidarAzimuthBins;
 float _LidarAzimuthMinRad;
@@ -103,7 +104,7 @@ static const float kLidarExternalEdgeAwareDepthRelFactor = 0.02;
 [numthreads(LIDAR_GROUP_SIZE,1,1)]
 void ClearRangeImage(uint3 id : SV_DispatchThreadID)
 {
-    uint idx = id.x;
+    uint idx = (uint)_LidarDispatchBaseIndex + id.x;
     if (idx >= (uint)_LidarCellCount)
         return;
 
@@ -217,7 +218,7 @@ bool TryComputeLidarCell(uint splatId, out uint outCellIndex, out uint outDepthS
 [numthreads(LIDAR_GROUP_SIZE,1,1)]
 void ReduceMinRangeSq(uint3 id : SV_DispatchThreadID)
 {
-    uint idx = id.x;
+    uint idx = (uint)_LidarDispatchBaseIndex + id.x;
     if (idx >= (uint)_LidarSplatCount)
         return;
 
@@ -235,7 +236,7 @@ void ReduceMinRangeSq(uint3 id : SV_DispatchThreadID)
 [numthreads(LIDAR_GROUP_SIZE,1,1)]
 void ResolveMinSplatId(uint3 id : SV_DispatchThreadID)
 {
-    uint idx = id.x;
+    uint idx = (uint)_LidarDispatchBaseIndex + id.x;
     if (idx >= (uint)_LidarSplatCount)
         return;
 
@@ -451,7 +452,10 @@ ExternalResolveSample ResolveExternalCandidate(Texture2D<float4> linearDepthTex,
     // 回退语义:
     // - edge-aware 过滤一旦没有留下可信邻域,就退回当前 candidate 的中心 point sample.
     // - 这样阈值过紧时最多退化回方案1,不会凭空制造新的命中语义.
-    return bestNeighborhoodSample.Valid != 0 ? bestNeighborhoodSample : centerSample;
+    if (bestNeighborhoodSample.Valid != 0)
+        return bestNeighborhoodSample;
+
+    return centerSample;
 }
 
 ExternalResolveSample ResolveExternalCaptureSource(Texture2D<float4> linearDepthTex,
@@ -487,7 +491,7 @@ ExternalResolveSample ResolveExternalCaptureSource(Texture2D<float4> linearDepth
 [numthreads(LIDAR_GROUP_SIZE,1,1)]
 void ResolveExternalFrustumHits(uint3 id : SV_DispatchThreadID)
 {
-    uint cell = id.x;
+    uint cell = (uint)_LidarDispatchBaseIndex + id.x;
     if (cell >= (uint)_LidarCellCount)
         return;
 

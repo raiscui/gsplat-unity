@@ -26,3 +26,32 @@
 
 ### 后续讨论入口
 - 下次再遇到“`tests_running` / `No Unity Editor instances found` / `summary.total = 0`”混杂时,先回看这条记录。
+
+## [2026-03-24 14:12:25 +0800] [Session ID: 20260324_8] 主题: 线性 compute kernel 不要把大数据量直接塞进单次 `DispatchCompute(x,1,1)`
+
+### 发现来源
+- 用户现场报错 `Thread group count is above the maximum allowed limit`
+- `GsplatLidarScan.TryRebuildRangeImage(...)` 与 `GsplatLidarExternalGpuCapture` 的 dispatch 路径排查
+
+### 核心问题
+- 对线性索引 compute kernel 来说,最常见的直觉写法是:
+  - `groupsX = ceil(itemCount / threadsPerGroup)`
+  - `DispatchCompute(groupsX, 1, 1)`
+- 但这隐含假设“单次 x 维可以无限大”,实际上不成立
+
+### 为什么重要
+- 一旦 `itemCount` 进入千万级,即使 kernel 逻辑本身完全正确,也会在提交阶段直接失败
+- 这种错误不是 shader 数学错了,而是提交模型错了
+
+### 未来风险
+- 后续任何把大规模线性数据交给 compute 的路径,如果继续沿用单次 `DispatchCompute(x,1,1)`,都可能重复踩同一类问题
+
+### 当前结论
+- “65535” 这种限制通常不能靠配置去突破
+- 可复用的正确模式是:
+  - CPU 侧按上限切 chunk
+  - shader 侧增加 `dispatchBaseIndex`
+  - 每个 dispatch 只处理自己的线性区间
+
+### 后续讨论入口
+- 下次只要看到“大规模线性 compute kernel + 单次 x 维 dispatch”,都应该先检查是否需要 `dispatchBaseIndex` 分批模型

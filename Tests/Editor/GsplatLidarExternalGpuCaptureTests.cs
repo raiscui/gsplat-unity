@@ -544,7 +544,11 @@ namespace Gsplat.Tests
                 "Quad4 subpixel candidate 生成必须独立成 helper,以便锁定 deterministic pattern.");
             StringAssert.Contains("GetExternalNeighborhoodPixel(", computeText,
                 "edge-aware resolve 必须显式读取 kernel 邻域,而不是偷偷退回 blur/bilinear.");
-            StringAssert.Contains("return bestNeighborhoodSample.Valid != 0 ? bestNeighborhoodSample : centerSample;", computeText,
+            StringAssert.Contains("if (bestNeighborhoodSample.Valid != 0)", computeText,
+                "Metal 下不能再对自定义 sample struct 使用 `?:`,应改成显式分支返回.");
+            StringAssert.Contains("return bestNeighborhoodSample;", computeText,
+                "edge-aware 保留到可信邻域时,必须返回该邻域 winner.");
+            StringAssert.Contains("return centerSample;", computeText,
                 "edge-aware 过滤失败时必须回退中心 point sample.");
             StringAssert.Contains("_LidarExternalBaseColor[cell] = bestSample.Valid != 0 ? bestSample.BaseColor : 0.0;", computeText,
                 "final color 必须跟随最终 depth winner,不能单独 average.");

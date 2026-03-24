@@ -346,6 +346,7 @@ namespace Gsplat
         static readonly int k_lidarDepthNearSq = Shader.PropertyToID("_LidarDepthNearSq");
         static readonly int k_lidarDepthFarSq = Shader.PropertyToID("_LidarDepthFarSq");
         static readonly int k_lidarMinSplatOpacity = Shader.PropertyToID("_LidarMinSplatOpacity");
+        static readonly int k_lidarDispatchBaseIndex = Shader.PropertyToID("_LidarDispatchBaseIndex");
         static readonly int k_lidarSplatBaseIndex = Shader.PropertyToID("_LidarSplatBaseIndex");
         static readonly int k_lidarSplatCount = Shader.PropertyToID("_LidarSplatCount");
         static readonly int k_has4D = Shader.PropertyToID("_Has4D");
@@ -1093,8 +1094,7 @@ namespace Gsplat
             m_cmd.SetComputeBufferParam(computeShader, m_kernelClearRangeImage, k_timeBuffer, timeBuffer);
             m_cmd.SetComputeBufferParam(computeShader, m_kernelClearRangeImage, k_durationBuffer, durationBuffer);
             m_cmd.SetComputeBufferParam(computeShader, m_kernelClearRangeImage, k_colorBuffer, colorBuffer);
-            var groupsCells = DivRoundUp(cellCount, k_lidarThreads);
-            m_cmd.DispatchCompute(computeShader, m_kernelClearRangeImage, groupsCells, 1, 1);
+            DispatchLinearComputeKernelInChunks(computeShader, m_kernelClearRangeImage, cellCount);
 
             // 2) Reduce min range:
             m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_positionBuffer, positionBuffer);
@@ -1109,8 +1109,7 @@ namespace Gsplat
             m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_lidarMinSplatId, MinSplatIdBuffer);
             m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_lidarAzSinCos, AzSinCosBuffer);
             m_cmd.SetComputeBufferParam(computeShader, m_kernelReduceMinRangeSq, k_lidarBeamSinCos, BeamSinCosBuffer);
-            var groupsSplats = DivRoundUp(Mathf.Max(splatCount, 1), k_lidarThreads);
-            m_cmd.DispatchCompute(computeShader, m_kernelReduceMinRangeSq, groupsSplats, 1, 1);
+            DispatchLinearComputeKernelInChunks(computeShader, m_kernelReduceMinRangeSq, splatCount);
 
             // 3) Resolve min splat id(仅在需要颜色时):
             if (needsSplatId)
@@ -1127,7 +1126,7 @@ namespace Gsplat
                 m_cmd.SetComputeBufferParam(computeShader, m_kernelResolveMinSplatId, k_lidarAzSinCos, AzSinCosBuffer);
                 m_cmd.SetComputeBufferParam(computeShader, m_kernelResolveMinSplatId, k_lidarBeamSinCos,
                     BeamSinCosBuffer);
-                m_cmd.DispatchCompute(computeShader, m_kernelResolveMinSplatId, groupsSplats, 1, 1);
+                DispatchLinearComputeKernelInChunks(computeShader, m_kernelResolveMinSplatId, splatCount);
             }
 
             Graphics.ExecuteCommandBuffer(m_cmd);
@@ -1219,6 +1218,21 @@ namespace Gsplat
             if (d <= 0)
                 return 0;
             return (x + d - 1) / d;
+        }
+
+        void DispatchLinearComputeKernelInChunks(ComputeShader computeShader, int kernelIndex, int itemCount)
+        {
+            var chunkCount = GsplatUtils.GetLinearComputeDispatchChunkCount(itemCount, k_lidarThreads);
+            for (var chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
+            {
+                GsplatUtils.GetLinearComputeDispatchChunk(itemCount,
+                    k_lidarThreads,
+                    chunkIndex,
+                    out var dispatchBaseIndex,
+                    out var groupsX);
+                m_cmd.SetComputeIntParam(computeShader, k_lidarDispatchBaseIndex, dispatchBaseIndex);
+                m_cmd.DispatchCompute(computeShader, kernelIndex, groupsX, 1, 1);
+            }
         }
 
         bool EnsureKernels(ComputeShader computeShader)

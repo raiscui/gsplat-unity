@@ -1,6 +1,7 @@
 // Copyright (c) 2026 Yize Wu
 // SPDX-License-Identifier: MIT
 
+using System.Reflection;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -8,6 +9,16 @@ namespace Gsplat.Tests
 {
     public sealed class GsplatUtilsTests
     {
+        static Vector2Int[] InvokeDebugResolveLinearComputeDispatchChunksForInputs(int itemCount,
+            int threadsPerGroup,
+            int maxGroupsPerDispatch)
+        {
+            var method = typeof(GsplatUtils).GetMethod("DebugResolveLinearComputeDispatchChunksForInputs",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.IsNotNull(method, "Expected internal compute dispatch chunk helper to exist.");
+            return (Vector2Int[])method.Invoke(null, new object[] { itemCount, threadsPerGroup, maxGroupsPerDispatch });
+        }
+
         [Test]
         public void SHBandsToCoefficientCount_ReturnsExpected()
         {
@@ -142,6 +153,36 @@ namespace Gsplat.Tests
             {
                 Object.DestroyImmediate(go);
             }
+        }
+
+        [Test]
+        public void DebugResolveLinearComputeDispatchChunksForInputs_WithinLimit_UsesSingleChunk()
+        {
+            var chunks = InvokeDebugResolveLinearComputeDispatchChunksForInputs(itemCount: 1024,
+                threadsPerGroup: 256,
+                maxGroupsPerDispatch: 65535);
+
+            Assert.AreEqual(1, chunks.Length);
+            Assert.AreEqual(0, chunks[0].x);
+            Assert.AreEqual(4, chunks[0].y);
+        }
+
+        [Test]
+        public void DebugResolveLinearComputeDispatchChunksForInputs_ExceedingLimit_SplitsIntoMultipleDispatches()
+        {
+            const int threadsPerGroup = 256;
+            const int maxGroupsPerDispatch = 65535;
+            var maxItemsPerDispatch = threadsPerGroup * maxGroupsPerDispatch;
+
+            var chunks = InvokeDebugResolveLinearComputeDispatchChunksForInputs(itemCount: maxItemsPerDispatch + 1,
+                threadsPerGroup: threadsPerGroup,
+                maxGroupsPerDispatch: maxGroupsPerDispatch);
+
+            Assert.AreEqual(2, chunks.Length);
+            Assert.AreEqual(0, chunks[0].x);
+            Assert.AreEqual(maxGroupsPerDispatch, chunks[0].y);
+            Assert.AreEqual(maxItemsPerDispatch, chunks[1].x);
+            Assert.AreEqual(1, chunks[1].y);
         }
     }
 }
