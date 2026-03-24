@@ -505,3 +505,65 @@
 **目前在阶段4(本轮 bugfix 已完成)**
 - 单维 `DispatchCompute` 超限问题已经处理完成。
 - 这个上限本身不能“突破”,但现在代码已经改成自动分批,不再要求单次 dispatch 吃下全部 item。
+
+## [2026-03-24 14:28:02 +0800] [Session ID: 20260324_8] 阶段进展: 排查 `LidarBeamCount` 的 `512` 上限是否可放开
+
+- [ ] 阶段2: 建立“现象 -> 假设 -> 验证计划”并找最小可证伪实验
+  - 现象:
+    - 用户发现 `LidarBeamCount` 当前会被限制在 `512`
+  - 当前主假设:
+    - `512` 主要来自 `GsplatRenderer/GsplatSequenceRenderer` 的 `ValidateLidarSerializedFields()` 防御性钳制
+    - 不是 shader 或 compute 内部天然只能支持 `512`
+  - 最强备选解释:
+    - 仓库里可能还有别的隐式约束(例如 Editor 提示、layout helper、buffer 规划或测试)也把 `512` 当成真实上限
+  - 下一步:
+    - 继续回读字段声明、validate 路径和测试
+    - 若没有更深层的结构性上限,就直接放开这个 clamp 并补回归测试
+
+## 状态
+
+**目前在阶段2**
+- 正在确认 `LidarBeamCount` 的 `512` 是保守限制还是结构性上限。
+
+## [2026-03-24 14:29:56 +0800] [Session ID: 20260324_9] 阶段进展: 已排除大部分隐藏 `512` 结构约束,准备直接放开 clamp
+
+- [ ] 阶段2: 建立“现象 -> 假设 -> 验证计划”并找最小可证伪实验
+  - 已确认 `TryGetEffectiveLidarLayout`、`EnsureRangeImageBuffers`、`EnsureLutBuffers`、external hit scratch 与 shader 参数链都按 `azimuthBins * beamCount` 的一般形式工作,没有写死 `512`。
+  - 已确认之前的单轴 `DispatchCompute` `65535` group limit 风险已经通过分批 dispatch 修掉,不再需要靠 `beamCount <= 512` 绕开。
+  - 当前主假设继续成立:
+    - `512` 是历史上的保守防呆值
+    - 不是当前实现层的硬上限
+  - 备选解释暂时只剩:
+    - 还有少量测试或文案把 `512` 当正式契约
+  - 下一步:
+    - 去掉 `GsplatRenderer` / `GsplatSequenceRenderer` 两处 `LidarBeamCount > 512` 钳制
+    - 同步补测试,锁定“非法小值回默认,大值不再被压回 512”的新契约
+    - 跑包级编译验证
+
+## 状态
+
+**目前在阶段3前的切换点**
+- 现象: `LidarBeamCount` 现在确实会在 runtime validate 阶段被压回 `512`。
+- 假设: 这只是历史防呆值,不是底层硬上限。
+- 计划: 直接放开 clamp,再用测试和编译把这个结论锁实。
+
+## [2026-03-24 14:29:56 +0800] [Session ID: 20260324_9] 阶段完成: `LidarBeamCount` 的 `512` clamp 已放开并完成验证
+
+- [x] 阶段2: 建立“现象 -> 假设 -> 验证计划”并找最小可证伪实验
+  - 已确认 `512` 只来自 `ValidateLidarSerializedFields()` 的历史防呆逻辑
+  - 已确认 layout / buffer / shader / dispatch 链没有 `512` 的结构性硬限制
+- [x] 阶段3: 实施修复并补齐回归测试
+  - 已去掉 `GsplatRenderer` / `GsplatSequenceRenderer` 两处 `LidarBeamCount > 512` 钳制
+  - 已更新两个公开 tooltip / 注释,明确“当前不设硬上限,但成本随 `beamCount * azimuthBins` 上升”
+  - 已在 `Tests/Editor/GsplatLidarScanTests.cs` 中补两条 `DoesNotClampBeamCountMax` 回归测试
+- [x] 阶段4: 运行验证,记录结论与后续事项
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal` 已通过,`0 warning / 0 error`
+  - Unity EditMode 整程序集 job `a135cf447dc74e7b9fa6d7449c5b8126` 已完成 `135/135`
+  - 失败仍是既有 importer / visibility 老问题,没有新增 LiDAR 相关失败
+  - 点名过滤 job `81632a589684421490a5ad08169771ec` 返回 `summary.total = 0`,按既有纪律不计入有效通过证据
+
+## 状态
+
+**目前在阶段4(本轮 bugfix 已完成)**
+- `LidarBeamCount` 现在已经不再被 runtime 强制压到 `512`
+- 当前真正需要关注的约束已经从“硬上限”变成“高 `beamCount * azimuthBins` 带来的性能 / 显存成本”

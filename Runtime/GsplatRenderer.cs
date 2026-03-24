@@ -254,7 +254,8 @@ namespace Gsplat
                  "说明:\n" +
                  "- 不再拆分 UpBeams/DownBeams,而是在 [DownFovDeg..UpFovDeg] 内做匀角度采样.\n" +
                  "- 你只需要控制总线数与上下视场,即可得到\"上下统一\"的竖直分布.\n" +
-                 "- 默认 128.")]
+                 "- 默认 128.\n" +
+                 "- 当前不再设置硬上限,但 beamCount * azimuthBins 会直接放大 range image / compute / 显存开销.")]
         public int LidarBeamCount = 128;
 
         [Min(0.0f)]
@@ -4908,11 +4909,10 @@ namespace Gsplat
 
             // BeamCount:
             // - 只保留一个总线束数,竖直方向按 [DownFov..UpFov] 匀角度采样.
-            // - clamp 上限主要为了避免误填导致 range image 过大而瞬间卡死.
+            // - 当前不再做最大值 clamp,让高线束 LiDAR 配置可以完整传到底层.
+            // - 实际可承受上限主要取决于 beamCount * azimuthBins 带来的 buffer / compute / 显存成本.
             if (LidarBeamCount < 1)
                 LidarBeamCount = GsplatUtils.k_LidarDefaultBeamCount;
-            if (LidarBeamCount > 512)
-                LidarBeamCount = 512;
 
             if (float.IsNaN(LidarDepthNear) || float.IsInfinity(LidarDepthNear) || LidarDepthNear <= 0.0f)
                 LidarDepthNear = 1.0f;

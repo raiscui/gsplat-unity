@@ -1207,6 +1207,31 @@ namespace Gsplat.Tests
         }
 
         [Test]
+        public void ValidateLidarSerializedFields_DoesNotClampBeamCountMax_GsplatRenderer()
+        {
+            // 说明:
+            // - 之前 `LidarBeamCount` 会在 validate 阶段被悄悄压回 512.
+            // - 现在已经改成“只防御非法小值,不再做历史保守上限钳制”.
+            var r = (GsplatRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatRenderer));
+            r.EnableLidarScan = true;
+            r.LidarBeamCount = 2048;
+
+            InvokeValidateLidarSerializedFields(r, nameof(GsplatRenderer));
+            Assert.AreEqual(2048, r.LidarBeamCount);
+        }
+
+        [Test]
+        public void ValidateLidarSerializedFields_DoesNotClampBeamCountMax_GsplatSequenceRenderer()
+        {
+            var r = (GsplatSequenceRenderer)FormatterServices.GetUninitializedObject(typeof(GsplatSequenceRenderer));
+            r.EnableLidarScan = true;
+            r.LidarBeamCount = 2048;
+
+            InvokeValidateLidarSerializedFields(r, nameof(GsplatSequenceRenderer));
+            Assert.AreEqual(2048, r.LidarBeamCount);
+        }
+
+        [Test]
         public void ResolveEffectiveLidarParticleAntialiasingMode_FallsBackToAnalyticCoverageWithoutMsaa()
         {
             var cameraGo = new GameObject("lidar-aa-fallback-camera");

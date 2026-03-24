@@ -99,3 +99,43 @@
 - Unity EditMode 整程序集:
   - job: `fa6d81bb09744bbe8966695fc555f4a9`
   - 结果: 无新增 `GsplatUtilsTests` / LiDAR 相关失败
+
+## [2026-03-24 14:29:56 +0800] [Session ID: 20260324_9] 任务名称: `LidarBeamCount` 被 runtime 压回 `512` 的限制修复
+
+### 问题现象
+- 用户在 Inspector 调大 `LidarBeamCount` 后,运行时实际值会被限制回 `512`
+- 这会让更高线束配置无法落到底层 LiDAR range image / render path
+
+### 原因分析
+- 真正生效的限制不在字段声明,而在:
+  - `GsplatRenderer.ValidateLidarSerializedFields()`
+  - `GsplatSequenceRenderer.ValidateLidarSerializedFields()`
+- 其中有历史代码:
+  - `if (LidarBeamCount > 512) LidarBeamCount = 512;`
+- 继续回读后确认:
+  - layout / buffer / shader 参数链没有写死 `512`
+  - 之前为了规避单次 compute dispatch 上限的风险,现在也已经通过分批 dispatch 修掉
+- 因此这个 `512` 已经只剩“保守防呆”含义,不是当前实现约束
+
+### 修复动作
+- 删除 `Runtime/GsplatRenderer.cs` 中的 `LidarBeamCount > 512` 钳制
+- 删除 `Runtime/GsplatSequenceRenderer.cs` 中的同类钳制
+- 同步更新两个组件上 `LidarBeamCount` 的 tooltip / 注释,明确:
+  - 当前不再设置硬上限
+  - 实际成本会随 `beamCount * azimuthBins` 上升
+- 在 `Tests/Editor/GsplatLidarScanTests.cs` 中新增两条回归测试:
+  - `ValidateLidarSerializedFields_DoesNotClampBeamCountMax_GsplatRenderer`
+  - `ValidateLidarSerializedFields_DoesNotClampBeamCountMax_GsplatSequenceRenderer`
+
+### 验证结果
+- 源码检索:
+  - 已确认 runtime 里的 `LidarBeamCount > 512` / `LidarBeamCount = 512` clamp 被移除
+- `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - 结果: `0 warning / 0 error`
+- Unity EditMode 整程序集:
+  - job: `a135cf447dc74e7b9fa6d7449c5b8126`
+  - 结果: `135/135`
+  - 失败仍是既有 importer / visibility 老问题,没有新增 LiDAR 相关失败
+- 额外说明:
+  - 单独 `test_names` 过滤的 job `81632a589684421490a5ad08169771ec` 返回 `summary.total = 0`
+  - 该结果不算有效通过证据,因此本轮正式采用整程序集结果作为动态验证

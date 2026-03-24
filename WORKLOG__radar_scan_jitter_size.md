@@ -217,3 +217,24 @@
   - 不能把“线程组上限”理解成“最多只能处理这么多数据”
   - 真正受限的是“单次 dispatch 的单个维度”
 - 对线性 kernel 来说,只要把 `dispatchBaseIndex` 设计好,分批 dispatch 就是最自然也最稳的解法
+
+## [2026-03-24 14:29:56 +0800] [Session ID: 20260324_9] 任务名称: 放开 `LidarBeamCount` 的历史 `512` runtime clamp
+
+### 任务内容
+- 处理用户提出的 `LidarBeamCount` 被限制到 `512` 的问题
+- 判断这个限制是不是底层硬上限
+- 如果只是历史防呆值,就把它真正放开并补回归测试
+
+### 完成过程
+- 先回读 `GsplatRenderer` / `GsplatSequenceRenderer` 的 `ValidateLidarSerializedFields()` 与字段声明,确认 `512` 只存在于 runtime clamp,字段本身没有面板硬上限
+- 再回读 `TryGetEffectiveLidarLayout`、`EnsureRangeImageBuffers`、`EnsureLutBuffers` 与 external hit 相关链路,确认底层都按一般 `beamCount * azimuthBins` 工作,没有隐藏 `512` 常量
+- 结合上一轮已经完成的“LiDAR compute 分批 dispatch”修复,确认旧 clamp 不再承担“规避 `65535` group limit”的职责
+- 然后在 `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs` 中去掉 `LidarBeamCount > 512` 钳制,并把 tooltip / 注释改成“无硬上限,但成本线性上升”
+- 最后在 `Tests/Editor/GsplatLidarScanTests.cs` 中增加两条回归测试,锁定 `2048` beamCount 不会再被 validate 压回 `512`
+
+### 总结感悟
+- 这次最重要的不是“删掉一个 if”,而是先确认它背后还有没有别的隐含假设
+- 对这种历史防呆值,最稳的做法是:
+  - 先排掉结构性上限
+  - 再改公开说明
+  - 最后补测试把新契约锁住

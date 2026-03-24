@@ -918,3 +918,84 @@ dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal
   - CPU 侧分批 dispatch
   - shader 侧加 `dispatchBaseIndex`
   - 让多个 dispatch 共同覆盖完整的一维 item 空间
+
+## [2026-03-24 14:29:56 +0800] [Session ID: 20260324_9] 笔记: `LidarBeamCount` 的 `512` 上限属于历史防呆值,不是当前底层硬上限
+
+## 现象
+
+- 用户发现 `LidarBeamCount` 在运行时会被限制到 `512`
+- 字段声明本身只有 `[Min(1)]`,但实际值进入运行期后会被压回 `512`
+
+## 当前主假设
+
+- 主假设:
+  - `512` 来自 `ValidateLidarSerializedFields()` 的历史防御性 clamp
+  - 不是 shader、layout、buffer 或 dispatch 体系的真实硬上限
+
+## 最强备选解释
+
+- 备选解释:
+  - 仓库里也许还有其他隐式约束,比如:
+    - layout helper 默认只支持 `512`
+    - range image / LUT buffer 用固定容量
+    - 测试契约仍把 `512` 当正式上限
+
+## 验证计划
+
+- 回读 `TryGetEffectiveLidarLayout`
+- 回读 `EnsureRangeImageBuffers` / `EnsureLutBuffers`
+- 回读相关 EditMode tests
+- 再结合前一轮已完成的“线性 compute dispatch 分批化”修复,判断 `512` 是否仍有保留必要
+
+## 静态证据
+
+### 来源1: `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+
+- 旧限制都在 `ValidateLidarSerializedFields()`:
+  - `if (LidarBeamCount > 512) LidarBeamCount = 512;`
+- 字段声明处没有 `[Range(..., 512)]`,只有 `[Min(1)]`
+
+### 来源2: `Runtime/Lidar/GsplatLidarScan.cs`
+
+- `EnsureRangeImageBuffers(...)` 使用:
+  - `cellCount = azimuthBins * beamCount`
+- `EnsureLutBuffers(...)` 使用:
+  - `azimuthBins`
+  - `beamCount`
+- 整条 buffer 分配链都是按一般 `cellCount` / `beamCount` 工作,没有写死 `512`
+
+### 来源3: `Runtime/GsplatRenderer.cs` / `Runtime/GsplatSequenceRenderer.cs`
+
+- `TryGetEffectiveLidarLayout(...)` 与 external hit 路径都只是把 `LidarBeamCount` 传给 layout / cellCount 公式
+- 没有发现“超过 `512` 就直接拒绝”的隐藏分支
+
+### 来源4: 既有 dispatch 修复
+
+- 前一轮已经把 LiDAR 相关线性 compute kernel 改成分批 dispatch
+- 因此“为了绕开单次 `DispatchCompute(x,1,1)` 的 `65535` 上限而把 beamCount 压在 `512` 以下”这条理由已经失效
+
+## 动态验证
+
+- 源码检索:
+  - 已确认旧的 `LidarBeamCount > 512` / `LidarBeamCount = 512` runtime clamp 不再存在
+- 编译验证:
+  - `dotnet build ../../Gsplat.Tests.Editor.csproj -v minimal`
+  - 结果: `0 warning / 0 error`
+- Unity EditMode 整程序集:
+  - job: `a135cf447dc74e7b9fa6d7449c5b8126`
+  - 已执行 `135/135`
+  - 失败列表仍是既有 `numpy` 缺失 importer fixture 与 `GsplatVisibilityAnimationTests`
+  - 未出现新的 `GsplatLidarScanTests` 红项
+- 点名过滤验证:
+  - job: `81632a589684421490a5ad08169771ec`
+  - 返回 `summary.total = 0`
+  - 这类结果不能当作有效通过证据,因此本轮不把它计入正式验证结论
+
+## 结论
+
+- 主假设成立
+- `LidarBeamCount = 512` 是旧的保守防呆值,不是当前底层硬上限
+- 当前正确语义应为:
+  - `beamCount < 1` 时回默认值
+  - 合法大值原样保留
+  - 真正的上限由 `beamCount * azimuthBins` 带来的性能、显存和 buffer 成本决定
