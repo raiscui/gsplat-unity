@@ -148,3 +148,15 @@
   - `LATER_PLANS__radar_scan_jitter_size.md`
   - `EPIPHANY_LOG__radar_scan_jitter_size.md`
   - `ERRORFIX__radar_scan_jitter_size.md`
+
+## [2026-03-24 14:47:10 +0800] [Session ID: 20260324_21] 支线索引: __sog4d_updatecount_bad
+
+- 启用原因: 用户反馈 `.sog4d` 导入时出现 `delta-v1 invalid updateCount` 报错,希望先做一个简单可用的处理。该问题与现有主线和其它支线不同,需要独立追踪这是测试数据故意失败、导入器校验过严,还是应该增加兼容策略。
+- 支线主题: 按“现象 -> 假设 -> 验证计划 -> 结论”追踪 `GsplatSog4DImporter` 的 `updateCount` 溢出报错链路,判断是否应放宽、截断或保留失败,并在必要时补齐测试与记录。
+- 对应上下文集:
+  - `task_plan__sog4d_updatecount_bad.md`
+  - `notes__sog4d_updatecount_bad.md`
+  - `WORKLOG__sog4d_updatecount_bad.md`
+  - `LATER_PLANS__sog4d_updatecount_bad.md`
+  - `EPIPHANY_LOG__sog4d_updatecount_bad.md`
+  - `ERRORFIX__sog4d_updatecount_bad.md`

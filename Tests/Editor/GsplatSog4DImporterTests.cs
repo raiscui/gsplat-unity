@@ -128,6 +128,32 @@ namespace Gsplat.Tests
         {
             // 清理测试生成的临时资产,避免污染其它测试.
             AssetDatabase.DeleteAsset(k_TestRootAssetPath);
+
+            // 负向 importer 测试会故意触发 error log.
+            // 如果不清理,这些“预期错误”会残留在用户的 Console 里,看起来像项目真的坏了.
+            TryClearEditorConsole();
+        }
+
+        static void TryClearEditorConsole()
+        {
+            try
+            {
+                // 这里不用直接依赖 internal API.
+                // 通过反射兼容不同 Unity 版本里 `LogEntries` 的命名位置.
+                var editorAssembly = typeof(EditorWindow).Assembly;
+                var logEntriesType = editorAssembly.GetType("UnityEditor.LogEntries") ??
+                                     editorAssembly.GetType("UnityEditorInternal.LogEntries");
+                var clearMethod = logEntriesType?.GetMethod(
+                    "Clear",
+                    System.Reflection.BindingFlags.Static |
+                    System.Reflection.BindingFlags.Public |
+                    System.Reflection.BindingFlags.NonPublic);
+                clearMethod?.Invoke(null, null);
+            }
+            catch
+            {
+                // Console 清理失败不应影响测试主流程.
+            }
         }
 
         static string GetProjectRootPath()
