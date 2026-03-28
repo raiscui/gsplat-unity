@@ -37,6 +37,8 @@ namespace Gsplat.Editor
                 nameof(GsplatSequenceRenderer.LidarBeamCount),
                 nameof(GsplatSequenceRenderer.LidarDepthNear),
                 nameof(GsplatSequenceRenderer.LidarDepthFar),
+                nameof(GsplatSequenceRenderer.LidarDepthNearColor),
+                nameof(GsplatSequenceRenderer.LidarDepthFarColor),
                 nameof(GsplatSequenceRenderer.LidarPointRadiusPixels),
                 nameof(GsplatSequenceRenderer.LidarPointJitterCellFraction),
                 nameof(GsplatSequenceRenderer.LidarExternalHitBiasMeters),
@@ -300,6 +302,17 @@ namespace Gsplat.Editor
                 }
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDepthNear)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDepthFar)));
+                using (new EditorGUI.DisabledScope(colorModeProp.enumValueIndex != (int)GsplatLidarColorMode.Depth))
+                {
+                    EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDepthNearColor)));
+                    EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarDepthFarColor)));
+                }
+                EditorGUILayout.HelpBox(
+                    "Depth 颜色说明:\n" +
+                    "- `LidarDepthNearColor` / `LidarDepthFarColor` 仅在 Depth 模式生效.\n" +
+                    "- 保持默认青色 -> 红色时,仍沿用历史的青 -> 蓝 -> 紫 -> 红距离色带,避免旧场景视觉回退.\n" +
+                    "- 只要你改动近色或远色,Depth 模式就会改为按这两个颜色直接插值.",
+                    MessageType.Info);
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarMinSplatOpacity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarPointRadiusPixels)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatSequenceRenderer.LidarPointJitterCellFraction)));

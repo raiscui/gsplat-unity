@@ -376,6 +376,20 @@ namespace Gsplat
                  "- SplatColorSH0: 采样 first return 对应 splat 的基础颜色(SH0).")]
         public GsplatLidarColorMode LidarColorMode = GsplatLidarColorMode.Depth;
 
+        [Tooltip("LiDAR Depth 模式的近处颜色.\n" +
+                 "说明:\n" +
+                 "- 仅在 LidarColorMode=Depth 时生效.\n" +
+                 "- 保持默认青色 + 默认远处红色时,会继续沿用历史的青 -> 蓝 -> 紫 -> 红距离色带.\n" +
+                 "- 一旦你改动近色或远色,Depth 模式就会按这两个颜色直接插值.")]
+        public Color LidarDepthNearColor = GsplatUtils.k_LidarDepthNearColorDefault;
+
+        [Tooltip("LiDAR Depth 模式的远处颜色.\n" +
+                 "说明:\n" +
+                 "- 仅在 LidarColorMode=Depth 时生效.\n" +
+                 "- 保持默认红色 + 默认近处青色时,会继续沿用历史的青 -> 蓝 -> 紫 -> 红距离色带.\n" +
+                 "- 一旦你改动近色或远色,Depth 模式就会按这两个颜色直接插值.")]
+        public Color LidarDepthFarColor = GsplatUtils.k_LidarDepthFarColorDefault;
+
         [Min(0.0f)]
         [Tooltip("扫描余辉曲线指数(TrailGamma).\n" +
                  "值越大,扫描前沿越锐利,余辉衰减越快.\n" +
@@ -4670,7 +4684,8 @@ namespace Gsplat
             m_lidarScan.RenderPointCloud(settings, targetCam, gameObject.layer, GammaToLinear,
                 layout,
                 lidarLocalToWorld, Time.realtimeSinceStartup, LidarRotationHz, LidarEnableScanMotion,
-                LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels, LidarPointJitterCellFraction, LidarParticleAAFringePixels,
+                LidarDepthNear, LidarDepthFar, LidarDepthNearColor, LidarDepthFarColor,
+                LidarPointRadiusPixels, LidarPointJitterCellFraction, LidarParticleAAFringePixels,
                 LidarParticleAntialiasingMode, effectiveLidarParticleAaMode,
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
                 LidarTrailGamma, LidarIntensity, lidarUnscannedIntensity,
@@ -4732,7 +4747,8 @@ namespace Gsplat
             m_lidarScan.RenderPointCloud(settings, camera, gameObject.layer, GammaToLinear,
                 layout,
                 lidarLocalToWorld, Time.realtimeSinceStartup, LidarRotationHz, LidarEnableScanMotion,
-                LidarDepthNear, LidarDepthFar, LidarPointRadiusPixels, LidarPointJitterCellFraction, LidarParticleAAFringePixels,
+                LidarDepthNear, LidarDepthFar, LidarDepthNearColor, LidarDepthFarColor,
+                LidarPointRadiusPixels, LidarPointJitterCellFraction, LidarParticleAAFringePixels,
                 LidarParticleAntialiasingMode, effectiveLidarParticleAaMode,
                 LidarColorMode, m_lidarColorBlend01, m_lidarVisibility01,
                 LidarTrailGamma, LidarIntensity, lidarUnscannedIntensity,
@@ -4963,6 +4979,11 @@ namespace Gsplat
             {
                 LidarShowHideGlowColor = new Color(1.0f, 0.45f, 0.1f, 1.0f);
             }
+
+            LidarDepthNearColor =
+                GsplatUtils.SanitizeColorRgb(LidarDepthNearColor, GsplatUtils.k_LidarDepthNearColorDefault);
+            LidarDepthFarColor =
+                GsplatUtils.SanitizeColorRgb(LidarDepthFarColor, GsplatUtils.k_LidarDepthFarColorDefault);
 
             if (float.IsNaN(LidarShowGlowIntensity) || float.IsInfinity(LidarShowGlowIntensity) || LidarShowGlowIntensity < 0.0f)
                 LidarShowGlowIntensity = 1.5f;

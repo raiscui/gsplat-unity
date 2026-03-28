@@ -352,6 +352,8 @@ namespace Gsplat.Tests
             r.LidarShowHideNoiseScale = float.NaN;
             r.LidarShowHideNoiseSpeed = float.PositiveInfinity;
             r.LidarShowHideGlowColor = new Color(float.NaN, 1.0f, 1.0f, 1.0f);
+            r.LidarDepthNearColor = new Color(float.NaN, 1.0f, 1.0f, 1.0f);
+            r.LidarDepthFarColor = new Color(1.0f, float.PositiveInfinity, 0.0f, 1.0f);
             r.LidarShowGlowIntensity = float.NaN;
             r.LidarHideGlowIntensity = float.PositiveInfinity;
             r.LidarTrailGamma = -1.0f;
@@ -401,6 +403,8 @@ namespace Gsplat.Tests
             r.LidarShowHideNoiseScale = float.NaN;
             r.LidarShowHideNoiseSpeed = float.PositiveInfinity;
             r.LidarShowHideGlowColor = new Color(float.NaN, 1.0f, 1.0f, 1.0f);
+            r.LidarDepthNearColor = new Color(float.NaN, 1.0f, 1.0f, 1.0f);
+            r.LidarDepthFarColor = new Color(1.0f, float.PositiveInfinity, 0.0f, 1.0f);
             r.LidarShowGlowIntensity = float.NaN;
             r.LidarHideGlowIntensity = float.PositiveInfinity;
             r.LidarTrailGamma = -1.0f;
@@ -1000,6 +1004,12 @@ namespace Gsplat.Tests
             Assert.AreEqual(1.0f, r.LidarShowHideGlowColor.r);
             Assert.AreEqual(0.45f, r.LidarShowHideGlowColor.g, 1e-6f);
             Assert.AreEqual(0.1f, r.LidarShowHideGlowColor.b, 1e-6f);
+            Assert.AreEqual(0.0f, r.LidarDepthNearColor.r);
+            Assert.AreEqual(1.0f, r.LidarDepthNearColor.g);
+            Assert.AreEqual(1.0f, r.LidarDepthNearColor.b);
+            Assert.AreEqual(1.0f, r.LidarDepthFarColor.r);
+            Assert.AreEqual(0.0f, r.LidarDepthFarColor.g);
+            Assert.AreEqual(0.0f, r.LidarDepthFarColor.b);
             Assert.AreEqual(1.5f, r.LidarShowGlowIntensity);
             Assert.AreEqual(2.5f, r.LidarHideGlowIntensity);
             Assert.AreEqual(2.0f, r.LidarTrailGamma);
@@ -1046,6 +1056,12 @@ namespace Gsplat.Tests
             Assert.AreEqual(1.0f, r.LidarShowHideGlowColor.r);
             Assert.AreEqual(0.45f, r.LidarShowHideGlowColor.g, 1e-6f);
             Assert.AreEqual(0.1f, r.LidarShowHideGlowColor.b, 1e-6f);
+            Assert.AreEqual(0.0f, r.LidarDepthNearColor.r);
+            Assert.AreEqual(1.0f, r.LidarDepthNearColor.g);
+            Assert.AreEqual(1.0f, r.LidarDepthNearColor.b);
+            Assert.AreEqual(1.0f, r.LidarDepthFarColor.r);
+            Assert.AreEqual(0.0f, r.LidarDepthFarColor.g);
+            Assert.AreEqual(0.0f, r.LidarDepthFarColor.b);
             Assert.AreEqual(1.5f, r.LidarShowGlowIntensity);
             Assert.AreEqual(2.5f, r.LidarHideGlowIntensity);
             Assert.AreEqual(1.0f, r.LidarDepthOpacity);

@@ -172,3 +172,15 @@
   - `LATER_PLANS__continuous_learning_20260324.md`
   - `EPIPHANY_LOG__continuous_learning_20260324.md`
   - `ERRORFIX__continuous_learning_20260324.md`
+
+## [2026-03-28 12:48:52] [Session ID: 019d32c5-3334-71e2-84bc-b7a60390dc20] 支线索引: __lidar_distance_color_panel
+
+- 启用原因: 用户希望把雷达点云按距离着色的开始颜色和结束颜色直接暴露到 Inspector 面板中可编辑。该任务同时涉及运行时序列化字段、LiDAR draw 参数传递、shader 颜色映射,与当前默认主线历史任务不同,需要独立记录。
+- 支线主题: 按“现象 -> 假设 -> 验证计划 -> 结论”追踪当前 RadarScan Depth 颜色映射的硬编码位置,把距离颜色起止色接入 `GsplatRenderer` / `GsplatSequenceRenderer` 与对应自定义 Inspector,并完成必要验证。
+- 对应上下文集:
+  - `task_plan__lidar_distance_color_panel.md`
+  - `notes__lidar_distance_color_panel.md`
+  - `WORKLOG__lidar_distance_color_panel.md`
+  - `LATER_PLANS__lidar_distance_color_panel.md`
+  - `EPIPHANY_LOG__lidar_distance_color_panel.md`
+  - `ERRORFIX__lidar_distance_color_panel.md`

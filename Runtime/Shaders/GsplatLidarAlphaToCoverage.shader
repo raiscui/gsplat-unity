@@ -23,6 +23,9 @@ Shader "Gsplat/LiDARAlphaToCoverage"
         [HideInInspector] _LidarShowHideWarpStrength("_LidarShowHideWarpStrength", Float) = 2
         [HideInInspector] _LidarShowHideGlowColor("_LidarShowHideGlowColor", Color) = (1,0.45,0.1,1)
         [HideInInspector] _LidarShowHideGlowIntensity("_LidarShowHideGlowIntensity", Float) = 0
+        [HideInInspector] _LidarDepthNearColor("_LidarDepthNearColor", Color) = (0,1,1,1)
+        [HideInInspector] _LidarDepthFarColor("_LidarDepthFarColor", Color) = (1,0,0,1)
+        [HideInInspector] _LidarDepthUseLegacyColorRamp("_LidarDepthUseLegacyColorRamp", Float) = 1
         [HideInInspector] _LidarUnscannedIntensity("_LidarUnscannedIntensity", Float) = 0
         [HideInInspector] _LidarIntensityDistanceDecay("_LidarIntensityDistanceDecay", Float) = 0
         [HideInInspector] _LidarUnscannedIntensityDistanceDecay("_LidarUnscannedIntensityDistanceDecay", Float) = 0

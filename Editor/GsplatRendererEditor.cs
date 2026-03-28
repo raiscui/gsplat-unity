@@ -38,6 +38,8 @@ namespace Gsplat.Editor
                 nameof(GsplatRenderer.LidarBeamCount),
                 nameof(GsplatRenderer.LidarDepthNear),
                 nameof(GsplatRenderer.LidarDepthFar),
+                nameof(GsplatRenderer.LidarDepthNearColor),
+                nameof(GsplatRenderer.LidarDepthFarColor),
                 nameof(GsplatRenderer.LidarPointRadiusPixels),
                 nameof(GsplatRenderer.LidarPointJitterCellFraction),
                 nameof(GsplatRenderer.LidarExternalHitBiasMeters),
@@ -307,6 +309,17 @@ namespace Gsplat.Editor
                 }
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthNear)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthFar)));
+                using (new EditorGUI.DisabledScope(colorModeProp.enumValueIndex != (int)GsplatLidarColorMode.Depth))
+                {
+                    EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthNearColor)));
+                    EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarDepthFarColor)));
+                }
+                EditorGUILayout.HelpBox(
+                    "Depth 颜色说明:\n" +
+                    "- `LidarDepthNearColor` / `LidarDepthFarColor` 仅在 Depth 模式生效.\n" +
+                    "- 保持默认青色 -> 红色时,仍沿用历史的青 -> 蓝 -> 紫 -> 红距离色带,避免旧场景视觉回退.\n" +
+                    "- 只要你改动近色或远色,Depth 模式就会改为按这两个颜色直接插值.",
+                    MessageType.Info);
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarMinSplatOpacity)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarPointRadiusPixels)));
                 EditorGUILayout.PropertyField(serializedObject.FindProperty(nameof(GsplatRenderer.LidarPointJitterCellFraction)));

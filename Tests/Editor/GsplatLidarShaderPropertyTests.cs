@@ -36,6 +36,9 @@ namespace Gsplat.Tests
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideWarpStrength"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideGlowColor"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarShowHideGlowIntensity"), 0);
+            Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarDepthNearColor"), 0);
+            Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarDepthFarColor"), 0);
+            Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarDepthUseLegacyColorRamp"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarUnscannedIntensity"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarIntensityDistanceDecay"), 0);
             Assert.GreaterOrEqual(shader.FindPropertyIndex("_LidarUnscannedIntensityDistanceDecay"), 0);
@@ -58,6 +61,9 @@ namespace Gsplat.Tests
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideWarpStrength")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideGlowColor")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarShowHideGlowIntensity")));
+                Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarDepthNearColor")));
+                Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarDepthFarColor")));
+                Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarDepthUseLegacyColorRamp")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarUnscannedIntensity")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarIntensityDistanceDecay")));
                 Assert.IsTrue(mat.HasProperty(Shader.PropertyToID("_LidarUnscannedIntensityDistanceDecay")));
@@ -98,6 +104,9 @@ namespace Gsplat.Tests
             StringAssert.Contains("float _LidarPointJitterCellFraction;", passCoreText);
             StringAssert.Contains("float _LidarExternalHitBiasMeters;", passCoreText);
             StringAssert.Contains("float _LidarEnableScanMotion;", passCoreText);
+            StringAssert.Contains("float4 _LidarDepthNearColor;", passCoreText);
+            StringAssert.Contains("float4 _LidarDepthFarColor;", passCoreText);
+            StringAssert.Contains("float _LidarDepthUseLegacyColorRamp;", passCoreText);
             StringAssert.Contains("float _LidarBeamMinRad;", passCoreText);
             StringAssert.Contains("float _LidarBeamMaxRad;", passCoreText);
             StringAssert.Contains("#define GSPLAT_LIDAR_A2C_PASS 0", passCoreText);
@@ -125,6 +134,13 @@ namespace Gsplat.Tests
             StringAssert.Contains("renderRange = max(range - max(_LidarExternalHitBiasMeters, 0.0), 0.0);", passCoreText);
             StringAssert.Contains("float3 worldPos = mul(_LidarMatrixL2W, float4(dirLocal * renderRange, 1.0)).xyz;",
                 passCoreText);
+            StringAssert.Contains("float3 DepthToConfiguredGradient(float t)", passCoreText);
+            StringAssert.Contains("float3 configuredDepthRgb = lerp(_LidarDepthNearColor.rgb, _LidarDepthFarColor.rgb, t);",
+                passCoreText);
+            StringAssert.Contains("float3 legacyDepthRgb = DepthToCyanRed(t);", passCoreText);
+            StringAssert.Contains("return lerp(configuredDepthRgb, legacyDepthRgb, saturate(_LidarDepthUseLegacyColorRamp));",
+                passCoreText);
+            StringAssert.Contains("float3 depthRgb = DepthToConfiguredGradient(depth01);", passCoreText);
         }
 
         [Test]

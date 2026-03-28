@@ -96,6 +96,9 @@
 
             float _LidarDepthNear;
             float _LidarDepthFar;
+            float4 _LidarDepthNearColor;
+            float4 _LidarDepthFarColor;
+            float _LidarDepthUseLegacyColorRamp;
 
             // 扫描前沿/余辉:
             float _LidarRotationHz;
@@ -406,6 +409,18 @@
                 return HsvToRgb(float3(h, 1.0, 1.0));
             }
 
+            float3 DepthToConfiguredGradient(float t)
+            {
+                // 向后兼容:
+                // - 历史默认是青 -> 蓝 -> 紫 -> 红的 hue ramp,而不是简单的 RGB 直线插值.
+                // - 为了避免老场景在“默认值不变”的前提下突然变灰,我们保留一个 legacy 开关.
+                // - 用户一旦改动近色或远色,就切回直观的 near -> far 直接插值语义.
+                t = saturate(t);
+                float3 configuredDepthRgb = lerp(_LidarDepthNearColor.rgb, _LidarDepthFarColor.rgb, t);
+                float3 legacyDepthRgb = DepthToCyanRed(t);
+                return lerp(configuredDepthRgb, legacyDepthRgb, saturate(_LidarDepthUseLegacyColorRamp));
+            }
+
             float ResolveLidarSubpixelCoverageSupportPx(float pointRadiusPxRaw)
             {
                 // 子像素支撑半径:
@@ -539,7 +554,7 @@
                 // - `Depth -> SplatColor` 通过 `_LidarColorBlend` 做平滑过渡,避免枚举切换硬跳变.
                 float denom = max(_LidarDepthFar - _LidarDepthNear, 1e-6);
                 float depth01 = saturate((range - _LidarDepthNear) / denom);
-                float3 depthRgb = DepthToCyanRed(depth01);
+                float3 depthRgb = DepthToConfiguredGradient(depth01);
                 float3 hitRgb = depthRgb;
 
                 float colorBlend = saturate(_LidarColorBlend);

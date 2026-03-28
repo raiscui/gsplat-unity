@@ -205,7 +205,10 @@ Default scanning setup (as discussed in the spec):
 - Scan head visualization: `LidarRotationHz = 5` (brightness front + 1-revolution afterglow)
 - Optional sweep-motion switch: `LidarEnableScanMotion = true` by default; set it to `false` when you want a static LiDAR point cloud without the rotating scan head / trail effect
 - Color modes:
-  - `Depth` with `LidarDepthNear = 1m`, `LidarDepthFar = 200m` (cyan -> blue -> purple -> red depth gradient)
+  - `Depth` with `LidarDepthNear = 1m`, `LidarDepthFar = 200m`
+    - `LidarDepthNearColor` / `LidarDepthFarColor` expose the near/far colors in the Inspector
+    - keeping the default cyan/red pair preserves the historical cyan -> blue -> purple -> red depth ramp
+    - changing either color switches Depth mode to direct near -> far color interpolation
   - `SplatColorSH0` (samples the hit splat base color from SH0)
 - Depth opacity:
   - `LidarDepthOpacity` (0..1, default `1`, only affects `Depth` mode)

@@ -127,6 +127,8 @@ namespace Gsplat
         public const int k_LidarDefaultUpBeams = 16;
         public const int k_LidarDefaultDownBeams = 112;
         internal const int k_ComputeMaxThreadGroupsPerDimension = 65535;
+        public static readonly Color k_LidarDepthNearColorDefault = new(0.0f, 1.0f, 1.0f, 1.0f);
+        public static readonly Color k_LidarDepthFarColorDefault = new(1.0f, 0.0f, 0.0f, 1.0f);
 
 #if GSPLAT_ENABLE_HDRP
         // --------------------------------------------------------------------
@@ -152,6 +154,34 @@ namespace Gsplat
         public static float Sigmoid(float x)
         {
             return 1.0f / (1.0f + Mathf.Exp(-x));
+        }
+
+        public static bool IsFiniteColorRgb(Color color)
+        {
+            return !float.IsNaN(color.r) && !float.IsNaN(color.g) && !float.IsNaN(color.b) &&
+                   !float.IsInfinity(color.r) && !float.IsInfinity(color.g) && !float.IsInfinity(color.b);
+        }
+
+        public static Color SanitizeColorRgb(Color color, Color fallback)
+        {
+            if (!IsFiniteColorRgb(color))
+                return fallback;
+
+            // alpha 当前不参与 LiDAR 距离着色,统一归 1,避免坏值继续沿链路传播.
+            return new Color(color.r, color.g, color.b, 1.0f);
+        }
+
+        public static bool AreColorsApproximatelyEqualRgb(Color a, Color b, float epsilon = 1.0e-4f)
+        {
+            return Mathf.Abs(a.r - b.r) <= epsilon &&
+                   Mathf.Abs(a.g - b.g) <= epsilon &&
+                   Mathf.Abs(a.b - b.b) <= epsilon;
+        }
+
+        public static bool UsesLegacyLidarDepthColorRamp(Color nearColor, Color farColor)
+        {
+            return AreColorsApproximatelyEqualRgb(nearColor, k_LidarDepthNearColorDefault) &&
+                   AreColorsApproximatelyEqualRgb(farColor, k_LidarDepthFarColorDefault);
         }
 
         // --------------------------------------------------------------------

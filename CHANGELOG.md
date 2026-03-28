@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `LidarParticleAAFringePixels` so the outward AA fringe width is now user-adjustable instead of fixed in shader code.
 - Added `LidarExternalHitBiasMeters` so external RadarScan hits can be pushed slightly forward along the sensor ray at render time without changing first-return competition or depth-color semantics.
 - Added `LidarEnableScanMotion` to `GsplatRenderer` and `GsplatSequenceRenderer`, allowing RadarScan to keep rendering LiDAR particles while disabling the rotating scan-head / trail animation.
+- Added editable LiDAR depth colors: `LidarDepthNearColor` and `LidarDepthFarColor` are now exposed on both `GsplatRenderer` and `GsplatSequenceRenderer`, including the custom Inspectors, so RadarScan distance coloring can be tuned without editing shader code.
 
 ### Changed
 
@@ -46,7 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tuned burn-ring hide afterglow to linger longer behind the glow front (eased fade timing + two-stage shrink, avoids the "glow passes and everything vanishes" look).
 - Tuned burn-ring hide warp so it cannot push splats outward past the burn front (keeps the afterglow trail visually inside the ring even with strong `WarpStrength`).
 - LiDAR scan visualization now uses a single `LidarBeamCount` (no Up/Down split) and samples vertical beam directions uniformly over `[LidarDownFovDeg..LidarUpFovDeg]` (more down-beams naturally come from a larger downward FOV range).
-- LiDAR point cloud rendering now uses screen-space square points with alpha blending (opaque when alpha=1), and the `Depth` color mode maps depth from cyan -> blue -> purple -> red.
+- LiDAR point cloud rendering now uses screen-space square points with alpha blending (opaque when alpha=1). `Depth` mode keeps the historical cyan -> blue -> purple -> red ramp when the new near/far colors stay at their default cyan/red values, and switches to direct near -> far interpolation once either color is customized.
 - The package now declares `com.unity.modules.physics` as a dependency because external RadarScan targets rely on `PhysicsScene`, `MeshCollider`, and batch raycasts.
 - The Inspector `Render Style` quick-action row now includes `RadarScan(动画)`, and `Gaussian(动画)` / `ParticleDots(动画)` now also disable RadarScan in the same action so switching is bidirectional.
 - Removed the max clamp for `LidarShowHideWarpPixels` (was 64), allowing larger values for stronger RadarScan show/hide jitter.

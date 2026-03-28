@@ -418,6 +418,9 @@ namespace Gsplat
         static readonly int k_lidarShowHideGlowIntensity = Shader.PropertyToID("_LidarShowHideGlowIntensity");
         static readonly int k_lidarDepthNear = Shader.PropertyToID("_LidarDepthNear");
         static readonly int k_lidarDepthFar = Shader.PropertyToID("_LidarDepthFar");
+        static readonly int k_lidarDepthNearColor = Shader.PropertyToID("_LidarDepthNearColor");
+        static readonly int k_lidarDepthFarColor = Shader.PropertyToID("_LidarDepthFarColor");
+        static readonly int k_lidarDepthUseLegacyColorRamp = Shader.PropertyToID("_LidarDepthUseLegacyColorRamp");
         static readonly int k_lidarRotationHz = Shader.PropertyToID("_LidarRotationHz");
         static readonly int k_lidarEnableScanMotion = Shader.PropertyToID("_LidarEnableScanMotion");
         static readonly int k_lidarTrailGamma = Shader.PropertyToID("_LidarTrailGamma");
@@ -793,7 +796,8 @@ namespace Gsplat
         public bool RenderPointCloud(GsplatSettings settings, Camera camera, int layer, bool gammaToLinear,
             in GsplatLidarLayout layout,
             Matrix4x4 lidarLocalToWorld, float lidarTime, float rotationHz, bool enableScanMotion,
-            float depthNear, float depthFar, float pointRadiusPixels, float pointJitterCellFraction, float particleAaFringePixels,
+            float depthNear, float depthFar, Color depthNearColor, Color depthFarColor,
+            float pointRadiusPixels, float pointJitterCellFraction, float particleAaFringePixels,
             GsplatLidarParticleAntialiasingMode requestedParticleAntialiasingMode,
             GsplatLidarParticleAntialiasingMode effectiveParticleAntialiasingMode,
             GsplatLidarColorMode colorMode, float colorBlend01, float visibility01,
@@ -864,6 +868,12 @@ namespace Gsplat
             var center = new Vector3(c4.x, c4.y, c4.z);
             var far = Mathf.Max(depthFar, 1.0f);
             var bounds = new Bounds(center, Vector3.one * (far * 2.0f));
+            var sanitizedDepthNearColor =
+                GsplatUtils.SanitizeColorRgb(depthNearColor, GsplatUtils.k_LidarDepthNearColorDefault);
+            var sanitizedDepthFarColor =
+                GsplatUtils.SanitizeColorRgb(depthFarColor, GsplatUtils.k_LidarDepthFarColorDefault);
+            var useLegacyDepthColorRamp =
+                GsplatUtils.UsesLegacyLidarDepthColorRamp(sanitizedDepthNearColor, sanitizedDepthFarColor);
 
             // MPB(标量/矩阵):
             m_propertyBlock ??= new MaterialPropertyBlock();
@@ -946,6 +956,9 @@ namespace Gsplat
                     : showHideGlowIntensity);
             m_propertyBlock.SetFloat(k_lidarDepthNear, depthNear);
             m_propertyBlock.SetFloat(k_lidarDepthFar, depthFar);
+            m_propertyBlock.SetColor(k_lidarDepthNearColor, sanitizedDepthNearColor);
+            m_propertyBlock.SetColor(k_lidarDepthFarColor, sanitizedDepthFarColor);
+            m_propertyBlock.SetFloat(k_lidarDepthUseLegacyColorRamp, useLegacyDepthColorRamp ? 1.0f : 0.0f);
             m_propertyBlock.SetFloat(k_lidarRotationHz, rotationHz);
             m_propertyBlock.SetFloat(k_lidarEnableScanMotion, enableScanMotion ? 1.0f : 0.0f);
             m_propertyBlock.SetFloat(k_lidarTrailGamma, Mathf.Max(trailGamma, 0.0f));
